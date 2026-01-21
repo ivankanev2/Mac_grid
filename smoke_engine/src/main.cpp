@@ -24,11 +24,24 @@
 static const int NX = 96;
 static const int NY = 96;
 
-bool paintSolid = true;
-bool eraseSolid = false;
+enum class PaintTool { AddSolid, EraseSolid, AddSmoke };
+PaintTool paintTool = PaintTool::AddSolid;
+
 bool circleMode = true;
 float brushRadius = 0.06f;          // in sim space (0..1)
 float rectHalfSize = 0.06f;         // half-size for rectangle
+
+float smokeBrushRadius = 0.05f;
+float smokeBrushAmount = 0.15f;
+
+struct SmokeSource {
+    float x;
+    float y;
+    float r;
+    float amount;
+    bool enabled;
+};
+std::vector<SmokeSource> sources;
 
 // Debug overlay toggles
 static bool showDivOverlay = false;
@@ -291,7 +304,6 @@ int main() {
     sim.addSolidCircle(0.5f, 0.55f, 0.12f);
 
     bool playing = true;
-    float sourceStrength = 0.08f; // not wired into sim yet, but used in UI
 
     // --- probe info (hovered cell) ---
     bool hasProbe = false;
@@ -311,6 +323,11 @@ int main() {
             if (dt < dtMin) dt = dtMin;
 
             sim.setDt(dt);
+            for (const auto& src : sources) {
+                if (src.enabled) {
+                    sim.addSmokeSource(src.x, src.y, src.r, src.amount);
+                }
+            }
             sim.step(vortEps);
         }
     }
@@ -341,9 +358,12 @@ int main() {
         ImGui::Begin("Controls");
         ImGui::Checkbox("Play", &playing);
         ImGui::Separator();
-        ImGui::Checkbox("Paint solid", &paintSolid);
+        ImGui::Text("Click mode");
+        if (ImGui::RadioButton("Add obstacle", paintTool == PaintTool::AddSolid)) paintTool = PaintTool::AddSolid;
         ImGui::SameLine();
-        ImGui::Checkbox("Erase", &eraseSolid);
+        if (ImGui::RadioButton("Erase obstacle", paintTool == PaintTool::EraseSolid)) paintTool = PaintTool::EraseSolid;
+        if (ImGui::RadioButton("Add smoke", paintTool == PaintTool::AddSmoke)) paintTool = PaintTool::AddSmoke;
+
         ImGui::Checkbox("Circle", &circleMode);
         ImGui::SameLine();
         ImGui::Text("Rect");
@@ -351,8 +371,15 @@ int main() {
         sim.reset();
         }
 
-        ImGui::SliderFloat("Brush radius", &brushRadius, 0.01f, 0.20f);
+        ImGui::SliderFloat("Obstacle radius", &brushRadius, 0.01f, 0.20f);
         ImGui::SliderFloat("Rect half-size", &rectHalfSize, 0.01f, 0.30f);
+        ImGui::SliderFloat("Smoke radius", &smokeBrushRadius, 0.01f, 0.20f);
+        ImGui::SliderFloat("Smoke amount", &smokeBrushAmount, 0.01f, 0.5f);
+        ImGui::Text("Smoke sources: %zu", sources.size());
+        ImGui::SameLine();
+        if (ImGui::Button("Clear sources")) {
+            sources.clear();
+        }
         ImGui::End();
 
         ImGui::Begin("Data / Debug");
@@ -537,7 +564,9 @@ ImGui::End();
             }
         }
 
-        if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        bool strokeOnce = (paintTool == PaintTool::AddSmoke) ? ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                                                             : ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        if (hovered && strokeOnce) {
             ImVec2 m = ImGui::GetMousePos();
             float u = (m.x - p0.x) / (p1.x - p0.x); // 0..1
             float v = (m.y - p0.y) / (p1.y - p0.y); // 0..1
@@ -548,7 +577,8 @@ ImGui::End();
             float sy = 1.0f - v;
 
             if (sx >= 0 && sx <= 1 && sy >= 0 && sy <= 1) {
-                if (!eraseSolid) {
+                switch (paintTool) {
+                case PaintTool::AddSolid:
                     if (circleMode) {
                         sim.addSolidCircle(sx, sy, brushRadius);
                     } else {
@@ -561,7 +591,8 @@ ImGui::End();
                             }
                         }
                     }
-                } else {
+                    break;
+                case PaintTool::EraseSolid: {
                     // Erase: quick direct edit of the solid mask (keep border walls)
                     int i = (int)(sx * sim.nx);
                     int j = (int)(sy * sim.ny);
@@ -577,6 +608,13 @@ ImGui::End();
                             }
                         }
                     }
+                    break;
+                }
+                case PaintTool::AddSmoke:
+                    sources.push_back({sx, sy, smokeBrushRadius, smokeBrushAmount, true});
+                    // drop an immediate blob so the source is visible right away
+                    sim.addSmokeSource(sx, sy, smokeBrushRadius, smokeBrushAmount);
+                    break;
                 }
             }
         }
