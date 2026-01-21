@@ -11,14 +11,20 @@ struct MAC2D {
     std::vector<float> u0, v0, smoke0;
     std::vector<float> div, rhs;
     std::vector<uint8_t> solid;
+
     MAC2D(int NX, int NY, float DX, float DT);
-    void step();
+    void step(float vortEps);
     void reset();
 
     void addSolidCircle(float cx, float cy, float r);
     void addSmokeSource(float cx, float cy, float radius, float amount);
+    void addVorticityConfinement(float eps);
+    void addVelocityImpulse(float cx, float cy, float radius, float strength);
+    void computeVorticity(std::vector<float>& outVort) const;
 
     float maxAbsDiv() const;
+    float maxFaceSpeed() const;
+    void setDt(float newDt) { dt = newDt; }
 
     inline int idxP(int i,int j) const { return i + nx*j; }
     // allow renderer to read density (smoke)
@@ -41,7 +47,6 @@ private:
                const std::vector<float>& fu,
                const std::vector<float>& fv,
                float& outUx, float& outVy) const;
-
     void addForces(float buoyancy, float gravity);
     void applyBoundary();
     void advectVelocity();

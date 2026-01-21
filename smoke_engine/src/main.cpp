@@ -33,12 +33,22 @@ float rectHalfSize = 0.06f;         // half-size for rectangle
 // Debug overlay toggles
 static bool showDivOverlay = false;
 static bool showVelOverlay = false;
+static bool showVortOverlay = false;
 
 // Tuning
 static float divScale = 8.0f;     // larger = more sensitive heatmap
 static float divAlpha = 0.75f;    // overlay opacity
 static int   velStride = 6;       // draw arrow every N cells
 static float velScale  = 0.35f;   // arrow length multiplier
+
+static float vortScale = 8.0f;    // larger = more sensitive heatmap
+static float vortAlpha = 0.75f;   // overlay opacity
+
+float dtMax = 0.02f;     // cap so it doesn’t get too large when still
+float dtMin = 0.001f;    // optional safety
+float cfl   = 0.9f;      // 0.5–1.0 is typical
+
+static float vortEps = 2.0f;
 
 // simple clamp (avoids std::clamp editor issues)
 static inline float clamp01(float x) {
@@ -120,6 +130,31 @@ static void uploadDivOverlay(GLuint tex, int w, int h,
     glBindTexture(GL_TEXTURE_2D, tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
+}
+
+static void uploadVortOverlay(GLuint tex, int w, int h, const std::vector<float>& omega, const std::vector<uint8_t>& solid, float scale, float alpha) {
+    std::vector<uint8_t> img(w*h*4,0);
+    for (int j=0;j<h;++j) {
+        int srcJ = (h-1-j);
+        for (int i=0;i<w;++i) {
+            int sidx = i + w*srcJ;
+            int didx = i + w*j;
+            if (solid[sidx]) { img[didx*4+3]=0; continue; }
+            float v = omega[sidx] * scale;
+            v = std::max(-1.0f, std::min(1.0f, v));
+            float m = std::fabs(v);
+            uint8_t A = (uint8_t)std::lround(clamp01(m * alpha) * 255.0f);
+            uint8_t R = (v > 0.0f) ? (uint8_t)std::lround(m*255.0f) : 0;
+            uint8_t B = (v < 0.0f) ? (uint8_t)std::lround(m*255.0f) : 0;
+            img[didx*4+0] = R;
+            img[didx*4+1] = 0;
+            img[didx*4+2] = B;
+            img[didx*4+3] = A;
+        }
+    }
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,img.data());
 }
 
 static void drawArrow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col) {
@@ -246,6 +281,7 @@ int main() {
 
     GLuint smokeTex = makeSmokeTexture(NX, NY);
     GLuint divTex = makeOverlayTextureRGBA(NX, NY);
+    GLuint vortTex = makeOverlayTextureRGBA(NX, NY);
 
     // --- Create our MAC grid simulator ---
     float dx = 1.0f / NX;
@@ -266,11 +302,18 @@ int main() {
         glfwPollEvents();
 
         if (playing) {
-            // a couple of substeps per frame for smoother motion
-            for (int s = 0; s < 2; ++s) {
-                sim.step();
-            }
+        for (int sub = 0; sub < 2; ++sub) {
+            float maxSpeed = sim.maxFaceSpeed();
+            float dt = cfl * sim.dx / (maxSpeed + 1e-6f);
+
+            // clamp dt
+            if (dt > dtMax) dt = dtMax;
+            if (dt < dtMin) dt = dtMin;
+
+            sim.setDt(dt);
+            sim.step(vortEps);
         }
+    }
 
         uploadSmoke(smokeTex, sim.nx, sim.ny, sim.smoke, sim.solid);
         printGlError("uploadSmoke");
@@ -278,6 +321,11 @@ int main() {
         if (showDivOverlay) {
         uploadDivOverlay(divTex, sim.nx, sim.ny, sim.div, sim.solid, divScale, divAlpha);
         printGlError("uploadDivOverlay");
+    }
+        if (showVortOverlay) {
+        std::vector<float> vort(sim.nx * sim.ny);
+        sim.computeVorticity(vort);           
+        uploadVortOverlay(vortTex, sim.nx, sim.ny, vort, sim.solid, vortScale, vortAlpha);
     }
 
         int w, h;
@@ -342,6 +390,34 @@ int main() {
             ImGui::Text("max speed: %.6f", maxSpeed);
 
             ImGui::Separator();
+            ImGui::SliderFloat("Vorticity eps", &vortEps, 0.0f, 8.0f);
+            ImGui::Checkbox("Vorticity heatmap", &showVortOverlay);
+            ImGui::SliderFloat("Vort scale", &vortScale, 0.1f, 50.0f);
+            ImGui::SliderFloat("Vort alpha", &vortAlpha, 0.0f, 1.0f);
+
+            if (ImGui::Button("Impulse (test swirl)")) {
+                sim.addVelocityImpulse(0.5f, 0.5f, 0.12f, 3.0f);
+            }
+
+            if (ImGui::Button("Step with/without vort (A/B)")) {
+                // IMPORTANT: ensure playing is false or you’ll also step in the main loop
+                bool wasPlaying = playing;
+                playing = false;
+
+                float saved = vortEps;
+
+                vortEps = saved;
+                sim.setDt(dtMax);     // optional: stabilize A/B comparison
+                sim.step(vortEps);           // or sim.step(vortEps) if you did Option A
+
+                vortEps = 0.0f;
+                sim.step(vortEps);
+
+                vortEps = saved;
+                playing = wasPlaying;
+            }
+
+            ImGui::Separator();
             ImGui::Checkbox("Divergence heatmap", &showDivOverlay);
             ImGui::SliderFloat("Div scale", &divScale, 0.1f, 50.0f);
             ImGui::SliderFloat("Div alpha", &divAlpha, 0.0f, 1.0f);
@@ -350,6 +426,14 @@ int main() {
             ImGui::Checkbox("Velocity arrows", &showVelOverlay);
             ImGui::SliderInt("Vel stride", &velStride, 2, 16);
             ImGui::SliderFloat("Vel scale", &velScale, 0.05f, 2.0f);
+
+            ImGui::Separator();
+            ImGui::Text("Adaptive dt (CFL)");
+            ImGui::SliderFloat("CFL", &cfl, 0.1f, 1.5f);
+            ImGui::SliderFloat("dtMax", &dtMax, 0.001f, 0.05f);
+            ImGui::SliderFloat("dtMin", &dtMin, 0.0001f, 0.01f);
+            ImGui::Text("current dt: %.6f", sim.dt);
+            ImGui::Text("max face speed: %.6f", sim.maxFaceSpeed());
 
             ImGui::EndTabItem();
         }
@@ -388,7 +472,14 @@ ImGui::End();
             dl->AddImage((ImTextureID)(intptr_t)divTex, p0, p1);
         }
 
-        // 2) Velocity arrows overlay
+        // 2) Vorticity heatmap overlay texture
+        if (showVortOverlay) {
+            dl->AddImage((ImTextureID)(intptr_t)vortTex, p0, p1);
+        }
+
+        
+
+        // 3) Velocity arrows overlay
         if (showVelOverlay) {
             float W = (p1.x - p0.x);
             float H = (p1.y - p0.y);

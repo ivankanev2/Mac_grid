@@ -8,9 +8,7 @@
 // Local helper accessors
 // (idxP is already inline in the header as a public method)
 // ---------------------------
-static inline float clampf(float x, float a, float b) {
-    return std::max(a, std::min(b, x));
-}
+
 
 
 
@@ -87,8 +85,8 @@ void MAC2D::worldToCell(float x, float y, int &i, int &j) const {
     float fy = y / dx - 0.5f;
     i = (int)std::floor(fx);
     j = (int)std::floor(fy);
-    i = std::clamp(i, 0, nx - 1);
-    j = std::clamp(j, 0, ny - 1);
+    i = (int)clampf((float)i, 0.0f, (float)(nx - 1));
+    j = (int)clampf((float)j, 0.0f, (float)(ny - 1));
 }
 
 // ---------------------------
@@ -103,8 +101,8 @@ float MAC2D::sampleCellCentered(const std::vector<float>& f, float x, float y) c
     float tx = fx - i0;
     float ty = fy - j0;
 
-    i0 = std::clamp(i0, 0, nx - 1);
-    j0 = std::clamp(j0, 0, ny - 1);
+    i0 = (int)clampf((float)i0, 0.0f, (float)(nx - 1));
+    j0 = (int)clampf((float)j0, 0.0f, (float)(ny - 1));
     int i1 = std::min(i0 + 1, nx - 1);
     int j1 = std::min(j0 + 1, ny - 1);
 
@@ -128,8 +126,8 @@ float MAC2D::sampleU(const std::vector<float>& fu, float x, float y) const {
     float tx = fx - i0;
     float ty = fy - j0;
 
-    i0 = std::clamp(i0, 0, nx);
-    j0 = std::clamp(j0, 0, ny - 1);
+    i0 = (int)clampf((float)i0, 0.0f, (float)(nx));
+    j0 = (int)clampf((float)j0, 0.0f, (float)(ny - 1));
     int i1 = std::min(i0 + 1, nx);
     int j1 = std::min(j0 + 1, ny - 1);
 
@@ -153,8 +151,8 @@ float MAC2D::sampleV(const std::vector<float>& fv, float x, float y) const {
     float tx = fx - i0;
     float ty = fy - j0;
 
-    i0 = std::clamp(i0, 0, nx - 1);
-    j0 = std::clamp(j0, 0, ny);
+    i0 = (int)clampf((float)i0, 0.0f, (float)(nx - 1));
+    j0 = (int)clampf((float)j0, 0.0f, (float)(ny));
     int i1 = std::min(i0 + 1, nx - 1);
     int j1 = std::min(j0 + 1, ny);
 
@@ -271,6 +269,126 @@ void MAC2D::advectVelocity() {
     applyBoundary();
 }
 
+// Vorticity confinement
+void MAC2D::addVorticityConfinement(float eps) {
+    if (eps <= 0.0f) return;
+
+    const int Nc = nx * ny;
+    std::vector<float> omega(Nc, 0.0f);
+    std::vector<float> mag(Nc, 0.0f);
+    std::vector<float> fx(Nc, 0.0f);
+    std::vector<float> fy(Nc, 0.0f);
+
+    auto idx = [&](int i, int j) { return idxP(i, j); };
+
+    // --- 1) vorticity at cell centers: ω = dv/dx - du/dy
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            if (isSolid(i, j)) { omega[idx(i,j)] = 0.0f; continue; }
+
+            // dv/dx at center using v averaged to center rows
+            // v is at (i+0.5, j) and (i+0.5, j+1)
+            float vL = 0.5f * (v[idxV(i, j)]     + v[idxV(i, j + 1)]);
+            float vR = 0.5f * (v[idxV(std::min(i + 1, nx - 1), j)] +
+                               v[idxV(std::min(i + 1, nx - 1), j + 1)]);
+
+            // du/dy at center using u averaged to center columns
+            // u is at (i, j+0.5) and (i+1, j+0.5)
+            float uB = 0.5f * (u[idxU(i, j)]     + u[idxU(i + 1, j)]);
+            float uT = 0.5f * (u[idxU(i, std::min(j + 1, ny - 1))] +
+                               u[idxU(i + 1, std::min(j + 1, ny - 1))]);
+
+            float dv_dx = (vR - vL) / dx;
+            float du_dy = (uT - uB) / dx;
+
+            float w = dv_dx - du_dy;
+            omega[idx(i,j)] = w;
+            mag[idx(i,j)] = std::fabs(w);
+        }
+    }
+
+    // --- 2) N = ∇|ω| / |∇|ω||, force = eps * dx * (N × ω)
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            if (isSolid(i, j)) continue;
+
+            int im1 = std::max(i - 1, 0);
+            int ip1 = std::min(i + 1, nx - 1);
+            int jm1 = std::max(j - 1, 0);
+            int jp1 = std::min(j + 1, ny - 1);
+
+            float dmx = (mag[idx(ip1, j)] - mag[idx(im1, j)]) / (2.0f * dx);
+            float dmy = (mag[idx(i, jp1)] - mag[idx(i, jm1)]) / (2.0f * dx);
+
+            float len = std::sqrt(dmx*dmx + dmy*dmy) + 1e-6f;
+            float Nx = dmx / len;
+            float Ny = dmy / len;
+
+            float w = omega[idx(i,j)];
+
+            // 2D: N x (0,0,w) = (Ny*w, -Nx*w, 0)
+            fx[idx(i,j)] = eps * dx * (Ny * w);
+            fy[idx(i,j)] = eps * dx * (-Nx * w);
+        }
+    }
+
+    // --- 3) Apply to faces (average adjacent cell forces onto the face)
+    // u faces: between cell (i-1,j) and (i,j)
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 1; i < nx; ++i) {
+            bool solidL = isSolid(i - 1, j);
+            bool solidR = isSolid(i, j);
+            if (solidL || solidR) continue;
+
+            float f = 0.5f * (fx[idx(i - 1, j)] + fx[idx(i, j)]);
+            u[idxU(i, j)] += dt * f;
+        }
+    }
+
+    // v faces: between cell (i,j-1) and (i,j)
+    for (int j = 1; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            bool solidB = isSolid(i, j - 1);
+            bool solidT = isSolid(i, j);
+            if (solidB || solidT) continue;
+
+            float f = 0.5f * (fy[idx(i, j - 1)] + fy[idx(i, j)]);
+            v[idxV(i, j)] += dt * f;
+        }
+    }
+}
+
+void MAC2D::addVelocityImpulse(float cx, float cy, float radius, float strength) {
+    // Add a circular rotational impulse: u and v get +/- tangential components
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int id = idxP(i,j);
+            if (isSolid(i,j)) continue;
+            float x = (i + 0.5f) * dx;
+            float y = (j + 0.5f) * dx;
+            float rx = x - cx;
+            float ry = y - cy;
+            float r2 = rx*rx + ry*ry;
+            if (r2 <= radius*radius) {
+                float r = std::sqrt(r2) + 1e-9f;
+                // tangential unit vector = (-ry/r, rx/r)
+                float tux = -ry / r;
+                float tvy =  rx / r;
+                float w = (1.0f - (r / radius)) * strength; // falloff
+                // add to face arrays by nearest faces (simple splat)
+                int iu = (int)clampf((float)i, 0.0f, (float)nx); // used for u indexing safety below
+                // add to surrounding faces (u and v grids)
+                // add u on the two vertical faces around this cell
+                u[idxU(i, j)] += 0.5f * w * tux;
+                u[idxU(i+1 <= nx ? i+1 : nx, j)] += 0.5f * w * tux;
+                // add v on the two horizontal faces
+                v[idxV(i, j)] += 0.5f * w * tvy;
+                v[idxV(i, j+1 <= ny ? j+1 : ny)] += 0.5f * w * tvy;
+            }
+        }
+    }
+}
+
 void MAC2D::computeDivergence() {
     for (int j = 0; j < ny; j++) {
         for (int i = 0; i < nx; i++) {
@@ -288,6 +406,28 @@ void MAC2D::computeDivergence() {
 
             div[idxP(i, j)] = (uR - uL + vT - vB) / dx;
         }
+    }
+}
+
+void MAC2D::computeVorticity(std::vector<float>& outOmega) const {
+    outOmega.assign(nx*ny, 0.0f);
+    for (int j=0;j<ny;++j) for (int i=0;i<nx;++i) {
+        if (isSolid(i,j)) { outOmega[idxP(i,j)] = 0.0f; continue; }
+        // central differences
+        int im1 = std::max(i-1,0), ip1 = std::min(i+1,nx-1);
+        int jm1 = std::max(j-1,0), jp1 = std::min(j+1,ny-1);
+
+        // dv/dx (centered)
+        float vL = 0.5f*(v[idxV(i,j)] + v[idxV(i,j+1)]);
+        float vR = 0.5f*(v[idxV(ip1,j)] + v[idxV(ip1,j+1)]);
+        float dv_dx = (vR - vL) / dx;
+
+        // du/dy (centered)
+        float uB = 0.5f*(u[idxU(i,j)] + u[idxU(i+1,j)]);
+        float uT = 0.5f*(u[idxU(i,jp1)] + u[idxU(i+1,jp1)]);
+        float du_dy = (uT - uB) / dx;
+
+        outOmega[idxP(i,j)] = dv_dx - du_dy;
     }
 }
 
@@ -343,12 +483,57 @@ void MAC2D::project() {
     applyBoundary();
 }
 
-void MAC2D::advectSmoke(float dissipation) {
+#include <limits> // add at top of mac_smoke_sim.cpp for numeric_limits
+
+void MAC2D::advectSmoke(float dissipation /*= 0.995f*/) {
+    // Source field at time n
     smoke0 = smoke;
 
-    for (int j = 0; j < ny; j++) {
-        for (int i = 0; i < nx; i++) {
-            if (isSolid(i, j)) { smoke[idxP(i, j)] = 0.0f; continue; }
+    // Temporary buffers
+    std::vector<float> smokeFwd(smoke.size(), 0.0f);
+    std::vector<float> smokeBack(smoke.size(), 0.0f);
+
+    // Helper: compute min/max of the *bilinear stencil* used by sampleCellCentered at (x,y)
+    auto stencilMinMax = [&](const std::vector<float>& f, float x, float y, float& outMin, float& outMax) {
+        // Same index math as sampleCellCentered
+        float fx = x / dx - 0.5f;
+        float fy = y / dx - 0.5f;
+
+        int i0 = (int)std::floor(fx);
+        int j0 = (int)std::floor(fy);
+
+        // clamp to valid cells
+        i0 = (int)clampf((float)i0, 0.0f, (float)(nx - 1));
+        j0 = (int)clampf((float)j0, 0.0f, (float)(ny - 1));
+        int i1 = std::min(i0 + 1, nx - 1);
+        int j1 = std::min(j0 + 1, ny - 1);
+
+        outMin =  std::numeric_limits<float>::infinity();
+        outMax = -std::numeric_limits<float>::infinity();
+
+        auto consider = [&](int i, int j) {
+            if (isSolid(i, j)) return; // ignore solid samples
+            float v = f[idxP(i, j)];
+            outMin = std::min(outMin, v);
+            outMax = std::max(outMax, v);
+        };
+
+        consider(i0, j0);
+        consider(i1, j0);
+        consider(i0, j1);
+        consider(i1, j1);
+
+        // If all stencil cells were solid, just clamp to 0
+        if (!std::isfinite(outMin)) { outMin = 0.0f; outMax = 0.0f; }
+    };
+
+    // -------------------------
+    // 1) Forward semi-Lagrangian: smoke0 -> smokeFwd
+    // -------------------------
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int id = idxP(i, j);
+            if (isSolid(i, j)) { smokeFwd[id] = 0.0f; continue; }
 
             float x = (i + 0.5f) * dx;
             float y = (j + 0.5f) * dx;
@@ -356,16 +541,86 @@ void MAC2D::advectSmoke(float dissipation) {
             float ux, vy;
             velAt(x, y, u, v, ux, vy);
 
+            // Backtrace
             float x0 = clampf(x - dt * ux, 0.0f, nx * dx);
             float y0 = clampf(y - dt * vy, 0.0f, ny * dx);
 
             int si, sj;
             worldToCell(x0, y0, si, sj);
 
-            float s = (!isSolid(si, sj)) ? sampleCellCentered(smoke0, x0, y0) : 0.0f;
-            smoke[idxP(i, j)] = dissipation * s;
+            smokeFwd[id] = (!isSolid(si, sj)) ? sampleCellCentered(smoke0, x0, y0) : 0.0f;
         }
     }
+
+    // -------------------------
+    // 2) Backward semi-Lagrangian: smokeFwd -> smokeBack (using -dt)
+    // -------------------------
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int id = idxP(i, j);
+            if (isSolid(i, j)) { smokeBack[id] = 0.0f; continue; }
+
+            float x = (i + 0.5f) * dx;
+            float y = (j + 0.5f) * dx;
+
+            float ux, vy;
+            velAt(x, y, u, v, ux, vy);
+
+            // "Backwards" pass: trace with -dt => x1 = x + dt*u
+            float x1 = clampf(x + dt * ux, 0.0f, nx * dx);
+            float y1 = clampf(y + dt * vy, 0.0f, ny * dx);
+
+            int si, sj;
+            worldToCell(x1, y1, si, sj);
+
+            smokeBack[id] = (!isSolid(si, sj)) ? sampleCellCentered(smokeFwd, x1, y1) : 0.0f;
+        }
+    }
+
+    // -------------------------
+    // 3) MacCormack correction + clamp to stencil min/max
+    // -------------------------
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int id = idxP(i, j);
+            if (isSolid(i, j)) { smoke[id] = 0.0f; continue; }
+
+            float x = (i + 0.5f) * dx;
+            float y = (j + 0.5f) * dx;
+
+            float ux, vy;
+            velAt(x, y, u, v, ux, vy);
+
+            // Same forward backtrace point (so we clamp to the same donor stencil)
+            float x0 = clampf(x - dt * ux, 0.0f, nx * dx);
+            float y0 = clampf(y - dt * vy, 0.0f, ny * dx);
+
+            // correction
+            float phiF = smokeFwd[id];
+            float phiB = smokeBack[id];
+            float corrected = phiF + 0.5f * (smoke0[id] - phiB);
+
+            // clamp to min/max of donor stencil (prevents overshoot/ringing)
+            float mn, mx;
+            stencilMinMax(smoke0, x0, y0, mn, mx);
+            corrected = clampf(corrected, mn, mx);
+
+            // dissipation
+            smoke[id] = dissipation * corrected;
+        }
+    }
+}
+
+float MAC2D::maxFaceSpeed() const {
+    float m = 0.0f;
+
+    // u faces: (nx+1)*ny
+    for (float val : u) m = std::max(m, std::fabs(val));
+
+    // v faces: nx*(ny+1)
+    for (float val : v) m = std::max(m, std::fabs(val));
+
+    return m;
 }
 
 // ---------------------------
@@ -405,7 +660,7 @@ void MAC2D::addSolidCircle(float cx, float cy, float r) {
 // ---------------------------
 // Main step
 // ---------------------------
-void MAC2D::step() {
+void MAC2D::step(float vortEps) {
     // smoke source (you can remove this once UI places sources)
     addSmokeSource(0.5f * nx * dx, 0.2f * ny * dx, 0.10f * nx * dx, 0.08f);
 
@@ -413,6 +668,9 @@ void MAC2D::step() {
     applyBoundary();
 
     advectVelocity();
+    applyBoundary();
+
+    addVorticityConfinement(vortEps);
     applyBoundary();
 
     project();
