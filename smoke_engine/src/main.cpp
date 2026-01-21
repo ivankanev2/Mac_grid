@@ -34,6 +34,15 @@ float rectHalfSize = 0.06f;         // half-size for rectangle
 float smokeBrushRadius = 0.05f;
 float smokeBrushAmount = 0.15f;
 
+struct SmokeSource {
+    float x;
+    float y;
+    float r;
+    float amount;
+    bool enabled;
+};
+std::vector<SmokeSource> sources;
+
 // Debug overlay toggles
 static bool showDivOverlay = false;
 static bool showVelOverlay = false;
@@ -314,6 +323,11 @@ int main() {
             if (dt < dtMin) dt = dtMin;
 
             sim.setDt(dt);
+            for (const auto& src : sources) {
+                if (src.enabled) {
+                    sim.addSmokeSource(src.x, src.y, src.r, src.amount);
+                }
+            }
             sim.step(vortEps);
         }
     }
@@ -361,6 +375,11 @@ int main() {
         ImGui::SliderFloat("Rect half-size", &rectHalfSize, 0.01f, 0.30f);
         ImGui::SliderFloat("Smoke radius", &smokeBrushRadius, 0.01f, 0.20f);
         ImGui::SliderFloat("Smoke amount", &smokeBrushAmount, 0.01f, 0.5f);
+        ImGui::Text("Smoke sources: %zu", sources.size());
+        ImGui::SameLine();
+        if (ImGui::Button("Clear sources")) {
+            sources.clear();
+        }
         ImGui::End();
 
         ImGui::Begin("Data / Debug");
@@ -592,6 +611,8 @@ ImGui::End();
                     break;
                 }
                 case PaintTool::AddSmoke:
+                    sources.push_back({sx, sy, smokeBrushRadius, smokeBrushAmount, true});
+                    // drop an immediate blob so the source is visible right away
                     sim.addSmokeSource(sx, sy, smokeBrushRadius, smokeBrushAmount);
                     break;
                 }
