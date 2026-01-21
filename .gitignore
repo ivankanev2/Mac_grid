@@ -1,0 +1,57 @@
+smoke_engine/build/
+smoke_engine/_deps/
+iterations/
+macgrid/out/
+macgrid/*.mp4
+*.ppm
+.vscode/
+# Engine build tree
+smoke_engine/build/
+smoke_engine/_deps/
+smoke_engine/build/_deps/
+smoke_engine/build/CMakeFiles/
+smoke_engine/build/CMakeCache.txt
+smoke_engine/build/Makefile
+smoke_engine/build/cmake_install.cmake
+smoke_engine/build/SmokeEngine
+smoke_engine/build/libimgui_lib.a
+smoke_engine/build/**/*.o
+smoke_engine/build/**/*.o.d
+smoke_engine/build/**/*.a
+smoke_engine/build/**/*.dir/
+smoke_engine/build/**/*.cmake
+smoke_engine/build/**/*.txt
+smoke_engine/build/**/*.yaml
+smoke_engine/build/**/*.json
+smoke_engine/build/**/*.app/
+
+# External subbuilds
+smoke_engine/build/_deps/glfw-build/
+smoke_engine/build/_deps/glfw-subbuild/
+smoke_engine/build/_deps/imgui-build/
+smoke_engine/build/_deps/imgui-subbuild/
+
+# Generated outputs
+iterations/
+macgrid/out/
+macgrid/*.mp4
+*.ppm
+
+# IDE/misc
+.vscode/
+.DS_Store
+# build outputs
+smoke_engine/build/
+smoke_engine/_deps/
+smoke_engine/build/**
+
+# generated data
+iterations/
+macgrid/out/
+macgrid/*.mp4
+*.ppm
+
+# IDE/misc
+.vscode/
+.DS_Store
+smoke_engine/build/
