@@ -1,1 +1,0 @@
-/usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/SmokeEngine.dir/src/main.cpp.o CMakeFiles/SmokeEngine.dir/Users/ivan.kanev/Desktop/jorge_project/sim/mac_smoke_sim.cpp.o -o SmokeEngine  libimgui_lib.a _deps/glfw-build/src/libglfw3.a -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -framework CoreFoundation

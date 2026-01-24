@@ -1,0 +1,3 @@
+[submodule "smoke_engine/external/imgui"]
+	path = smoke_engine/external/imgui
+	url = https://github.com/ocornut/imgui
