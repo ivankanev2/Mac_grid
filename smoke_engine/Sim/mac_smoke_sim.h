@@ -23,6 +23,19 @@ struct MAC2D {
     const std::vector<float>& divergence() const { return div; }
     const std::vector<uint8_t>& solidMask() const { return solid; }
 
+    struct FrameStats {
+    float dt = 0.0f;
+
+    float maxDivBefore = 0.0f;
+    float maxDivAfter  = 0.0f;
+
+    float maxFaceSpeedBefore = 0.0f;
+    float maxFaceSpeedAfter  = 0.0f;
+
+    int   pressureIters = 0;     // actual iterations used
+    float pressureMs    = 0.0f;  // time spent in pressure solve (ms)
+};
+
     MAC2D(int NX, int NY, float DX, float DT);
     void step(float vortEps);
     void reset();
@@ -34,6 +47,7 @@ struct MAC2D {
     void addVorticityConfinement(float eps);
     void addVelocityImpulse(float cx, float cy, float radius, float strength);
     void computeVorticity(std::vector<float>& outOmega) const;
+    void removePressureMean();
 
     void advectScalarMacCormack(std::vector<float>& phi,
                             std::vector<float>& phi0,
@@ -61,6 +75,9 @@ struct MAC2D {
 
     float smokeDissipation = 0.999f;
     float tempDissipation  = 0.995f;
+
+     // Units ~ 1/seconds; 0.0 means "off".
+    float velDamping       = 0.5f;
 
     // NEW: temperature physics
     float ambientTemp      = 0.0f;   // reference temperature
@@ -142,4 +159,31 @@ private:
 
     static float distPointToSegment(float px,float py, float ax,float ay, float bx,float by);
     float distPointToPolyline(float px,float py) const;
+
+    // ---- Pressure solve caches (Step A optimization) ----
+private:
+    bool pressureMatrixDirty = true;   // set true whenever solids/topology or openTop changes
+    float invDx2_cache = 0.0f;
+
+    // Sparse Laplacian connectivity (per cell). -1 = no neighbor / boundary / solid.
+    std::vector<int> lapL, lapR, lapB, lapT;
+    std::vector<float> lapDiagInv;     // Jacobi preconditioner: inverse diagonal of Laplacian
+
+    // Persistent PCG scratch buffers (avoid realloc every solve)
+    std::vector<float> pcg_r, pcg_z, pcg_d, pcg_q, pcg_Ap;
+
+    void markPressureMatrixDirty() { pressureMatrixDirty = true; }
+    void ensurePressureMatrix();   // builds lap* caches if dirty
+    void ensurePCGBuffers();       // resizes pcg_* to nx*ny if needed
+
+    FrameStats stats;
+
+public:
+    // Optional: call if you explicitly changed solids externally
+    void invalidatePressureMatrix() { markPressureMatrixDirty(); }
+
+    
+    const FrameStats& getStats() const { return stats; }
+
+
 };

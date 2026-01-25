@@ -1,5 +1,6 @@
 #include "mac_smoke_sim.h"
 #include <cmath>
+#include <chrono>
 
 // file-local helper
 namespace {
@@ -8,6 +9,80 @@ namespace {
         for (size_t i = 0; i < a.size(); ++i)
             s += (double)a[i] * (double)b[i];
         return (float)s;
+    }
+}
+
+void MAC2D::ensurePCGBuffers() {
+    const int N = nx * ny;
+    if ((int)pcg_r.size() != N) pcg_r.resize(N);
+    if ((int)pcg_z.size() != N) pcg_z.resize(N);
+    if ((int)pcg_d.size() != N) pcg_d.resize(N);
+    if ((int)pcg_q.size() != N) pcg_q.resize(N);
+    if ((int)pcg_Ap.size() != N) pcg_Ap.resize(N);
+}
+
+void MAC2D::ensurePressureMatrix() {
+    if (!pressureMatrixDirty) return;
+    pressureMatrixDirty = false;
+
+    const int N = nx * ny;
+    lapL.assign(N, -1);
+    lapR.assign(N, -1);
+    lapB.assign(N, -1);
+    lapT.assign(N, -1);
+    lapDiagInv.assign(N, 0.0f);
+
+    invDx2_cache = 1.0f / (dx * dx);
+
+    // ensure p vector exists and has proper size for warm-starting
+    if ((int)p.size() != N) p.assign(N, 0.0f);
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const int id = idxP(i, j);
+            if (isSolid(i, j)) {
+                lapL[id] = lapR[id] = lapB[id] = lapT[id] = -1;
+                lapDiagInv[id] = 0.0f;
+                continue;
+            }
+
+            int count = 0;
+            if (i > 0 && !isSolid(i - 1, j)) { lapL[id] = idxP(i - 1, j); count++; }
+            if (i + 1 < nx && !isSolid(i + 1, j)) { lapR[id] = idxP(i + 1, j); count++; }
+            if (j > 0 && !isSolid(i, j - 1)) { lapB[id] = idxP(i, j - 1); count++; }
+            if (j + 1 < ny && !isSolid(i, j + 1)) { lapT[id] = idxP(i, j + 1); count++; }
+
+            const float diag = (float)count * invDx2_cache;
+            lapDiagInv[id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
+        }
+    }
+
+    // If topology changed and you *want* to discard previous warm-start, clear p once:
+    // std::fill(p.begin(), p.end(), 0.0f); // uncomment only if you prefer to always reset
+}
+
+// to make the pressure not go crazy over time
+void MAC2D::removePressureMean()
+{
+    double sum = 0.0;
+    int cnt = 0;
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            if (isSolid(i,j)) continue;
+            sum += (double)p[idxP(i,j)];
+            cnt++;
+        }
+    }
+
+    if (cnt == 0) return;
+
+    float mean = (float)(sum / (double)cnt);
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            if (isSolid(i,j)) continue;
+            p[idxP(i,j)] -= mean;
+        }
     }
 }
 
@@ -54,146 +129,102 @@ void MAC2D::computeVorticity(std::vector<float>& outOmega) const {
 }
 
 void MAC2D::applyLaplacian(const std::vector<float>& x, std::vector<float>& Ax) const {
-    Ax.assign(nx * ny, 0.0f);
+    const int N = nx * ny;
+    if ((int)Ax.size() != N) Ax.resize(N);
 
-    const float invDx2 = 1.0f / (dx * dx);
+    const float invDx2 = invDx2_cache;
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            int id = idxP(i, j);
+            const int id = idxP(i, j);
             if (isSolid(i, j)) { Ax[id] = 0.0f; continue; }
 
-            float center = x[id];
             float sum = 0.0f;
             int count = 0;
 
-            // Only connect to non-solid neighbors
-            if (i > 0     && !isSolid(i - 1, j)) { sum += x[idxP(i - 1, j)]; count++; }
-            if (i + 1 < nx && !isSolid(i + 1, j)) { sum += x[idxP(i + 1, j)]; count++; }
-            if (j > 0     && !isSolid(i, j - 1)) { sum += x[idxP(i, j - 1)]; count++; }
-            if (j + 1 < ny) {
-            if (!isSolid(i, j + 1)) { sum += x[idxP(i, j + 1)]; count++; }
-                } else {
-                    // top boundary neighbor is "outside"
-                    // if top is CLOSED: treat outside as solid (do nothing extra, but keep count logic consistent)
-                    // if top is OPEN: Neumann -> do NOT count an outside neighbor
-                    if (!openTop) {
-                        // closed: effectively a wall -> you can treat it like solid, meaning no connection
-                        // (so: do nothing here)
-                    }
-                }
+            int n = lapL[id]; if (n >= 0) { sum += x[n]; count++; }
+            n = lapR[id];     if (n >= 0) { sum += x[n]; count++; }
+            n = lapB[id];     if (n >= 0) { sum += x[n]; count++; }
+            n = lapT[id];     if (n >= 0) { sum += x[n]; count++; }
 
-            // Discrete Laplacian: (count*center - sum) / dx^2
-            Ax[id] = (count * center - sum) * invDx2;
+            Ax[id] = (count * x[id] - sum) * invDx2;
         }
     }
 }
+
+
 
 void MAC2D::solvePressurePCG(int maxIters, float tol) {
-    // b = div/dt (same as you already do)
+    ensurePressureMatrix();
+    ensurePCGBuffers();
+
     const int N = nx * ny;
 
-    std::vector<float> b(N, 0.0f);
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            int id = idxP(i,j);
-            b[id] = isSolid(i,j) ? 0.0f : rhs[id];
+    // Warm start: keep previous p as initial guess (do NOT zero every frame)
+    // std::fill(p.begin(), p.end(), 0.0f);
+
+    applyLaplacian(p, pcg_Ap);
+    for (int k = 0; k < N; ++k) {
+        pcg_r[k] = rhs[k] - pcg_Ap[k];
     }
-}
 
-    // p initial guess = 0
-    std::fill(p.begin(), p.end(), 0.0f);
+    const float bNorm2 = dotVec(rhs, rhs);
+    if (bNorm2 < 1e-30f) return;
 
-    // r = b - A p  (but p=0 => r=b)
-    std::vector<float> r = b;
-    std::vector<float> z(N, 0.0f);
-    std::vector<float> d(N, 0.0f);
-    std::vector<float> q(N, 0.0f);
+    for (int k = 0; k < N; ++k) {
+        pcg_z[k] = pcg_r[k] * lapDiagInv[k];
+        pcg_d[k] = pcg_z[k];
+    }
 
-    // Jacobi preconditioner: z = M^{-1} r, where M is diagonal of A
-    // diagonal = count/dx^2
-    auto applyPrecond = [&](const std::vector<float>& rr, std::vector<float>& out) {
-        out.assign(N, 0.0f);
-        const float invDx2 = 1.0f / (dx * dx);
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                int id = idxP(i, j);
-                if (isSolid(i, j)) { out[id] = 0.0f; continue; }
-
-                int count = 0;
-                if (i > 0     && !isSolid(i - 1, j)) count++;
-                if (i + 1 < nx && !isSolid(i + 1, j)) count++;
-                if (j > 0     && !isSolid(i, j - 1)) count++;
-                if (j + 1 < ny) {
-                if (!isSolid(i, j + 1)) count++;
-                } else {
-                    if (!openTop) {
-                        // closed top: do nothing (no neighbor)
-                    } else {
-                        // open top: do nothing (Neumann)
-                    }
-                }
-
-                float diag = (float)count * invDx2;
-                if (diag > 0.0f) out[id] = rr[id] / diag;
-                else             out[id] = 0.0f;
-            }
-        }
-    };
-
-    applyPrecond(r, z);
-    d = z;
-
-    float deltaNew = dotVec(r, z);
+    float deltaNew = dotVec(pcg_r, pcg_z);
     float delta0   = deltaNew;
-
-    // If rhs is tiny, nothing to do
     if (deltaNew < 1e-30f) return;
 
-    for (int it = 0; it < maxIters; ++it) {
-        applyLaplacian(d, q);
+    const float tol2 = tol * tol;
 
-        float dq = dotVec(d, q);
+    int it_used = 0;
+    for (int it = 0; it < maxIters; ++it) {
+        it_used = it + 1;
+        applyLaplacian(pcg_d, pcg_q);
+
+        float dq = dotVec(pcg_d, pcg_q);
         if (std::fabs(dq) < 1e-30f) break;
 
         float alpha = deltaNew / dq;
 
-        // p = p + alpha d
-        // r = r - alpha q
         for (int k = 0; k < N; ++k) {
-            p[k] += alpha * d[k];
-            r[k] -= alpha * q[k];
+            p[k]     += alpha * pcg_d[k];
+            pcg_r[k] -= alpha * pcg_q[k];
         }
 
-        // Convergence check using preconditioned residual energy
-        // relative tolerance
-        float rNorm2 = dotVec(r, r);
-        if (rNorm2 < tol * tol) break;
+        float rNorm2 = dotVec(pcg_r, pcg_r);
+        if (rNorm2 <= tol2 * bNorm2) break;
 
-        applyPrecond(r, z);
+        for (int k = 0; k < N; ++k) {
+            pcg_z[k] = pcg_r[k] * lapDiagInv[k];
+        }
 
         float deltaOld = deltaNew;
-        deltaNew = dotVec(r, z);
+        deltaNew = dotVec(pcg_r, pcg_z);
+
+        if (deltaNew <= tol2 * delta0) break;
 
         float beta = deltaNew / (deltaOld + 1e-30f);
 
-        // d = z + beta d
         for (int k = 0; k < N; ++k) {
-            d[k] = z[k] + beta * d[k];
+            pcg_d[k] = pcg_z[k] + beta * pcg_d[k];
         }
-
-        // optional: stricter relative check
-        if (deltaNew < (tol * tol) * delta0) break;
     }
+    stats.pressureIters = it_used;
+    removePressureMean();
 }
 
 void MAC2D::project() {
     // 1) divergence of current velocity field
     computeDivergence();
-    float maxDivBefore   = maxAbsDiv();
-    float maxSpeedBefore = maxFaceSpeed();
-    std::printf("[DEBUG] before project: max|div|=%g  maxFaceSpeed=%g\n",
-                maxDivBefore, maxSpeedBefore);
+    stats.dt = dt;
+    stats.maxDivBefore = maxAbsDiv();
+    stats.maxFaceSpeedBefore = maxFaceSpeed();
 
     // 2) rhs for Poisson: Laplace(p) = div/dt  (solids -> 0)
     for (int j = 0; j < ny; ++j) {
@@ -203,8 +234,34 @@ void MAC2D::project() {
         }
     }
 
-    // 3) solve A p = rhs
+    // Make RHS zero-mean over fluid cells (required for Neumann Poisson)
+    double sum = 0.0;
+    int cnt = 0;
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int id = idxP(i,j);
+            if (isSolid(i,j)) continue;
+            sum += rhs[id];
+            cnt++;
+        }
+    }
+    if (cnt > 0) {
+        float mean = (float)(sum / (double)cnt);
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                int id = idxP(i,j);
+                if (isSolid(i,j)) continue;
+                rhs[id] -= mean;
+            }
+        }
+    }
+
+    // timing the pressure solve
+    auto t0 = std::chrono::high_resolution_clock::now();
     solvePressurePCG(80, 1e-4f);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    stats.pressureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
+
 
     // 4) subtract pressure gradient from faces
     // u faces
@@ -234,8 +291,8 @@ void MAC2D::project() {
 
     // 5) measure divergence after projection
     computeDivergence();
-    float maxDivAfter   = maxAbsDiv();
-    float maxSpeedAfter = maxFaceSpeed();
-    std::printf("[DEBUG] after project:  max|div|=%g  maxFaceSpeed=%g\n",
-                maxDivAfter, maxSpeedAfter);
+
+    // to check how the divergence and speed improve
+    stats.maxDivAfter = maxAbsDiv();
+    stats.maxFaceSpeedAfter = maxFaceSpeed();
 }

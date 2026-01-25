@@ -19,6 +19,64 @@ static ImGuiID dock_id = 0;
 static bool g_requestSaveLayout  = false;
 static bool g_requestResetLayout = false;
 
+struct Ring {
+    std::vector<float> v;
+    int head = 0;
+    bool filled = false;
+
+    Ring(int cap=240) : v(cap, 0.0f) {}
+
+    void push(float x) {
+        v[head] = x;
+        head = (head + 1) % (int)v.size();
+        if (head == 0) filled = true;
+    }
+
+    int size() const { return filled ? (int)v.size() : head; }
+
+    // Copy in chronological order into out (for plotting)
+    void toChrono(std::vector<float>& out) const {
+        int n = size();
+        out.resize(n);
+        if (!filled) {
+            for (int i=0;i<n;i++) out[i] = v[i];
+            return;
+        }
+        // oldest is head, newest is head-1
+        for (int i=0;i<n;i++) out[i] = v[(head + i) % (int)v.size()];
+    }
+};
+
+enum StatID {
+    STAT_DT,
+    STAT_MAXDIV_BEFORE,
+    STAT_MAXDIV_AFTER,
+    STAT_MAXSPEED_BEFORE,
+    STAT_MAXSPEED_AFTER,
+    STAT_PRES_ITERS,
+    STAT_PRES_MS,
+    STAT_COUNT
+};
+
+static const char* kStatNames[STAT_COUNT] = {
+    "dt",
+    "max|div| (before)",
+    "max|div| (after)",
+    "max face speed (before)",
+    "max face speed (after)",
+    "pressure iters",
+    "pressure ms"
+};
+
+static Ring g_hist[STAT_COUNT] = {
+    Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360)
+};
+
+static int  g_selectedStat = STAT_PRES_MS;
+static bool g_recordStats  = true;
+static std::vector<float> g_plotScratch;
+
+
 bool ConsumeSaveLayoutRequest() {
     bool v = g_requestSaveLayout;
     g_requestSaveLayout = false;
@@ -354,6 +412,66 @@ static void drawDebugTabs(MAC2D& sim, Settings& ui, Probe& probe) {
             ImGui::EndTabItem();
         }
 
+        if (ImGui::BeginTabItem("Profiler")) {
+            const auto& st = sim.getStats();
+
+            if (ImGui::Button(g_recordStats ? "Pause Recording" : "Resume Recording"))
+                g_recordStats = !g_recordStats;
+
+            ImGui::SameLine();
+            if (ImGui::Button("Clear History")) {
+                for (int i=0;i<STAT_COUNT;i++) {
+                    g_hist[i] = Ring(360);
+                }
+            }
+
+            ImGui::Separator();
+
+            // Left: selectable list of stats
+            ImGui::BeginChild("stat_list", ImVec2(220, 0), true);
+            for (int i = 0; i < STAT_COUNT; ++i) {
+                if (ImGui::Selectable(kStatNames[i], g_selectedStat == i))
+                    g_selectedStat = i;
+            }
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+
+            // Right: current value + history plot
+            ImGui::BeginChild("stat_view", ImVec2(0, 0), true);
+
+            auto currentValue = [&](int id)->float {
+                switch (id) {
+                    case STAT_DT:             return st.dt;
+                    case STAT_MAXDIV_BEFORE:  return st.maxDivBefore;
+                    case STAT_MAXDIV_AFTER:   return st.maxDivAfter;
+                    case STAT_MAXSPEED_BEFORE:return st.maxFaceSpeedBefore;
+                    case STAT_MAXSPEED_AFTER: return st.maxFaceSpeedAfter;
+                    case STAT_PRES_ITERS:     return (float)st.pressureIters;
+                    case STAT_PRES_MS:        return st.pressureMs;
+                    default: return 0.0f;
+                }
+            };
+
+            float cur = currentValue(g_selectedStat);
+            ImGui::Text("Selected: %s", kStatNames[g_selectedStat]);
+            ImGui::Text("Current: %.6f", cur);
+
+            ImGui::Separator();
+
+            g_hist[g_selectedStat].toChrono(g_plotScratch);
+            if (!g_plotScratch.empty()) {
+                ImGui::PlotLines("History", g_plotScratch.data(), (int)g_plotScratch.size(),
+                                0, nullptr, FLT_MAX, FLT_MAX, ImVec2(0, 180));
+            } else {
+                ImGui::TextDisabled("No data yet.");
+            }
+
+            ImGui::EndChild();
+
+            ImGui::EndTabItem();
+        }
+
         if (ImGui::BeginTabItem("Probe")) {
             if (!probe.has) {
                 ImGui::TextUnformatted("Hover the Smoke View to inspect a cell.");
@@ -553,6 +671,18 @@ Actions DrawAll(MAC2D& sim,
 {
     // Dockspace root must be drawn BEFORE your windows
     BeginDockspaceRoot();
+
+    // --- feed stat history once per frame ---
+    if (g_recordStats) {
+        const auto& st = sim.getStats();
+        g_hist[STAT_DT].push(st.dt);
+        g_hist[STAT_MAXDIV_BEFORE].push(st.maxDivBefore);
+        g_hist[STAT_MAXDIV_AFTER].push(st.maxDivAfter);
+        g_hist[STAT_MAXSPEED_BEFORE].push(st.maxFaceSpeedBefore);
+        g_hist[STAT_MAXSPEED_AFTER].push(st.maxFaceSpeedAfter);
+        g_hist[STAT_PRES_ITERS].push((float)st.pressureIters);
+        g_hist[STAT_PRES_MS].push(st.pressureMs);
+    }
 
     Actions a = drawControls(sim, ui);
     drawDebugTabs(sim, ui, probe);

@@ -116,6 +116,8 @@ void MAC2D::reset() {
             if (solid[idxP(i, j)]) smoke[idxP(i, j)] = 0.0f;
         }
     }
+
+    markPressureMatrixDirty();
 }
 
 float MAC2D::maxFaceSpeed() const {
@@ -163,32 +165,36 @@ void MAC2D::addSolidCircle(float cx, float cy, float r) {
             }
         }
     }
+
+    markPressureMatrixDirty();
 }
 
 void MAC2D::step(float vortEps) {
-    // inlet (when open)
+    // 0) Inlet BC FIRST so the solver sees it (and doesn't "inject divergence" after projection)
     applyValveBC();
+    applyBoundary();
 
-    // forces
+    // 1) Forces
     addForces(1.5f, 0.0f);
     applyBoundary();
 
-    // advect velocity
+    // 2) Advect velocity
     advectVelocity();
     applyBoundary();
 
-    // vorticity confinement
+    // 3) Vorticity confinement
     addVorticityConfinement(vortEps);
 
-    // pressure projection
+    // 4) Pressure projection (make velocity divergence-free)
     project();
+    applyBoundary();
 
-    // advect scalars ONCE
+    // 5) Advect scalars ONCE
     advectScalar(temp,  temp0,  tempDissipation);
     advectScalar(smoke, smoke0, smokeDissipation);
     advectScalar(age,   age0,   1.0f);
 
-    // top outflow “sink” for scalars
+    // 6) Top outflow “sink” for scalars
     if (openTop) {
         int j = ny - 1;
         for (int i = 0; i < nx; ++i) {
@@ -199,18 +205,13 @@ void MAC2D::step(float vortEps) {
         }
     }
 
-    // bottom valve sink (if flow reverses out)
+    // 7) Bottom valve sink (if flow reverses out)
     applyValveSink();
 
-    // temperature evolution (cooling/diffusion)
+    // 8) Temperature evolution (cooling/diffusion) + age update
     coolAndDiffuseTemperature();
-
-    // age update
     updateAge(dt);
 
-    // re-impose inlet after advection/projection
-    applyValveBC();
-
-    // enforce BCs at end
+    // 9) Re-apply BCs at end (keeps valve u-tangential killed and prevents "leak")
     applyBoundary();
 }

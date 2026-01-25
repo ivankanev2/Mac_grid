@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cmath>
+#include <cstdlib>
 #include <algorithm>
 
 #include "UI/panels.h"
@@ -23,6 +24,12 @@
 // window size and sim resolution
 static const int NX = 96;
 static const int NY = 96;
+
+// time variables
+double lastTime = glfwGetTime();
+double accumulator = 0.0;
+float simSpeed = 1.0f;          // 1.0 = real-time, 2.0 = 2x faster, etc.
+int maxStepsPerFrame = 8;       // cap to avoid death-spiral
 
 int main()
 {
@@ -82,17 +89,39 @@ int main()
         sim.smokeDissipation = ui.smokeDissipation;
         sim.tempDissipation  = ui.tempDissipation;
 
-        if (ui.playing) {
-            for (int sub = 0; sub < 2; ++sub) {
-                float maxSpeed = sim.maxFaceSpeed();
-                float dt = ui.cfl * sim.dx / (maxSpeed + 1e-6f);
+        double now = glfwGetTime();
+        double frameDt = now - lastTime;
+        lastTime = now;
 
-                if (dt > ui.dtMax) dt = ui.dtMax;
-                if (dt < ui.dtMin) dt = ui.dtMin;
+        // avoid huge jumps (dragging window, breakpoint, etc.)
+        if (frameDt > 0.1) frameDt = 0.1;
+
+        if (ui.playing) {
+            accumulator += frameDt * simSpeed;
+
+            int steps = 0;
+            while (accumulator > 0.0 && steps < maxStepsPerFrame) {
+                float maxSpeed = sim.maxFaceSpeed();
+                float dtCFL = ui.cfl * sim.dx / (maxSpeed + 1e-6f);
+
+                // CFL is a hard cap
+                float dt = std::min(ui.dtMax, dtCFL);
+            
+                if (ui.dtMin > dtCFL) {
+                    // dt stays at dtCFL
+                } else {
+                    dt = std::max(dt, ui.dtMin);
+                }
 
                 sim.setDt(dt);
                 sim.step(ui.vortEps);
+
+                accumulator -= dt;
+                steps++;
             }
+
+            // optional: if we hit the cap, drop the remainder so it doesn't lag forever
+            if (steps == maxStepsPerFrame) accumulator = 0.0;
         }
 
         // upload textures

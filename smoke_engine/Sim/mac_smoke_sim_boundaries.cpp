@@ -11,19 +11,30 @@ void MAC2D::recomputeValveIndices() {
     valveI0 = std::max(1, std::min(valveI0, nx - 2));
     valveI1 = std::max(1, std::min(valveI1, nx - 2));
 
-    std::printf("[VALVE] recompute: valveI0=%d valveI1=%d (nx=%d)\n", valveI0, valveI1, nx);
 }
 
 void MAC2D::applyBoundary() {
-    // outer boundary no-through
+    // outer boundary no-through (and no-slip tangential on the floor)
+
+    // Left / right walls: u = 0
     for (int j = 0; j < ny; j++) {
-        u[idxU(0, j)] = 0.0f;
+        u[idxU(0, j)]  = 0.0f;
         u[idxU(nx, j)] = 0.0f;
     }
+
+    // Floor: kill tangential component u(i,0) to prevent "valve sideways leak"
+    for (int i = 0; i <= nx; ++i) {
+        u[idxU(i, 0)] = 0.0f;
+    }
+
+    // Floor / ceiling: v
     for (int i = 0; i < nx; i++) {
-    if (!(valveOpen && inValve(i))) v[idxV(i, 0)] = 0.0f;
-    if (!openTop) v[idxV(i, ny)] = 0.0f;
-    else          v[idxV(i, ny)] = v[idxV(i, ny-1)]; // zero-gradient outflow
+        // bottom: closed except valve
+        if (!(valveOpen && inValve(i))) v[idxV(i, 0)] = 0.0f;
+
+        // top: closed unless openTop (zero-gradient outflow)
+        if (!openTop) v[idxV(i, ny)] = 0.0f;
+        else          v[idxV(i, ny)] = v[idxV(i, ny - 1)];
     }
 
     // no-through for internal solids:
@@ -39,18 +50,11 @@ void MAC2D::applyBoundary() {
     // v faces between (i,j-1) and (i,j)
     for (int j = 0; j <= ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-
             // bottom handled already
-            if (j == 0) {
-                if (!(valveOpen && inValve(i))) v[idxV(i, 0)] = 0.0f;
-                continue;
-            }
+            if (j == 0) continue;
 
-            // TOP boundary: if openTop, do NOT zero v(i,ny) here (or you'll kill outflow)
-            if (j == ny) {
-                if (!openTop) v[idxV(i, ny)] = 0.0f;
-                continue;
-            }
+            // top handled already (keep outflow if openTop)
+            if (j == ny) continue;
 
             bool botSolid = isSolid(i, j - 1);
             bool topSolid = isSolid(i, j);
@@ -62,24 +66,41 @@ void MAC2D::applyBoundary() {
 void MAC2D::applyValveBC() {
     if (!valveOpen) return;
 
-    if (valveOpen) {
-    std::printf("[VALVE] open, inletSpeed=%g inletSmoke=%g inletTemp=%g\n",
-                inletSpeed, inletSmoke, inletTemp);
-    }
-
-    // impose upward inflow through bottom boundary faces
+    // 1) impose upward inflow through bottom boundary faces
     for (int i = valveI0; i <= valveI1; ++i) {
         v[idxV(i, 0)] = inletSpeed; // +up into domain
     }
 
-    // set scalars just inside the domain (row 1)
+    // 2) Kill tangential velocity along the opening to prevent sideways "leak"
+    //
+    // u lives on vertical faces: i in [0..nx], so the valve opening affects faces
+    // from i=valveI0 .. valveI1+1 (inclusive).
+    //
+    // Clamp into valid u-face index range.
+    int u0 = std::max(0, valveI0);
+    int u1 = std::min(nx, valveI1 + 1);
+
+    for (int i = u0; i <= u1; ++i) {
+        u[idxU(i, 0)] = 0.0f;
+    }
+
+    // Optional but often helps a LOT:
+    // also kill tangential velocity one cell above the inlet lip (prevents "jet attaching")
+    // Comment this out if you dislike how "engineered" it feels.
+    for (int i = u0; i <= u1; ++i) {
+        if (ny > 1) u[idxU(i, 1)] = 0.0f;
+    }
+
+    // 3) Inject smoke/temp into first fluid row above the boundary (j=1)
     int j = 1;
-    for (int i = valveI0; i <= valveI1; ++i) {
-        if (isSolid(i, j)) continue;
-        int id = idxP(i, j);
-        smoke[id] = inletSmoke;
-        temp[id]  = inletTemp;
-        age[id]   = 0.0f;
+    if (j < ny) {
+        for (int i = valveI0; i <= valveI1; ++i) {
+            if (!isSolid(i, j)) {
+                smoke[idxP(i, j)] = inletSmoke;
+                temp[idxP(i, j)]  = inletTemp;
+                age[idxP(i, j)]   = 0.0f;   // important: otherwise age can “teleport old smoke” into new inflow
+            }
+        }
     }
 }
 
@@ -105,6 +126,8 @@ void MAC2D::setOpenTop(bool on) {
     for (int i = 0; i < nx; ++i) {
         solid[idxP(i, ny - 1)] = openTop ? 0 : 1;
     }
+
+    markPressureMatrixDirty();
 }
 
 void MAC2D::enforceBoundaries() {
