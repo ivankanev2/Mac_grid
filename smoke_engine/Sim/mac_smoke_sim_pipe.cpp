@@ -28,6 +28,8 @@ float MAC2D::distPointToPolyline(float px,float py) const {
 void MAC2D::clearPipe() {
     pipe.x.clear();
     pipe.y.clear();
+
+    markPressureMatrixDirty();
 }
 
 void MAC2D::rebuildSolidsFromPipe(bool clearInterior) {
@@ -76,4 +78,6 @@ void MAC2D::rebuildSolidsFromPipe(bool clearInterior) {
             }
         }
     }
+
+    markPressureMatrixDirty();
 }

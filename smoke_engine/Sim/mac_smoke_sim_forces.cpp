@@ -14,6 +14,22 @@ void MAC2D::addForces(float buoyancy, float gravity) {
             v[idxV(i, j)] += dt * (buoyancy * theta + gravity);
         }
     }
+
+    // --- NEW: simple global velocity damping (viscous drag) ---
+    if (velDamping > 0.0f) {
+        // exponential decay factor per time step
+        float factor = std::exp(-velDamping * dt);
+
+        // damp u faces
+        for (float& uu : u) {
+            uu *= factor;
+        }
+
+        // damp v faces
+        for (float& vv : v) {
+            vv *= factor;
+        }
+    }
 }
 
 // Vorticity confinement
