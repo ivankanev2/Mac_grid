@@ -22,6 +22,10 @@ void MAC2D::reset() {
 
     recomputeValveIndices();
 
+    useMultigridSolve = true;   // Multigrid solver is on
+    mgSolveMaxCycles  = 6;      // start 6–10
+    useMGPrecond      = true;  // precond irrelevant if MG is solver
+
     const size_t Nu = (size_t)(nx + 1) * (size_t)ny;
     const size_t Nv = (size_t)nx * (size_t)(ny + 1);
     const size_t Nc = (size_t)nx * (size_t)ny;

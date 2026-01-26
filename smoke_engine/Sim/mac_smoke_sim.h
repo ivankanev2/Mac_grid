@@ -141,7 +141,14 @@ private:
     void applyBoundary();
     void advectVelocity();
     void computeDivergence();
+
     void solvePressurePCG(int maxIters = 200, float tol = 1e-6f);
+    void solvePressureMG(int maxCycles = 10, float tol = 1e-4f);
+
+    // MG as the actual solver (not just a PCG preconditioner)
+    bool useMultigridSolve = false;   // turn ON to use MG instead of PCG
+    int  mgSolveMaxCycles  = 8;       // V-cycles per frame when useMultigridSolve
+
     void applyLaplacian(const std::vector<float>& x, std::vector<float>& Ax) const;
     void project();
     void advectSmoke(float dissipation);
@@ -172,9 +179,48 @@ private:
     // Persistent PCG scratch buffers (avoid realloc every solve)
     std::vector<float> pcg_r, pcg_z, pcg_d, pcg_q, pcg_Ap;
 
-    void markPressureMatrixDirty() { pressureMatrixDirty = true; }
+    void markPressureMatrixDirty() { pressureMatrixDirty = true; markMGDirty(); }
     void ensurePressureMatrix();   // builds lap* caches if dirty
     void ensurePCGBuffers();       // resizes pcg_* to nx*ny if needed
+
+    // ---- Multigrid Preconditioner ----
+    struct MGLevel {
+        int nx = 0, ny = 0;
+        float invDx2 = 0.0f;
+
+        std::vector<uint8_t> solid;   // coarse solid mask
+        std::vector<int> L, R, B, T;  // neighbor indices (-1 = none)
+        std::vector<float> diagInv;   // inverse diagonal
+
+        // scratch buffers for V-cycle
+        std::vector<float> x;     // solution / correction
+        std::vector<float> b;     // rhs
+        std::vector<float> Ax;    // A*x
+        std::vector<float> r;     // residual
+    };
+
+    bool useMGPrecond = false; // use MG as PCG preconditioner
+    int  mgMaxLevels = 6;         // build up to this many levels
+    int  mgPreSmooth = 2;         // Jacobi iterations before restriction
+    int  mgPostSmooth = 2;        // Jacobi iterations after prolongation
+    float mgOmega = 0.8f;         // weighted Jacobi relaxation
+    int  mgCoarseSmooth = 30;     // smoothing on coarsest level
+    int  mgVcyclesPerApply = 1;   // how many V-cycles per preconditioner apply
+
+    std::vector<MGLevel> mgLevels;
+    bool mgDirty = true;
+
+    void markMGDirty() { mgDirty = true; }
+    void ensureMultigrid();  // (re)build hierarchy if needed
+
+    void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
+    void mgSmoothJacobi(int lev, int iters);
+    void mgComputeResidual(int lev);
+    void mgRestrictResidual(int fineLev);
+    void mgProlongateAndAdd(int coarseLev);
+    void mgVCycle(int lev);
+
+    void applyMGPrecond(const std::vector<float>& r, std::vector<float>& z);
 
     FrameStats stats;
 
