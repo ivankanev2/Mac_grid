@@ -9,6 +9,7 @@
 #include <filesystem>
 
 #include "../Sim/mac_smoke_sim.h"
+#include "../Sim/mac_water_sim.h"
 #include "../Renderer/smoke_renderer.h"
 
 namespace UI {
@@ -264,6 +265,123 @@ static void computeStats(const MAC2D& sim, float& outMaxDiv, float& outAvgAbsDiv
     outAvgAbsDiv /= (float)N;
 }
 
+struct WaterStats {
+    float sumWater = 0.0f;
+    float maxWater = 0.0f;
+    size_t particles = 0;
+    int particlesInSolid = 0;
+    int liquidCount = 0;
+    int interiorLiquidCount = 0;
+    float maxAbsDiv = 0.0f;
+    float avgAbsDiv = 0.0f;
+    float maxAbsDivInterior = 0.0f;
+    float avgAbsDivInterior = 0.0f;
+    int nearLeft = 0;
+    int nearRight = 0;
+    int nearBottom = 0;
+    int nearTop = 0;
+};
+
+static void computeWaterStats(const MACWater& water, WaterStats& out) {
+    out = WaterStats{};
+    out.particles = water.particles.size();
+
+    // Field totals.
+    double sum = 0.0;
+    float maxV = 0.0f;
+    const auto& wf = water.waterField();
+    for (float v : wf) {
+        const float vv = std::max(0.0f, v);
+        sum += (double)vv;
+        maxV = std::max(maxV, vv);
+    }
+    out.sumWater = (float)sum;
+    out.maxWater = maxV;
+
+    if (!water.particles.empty()) {
+        // Border proximity checks mirror enforceParticleBounds().
+        const int bt = std::max(1, water.borderThickness);
+        const float minX = (bt + 0.5f) * water.dx;
+        const float maxX = (water.nx - bt - 0.5f) * water.dx;
+        const float minY = (bt + 0.5f) * water.dx;
+        const float maxY = water.openTop
+            ? (water.ny - 0.5f) * water.dx
+            : (water.ny - bt - 0.5f) * water.dx;
+        const float eps = 0.25f * water.dx;
+
+        for (const auto& p : water.particles) {
+            if (p.x <= minX + eps) out.nearLeft++;
+            if (p.x >= maxX - eps) out.nearRight++;
+            if (p.y <= minY + eps) out.nearBottom++;
+            if (p.y >= maxY - eps) out.nearTop++;
+
+            int i, j;
+            water.worldToCell(p.x, p.y, i, j);
+            const int id = water.idxP(i, j);
+            if (id >= 0 && id < (int)water.solid.size() && water.solid[(size_t)id]) {
+                out.particlesInSolid++;
+            }
+        }
+    }
+
+    // Divergence stats (water-only).
+    auto isSolidCell = [&](int i, int j) {
+        if (i < 0 || i >= water.nx || j < 0 || j >= water.ny) return true;
+        return water.solid[(size_t)water.idxP(i, j)] != 0;
+    };
+    auto isLiquidCell = [&](int i, int j) {
+        if (i < 0 || i >= water.nx || j < 0 || j >= water.ny) return false;
+        const int id = water.idxP(i, j);
+        return !water.solid[(size_t)id] && water.liquid[(size_t)id];
+    };
+
+    double sumAbsDiv = 0.0;
+    double sumAbsDivInterior = 0.0;
+
+    for (int j = 0; j < water.ny; ++j) {
+        for (int i = 0; i < water.nx; ++i) {
+            const int id = water.idxP(i, j);
+            if (water.solid[(size_t)id] || !water.liquid[(size_t)id]) continue;
+
+            float uL = water.u[(size_t)water.idxU(i, j)];
+            float uR = water.u[(size_t)water.idxU(i + 1, j)];
+            float vB = water.v[(size_t)water.idxV(i, j)];
+            float vT = water.v[(size_t)water.idxV(i, j + 1)];
+
+            if (isSolidCell(i - 1, j)) uL = 0.0f;
+            if (isSolidCell(i + 1, j)) uR = 0.0f;
+            if (isSolidCell(i, j - 1)) vB = 0.0f;
+            if (isSolidCell(i, j + 1)) vT = 0.0f;
+
+            const float div = (uR - uL + vT - vB) / water.dx;
+            const float ad = std::fabs(div);
+
+            out.liquidCount += 1;
+            sumAbsDiv += (double)ad;
+            out.maxAbsDiv = std::max(out.maxAbsDiv, ad);
+
+            const bool interior =
+                isLiquidCell(i - 1, j) &&
+                isLiquidCell(i + 1, j) &&
+                isLiquidCell(i, j - 1) &&
+                isLiquidCell(i, j + 1);
+
+            if (interior) {
+                out.interiorLiquidCount += 1;
+                sumAbsDivInterior += (double)ad;
+                out.maxAbsDivInterior = std::max(out.maxAbsDivInterior, ad);
+            }
+        }
+    }
+
+    if (out.liquidCount > 0) {
+        out.avgAbsDiv = (float)(sumAbsDiv / (double)out.liquidCount);
+    }
+    if (out.interiorLiquidCount > 0) {
+        out.avgAbsDivInterior = (float)(sumAbsDivInterior / (double)out.interiorLiquidCount);
+    }
+}
+
 // ---------- public ----------
 void BuildRenderSettings(const Settings& ui,
                          SmokeRenderSettings& outSmoke,
@@ -285,7 +403,13 @@ void BuildRenderSettings(const Settings& ui,
     outOverlay.vortAlpha = ui.vortAlpha;
 }
 
-static Actions drawControls(MAC2D& sim, Settings& ui) {
+void BuildWaterRenderSettings(const Settings& ui,
+                              WaterRenderSettings& outWater)
+{
+    outWater.alpha = ui.waterAlpha;
+}
+
+static Actions drawControls(MAC2D& sim, MACWater& water, Settings& ui) {
     Actions a;
 
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
@@ -324,6 +448,20 @@ static Actions drawControls(MAC2D& sim, Settings& ui) {
     ImGui::SliderFloat("View scale", &ui.viewScale, 1.0f, 12.0f);
 
     ImGui::Separator();
+    ImGui::TextUnformatted("Water");
+    if (ImGui::Checkbox("Paint water", &ui.paintWater)) {
+        if (ui.paintWater) ui.eraseSolid = false;
+    }
+    ImGui::SliderFloat("Water amount", &ui.waterAmount, 0.01f, 1.00f);
+    ImGui::SliderFloat("Water gravity", &ui.waterGravity, -20.0f, 20.0f);
+    ImGui::SliderFloat("Water dissipation", &ui.waterDissipation, 0.980f, 1.000f);
+    ImGui::SliderFloat("Water damping", &ui.waterVelDamping, 0.0f, 5.0f);
+    ImGui::Checkbox("Water open top", &ui.waterOpenTop);
+    ImGui::Checkbox("Show water view", &ui.showWaterView);
+    ImGui::Checkbox("Show water particles", &ui.showWaterParticles);
+    ImGui::SliderFloat("Water alpha", &ui.waterAlpha, 0.0f, 1.0f);
+
+    ImGui::Separator();
     ImGui::Checkbox("Pipe mode", &g_pipeMode);
     ImGui::SliderFloat("Pipe radius", &sim.pipe.radius, 0.01f, 0.25f);
     ImGui::SliderFloat("Wall thickness", &sim.pipe.wall, 0.005f, 0.10f);
@@ -343,7 +481,7 @@ static Actions drawControls(MAC2D& sim, Settings& ui) {
     return a;
 }
 
-static void drawDebugTabs(MAC2D& sim, Settings& ui, Probe& probe) {
+static void drawDebugTabs(MAC2D& sim, MACWater& water, Settings& ui, Probe& probe) {
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
     ImGui::Begin("Data / Debug");
 
@@ -373,6 +511,8 @@ static void drawDebugTabs(MAC2D& sim, Settings& ui, Probe& probe) {
         if (ImGui::BeginTabItem("Stats")) {
             float maxDiv=0, avgAbsDiv=0, maxSpeed=0;
             computeStats(sim, maxDiv, avgAbsDiv, maxSpeed);
+            WaterStats wst;
+            computeWaterStats(water, wst);
 
             ImGui::Text("Grid: %d x %d", sim.nx, sim.ny);
             ImGui::Text("dx: %.6f   dt: %.6f", sim.dx, sim.dt);
@@ -380,6 +520,17 @@ static void drawDebugTabs(MAC2D& sim, Settings& ui, Probe& probe) {
             ImGui::Text("max |div|: %.6e", maxDiv);
             ImGui::Text("avg |div|: %.6e", avgAbsDiv);
             ImGui::Text("max speed: %.6f", maxSpeed);
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("Water");
+            ImGui::Text("openTop: %s   borderThickness: %d", water.openTop ? "true" : "false", water.borderThickness);
+            ImGui::Text("particles: %zu   inSolid: %d", wst.particles, wst.particlesInSolid);
+            ImGui::Text("sum(water): %.6f   targetMass: %.6f", wst.sumWater, water.targetMass);
+            ImGui::Text("max(water): %.6f", wst.maxWater);
+            ImGui::Text("liquid cells: %d   interior: %d", wst.liquidCount, wst.interiorLiquidCount);
+            ImGui::Text("div (all) max/avg: %.3e / %.3e", wst.maxAbsDiv, wst.avgAbsDiv);
+            ImGui::Text("div (int) max/avg: %.3e / %.3e", wst.maxAbsDivInterior, wst.avgAbsDivInterior);
+            ImGui::Text("near borders L/R/B/T: %d / %d / %d / %d", wst.nearLeft, wst.nearRight, wst.nearBottom, wst.nearTop);
 
             ImGui::Separator();
             ImGui::SliderFloat("Vorticity eps", &ui.vortEps, 0.0f, 8.0f);
@@ -663,7 +814,83 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
     ImGui::End();
 }
 
+static void drawWaterViewAndInteract(MACWater& water,
+                                     SmokeRenderer& renderer,
+                                     Settings& ui,
+                                     int NX, int NY)
+{
+    if (!ui.showWaterView) return;
+
+    ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
+    ImGui::Begin("Water View");
+
+    float scale = ui.viewScale;
+    ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), ImVec2(NX * scale, NY * scale));
+
+    ImVec2 p0 = ImGui::GetItemRectMin();
+    ImVec2 p1 = ImGui::GetItemRectMax();
+
+    bool hovered = ImGui::IsItemHovered();
+
+    if (ui.showWaterParticles && !water.particles.empty()) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float w = p1.x - p0.x;
+        const float h = p1.y - p0.y;
+        const float domainX = std::max(1e-6f, water.nx * water.dx);
+        const float domainY = std::max(1e-6f, water.ny * water.dx);
+
+        // Cap particle drawing cost by striding when the count is huge.
+        const size_t maxDraw = 20000;
+        const size_t n = water.particles.size();
+        const size_t stride = std::max<size_t>(1, n / maxDraw);
+
+        // Make particles clearly visible even on high-DPI screens.
+        const float radiusPx = std::max(2.0f, 0.35f * ui.viewScale);
+        const ImU32 col = IM_COL32(255, 245, 120, 230);
+
+        dl->PushClipRect(p0, p1, true);
+
+        for (size_t k = 0; k < n; k += stride) {
+            const auto& p = water.particles[k];
+            const float px = p.x / domainX;
+            const float py = p.y / domainY;
+            if (px < 0.0f || px > 1.0f || py < 0.0f || py > 1.0f) continue;
+
+            const float sx = p0.x + px * w;
+            const float sy = p1.y - py * h;
+            dl->AddCircleFilled(ImVec2(sx, sy), radiusPx, col, 8);
+        }
+
+        dl->PopClipRect();
+    }
+
+    if (hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        ImVec2 m = ImGui::GetMousePos();
+        float u = (m.x - p0.x) / (p1.x - p0.x);
+        float v = (m.y - p0.y) / (p1.y - p0.y);
+
+        float sx = u;
+        float sy = 1.0f - v;
+
+        if (sx >= 0 && sx <= 1 && sy >= 0 && sy <= 1) {
+            if (ui.circleMode) {
+                water.addWaterSource(sx, sy, ui.brushRadius, ui.waterAmount);
+            } else {
+                float hs = ui.rectHalfSize;
+                for (float yy = sy-hs; yy <= sy+hs; yy += water.dx) {
+                    for (float xx = sx-hs; xx <= sx+hs; xx += water.dx) {
+                        water.addWaterSource(xx, yy, water.dx*0.75f, ui.waterAmount);
+                    }
+                }
+            }
+        }
+    }
+
+    ImGui::End();
+}
+
 Actions DrawAll(MAC2D& sim,
+                MACWater& water,
                 SmokeRenderer& renderer,
                 Settings& ui,
                 Probe& probe,
@@ -684,9 +911,13 @@ Actions DrawAll(MAC2D& sim,
         g_hist[STAT_PRES_MS].push(st.pressureMs);
     }
 
-    Actions a = drawControls(sim, ui);
-    drawDebugTabs(sim, ui, probe);
+    Actions a = drawControls(sim, water, ui);
+    drawDebugTabs(sim, water, ui, probe);
     drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
+    drawWaterViewAndInteract(water, renderer, ui, NX, NY);
+
+    // keep solids consistent between smoke and water sims
+    water.syncSolidsFrom(sim);
     return a;
 }
 

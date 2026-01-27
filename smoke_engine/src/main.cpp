@@ -15,6 +15,7 @@
 #endif
 
 #include "Sim/mac_smoke_sim.h"
+#include "Sim/mac_water_sim.h"
 #include "Renderer/smoke_renderer.h"
 
 #include "imgui.h"
@@ -76,6 +77,7 @@ int main()
     float dx = 1.0f / NX;
     float dt_initial = 0.02f;
     MAC2D sim(NX, NY, dx, dt_initial);
+    MACWater waterSim(NX, NY, dx, dt_initial);
 
     // UI state
     UI::Settings ui;
@@ -89,6 +91,11 @@ int main()
         sim.smokeDissipation = ui.smokeDissipation;
         sim.tempDissipation  = ui.tempDissipation;
 
+        waterSim.waterDissipation = ui.waterDissipation;
+        waterSim.waterGravity     = ui.waterGravity;
+        waterSim.velDamping       = ui.waterVelDamping;
+        waterSim.openTop          = ui.waterOpenTop;
+
         double now = glfwGetTime();
         double frameDt = now - lastTime;
         lastTime = now;
@@ -101,7 +108,9 @@ int main()
 
             int steps = 0;
             while (accumulator > 0.0 && steps < maxStepsPerFrame) {
-                float maxSpeed = sim.maxFaceSpeed();
+                float maxSpeed = std::max({ sim.maxFaceSpeed(),
+                                            waterSim.maxFaceSpeed(),
+                                            waterSim.maxParticleSpeed() });
                 float dtCFL = ui.cfl * sim.dx / (maxSpeed + 1e-6f);
 
                 // CFL is a hard cap
@@ -114,7 +123,9 @@ int main()
                 }
 
                 sim.setDt(dt);
+                waterSim.setDt(dt);
                 sim.step(ui.vortEps);
+                waterSim.step();
 
                 accumulator -= dt;
                 steps++;
@@ -129,6 +140,9 @@ int main()
         OverlaySettings ov;
         UI::BuildRenderSettings(ui, rs, ov);
         renderer.updateFromSim(sim, rs, ov);
+        WaterRenderSettings wr;
+        UI::BuildWaterRenderSettings(ui, wr);
+        renderer.updateWaterFromSim(waterSim, wr);
 
         // start imgui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -136,7 +150,7 @@ int main()
         ImGui::NewFrame();
 
         // draw UI
-        UI::Actions actions = UI::DrawAll(sim, renderer, ui, probe, NX, NY);
+        UI::Actions actions = UI::DrawAll(sim, waterSim, renderer, ui, probe, NX, NY);
         if (UI::ConsumeResetLayoutRequest()) {
         // nothing needed here if panels.cpp already deleted ini and rebuilt docks
         // but it's fine to keep for future, you better not delete this >:)
@@ -145,6 +159,7 @@ int main()
         // handle actions (reset)
         if (actions.resetRequested) {
             sim.reset();
+            waterSim.reset();
         }
 
         // render GL
