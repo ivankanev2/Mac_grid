@@ -1,6 +1,153 @@
 #include "mac_smoke_sim.h"
 #include <cmath>
 
+static inline float jacobiUpdate(float b, float sumN, int count, float alphaInvDx2) {
+    return (b + alphaInvDx2 * sumN) / (1.0f + alphaInvDx2 * (float)count);
+}
+
+void MAC2D::diffuseVelocityImplicit() {
+    if (viscosity <= 0.0f || diffuseIters <= 0) return;
+
+    const float invDx2 = 1.0f / (dx * dx);
+    const float alphaInvDx2 = (viscosity * dt) * invDx2; // (ν dt)/dx^2
+    if (alphaInvDx2 <= 0.0f) return;
+
+    // Reuse u0/v0 as temp buffers (they already exist and are sized correctly)
+    if (u0.size() != u.size()) u0 = u;
+    if (v0.size() != v.size()) v0 = v;
+
+    auto isFixedU = [&](int i, int j) {
+        if (i == 0 || i == nx) return true; // outer walls
+        // u face between (i-1,j) and (i,j)
+        return isSolid(i - 1, j) || isSolid(i, j);
+    };
+
+    auto isFixedV = [&](int i, int j) {
+        if (j == 0) {
+            // bottom is wall except inside valve inflow
+            return !(valveOpen && inValve(i));
+        }
+        if (j == ny) {
+            // top is wall if closed; if openTop, treat as non-fixed (we re-apply BC after)
+            return !openTop;
+        }
+        // v face between (i,j-1) and (i,j)
+        return isSolid(i, j - 1) || isSolid(i, j);
+    };
+
+    // --- diffuse U ---
+    for (int it = 0; it < diffuseIters; ++it) {
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                int id = idxU(i, j);
+                if (isFixedU(i, j)) { u0[id] = u[id]; continue; }
+
+                float sumN = 0.0f;
+                int count = 0;
+
+                if (i - 1 >= 0)  { sumN += u[idxU(i - 1, j)]; count++; }
+                if (i + 1 <= nx) { sumN += u[idxU(i + 1, j)]; count++; }
+
+                // free-slip at top/bottom for u diffusion: only count in-domain neighbors
+                if (j - 1 >= 0)  { sumN += u[idxU(i, j - 1)]; count++; }
+                if (j + 1 < ny)  { sumN += u[idxU(i, j + 1)]; count++; }
+
+                float xNew = jacobiUpdate(u[id], sumN, count, alphaInvDx2);
+                u0[id] = (1.0f - diffuseOmega) * u[id] + diffuseOmega * xNew;
+            }
+        }
+        u.swap(u0);
+        applyBoundary();
+        if (valveOpen) applyValveBC();
+    }
+
+    // --- diffuse V ---
+    for (int it = 0; it < diffuseIters; ++it) {
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                int id = idxV(i, j);
+                if (isFixedV(i, j)) { v0[id] = v[id]; continue; }
+
+                float sumN = 0.0f;
+                int count = 0;
+
+                if (i - 1 >= 0) { sumN += v[idxV(i - 1, j)]; count++; }
+                if (i + 1 < nx) { sumN += v[idxV(i + 1, j)]; count++; }
+
+                if (j - 1 >= 0)  { sumN += v[idxV(i, j - 1)]; count++; }
+                if (j + 1 <= ny) { sumN += v[idxV(i, j + 1)]; count++; }
+
+                float xNew = jacobiUpdate(v[id], sumN, count, alphaInvDx2);
+                v0[id] = (1.0f - diffuseOmega) * v[id] + diffuseOmega * xNew;
+            }
+        }
+        v.swap(v0);
+        applyBoundary();
+        if (valveOpen) applyValveBC();
+    }
+}
+
+// Implicit scalar diffusion with optional dissipation, fuck this function
+void MAC2D::diffuseScalarImplicit(std::vector<float>& phi,
+                                 std::vector<float>& phi0,
+                                 float diffusivity,
+                                 float dissipation)
+{
+    if (diffusivity <= 0.0f && dissipation == 0.0f) return;
+
+    // RHS must be the ORIGINAL field (before diffusion)
+    if (phi0.size() != phi.size()) phi0.resize(phi.size());
+    phi0 = phi; // b
+
+    const float alpha = (diffusivity * dt) / (dx * dx);
+    if (alpha <= 0.0f) {
+        // only dissipation
+        if (dissipation != 0.0f) {
+            float k = std::max(0.0f, 1.0f - dissipation * dt);
+            for (size_t i = 0; i < phi.size(); ++i) phi[i] *= k;
+        }
+        return;
+    }
+
+    std::vector<float> xOld;
+    xOld.resize(phi.size());
+
+    auto idx = [&](int i, int j) { return idxP(i, j); };
+
+    for (int it = 0; it < diffuseIters; ++it) {
+        xOld = phi; // Jacobi uses previous iterate
+
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                int id = idx(i, j);
+                if (isSolid(i, j)) continue;
+
+                float sum = 0.0f;
+                int count = 0;
+
+                if (i > 0     && !isSolid(i - 1, j)) { sum += xOld[idx(i - 1, j)]; count++; }
+                if (i + 1 < nx && !isSolid(i + 1, j)) { sum += xOld[idx(i + 1, j)]; count++; }
+                if (j > 0     && !isSolid(i, j - 1)) { sum += xOld[idx(i, j - 1)]; count++; }
+                if (j + 1 < ny && !isSolid(i, j + 1)) { sum += xOld[idx(i, j + 1)]; count++; }
+
+                const float denom = 1.0f + alpha * (float)count;
+                const float xNew  = (phi0[id] + alpha * sum) / denom;
+
+                // weighted Jacobi relaxation
+                phi[id] = (1.0f - diffuseOmega) * xOld[id] + diffuseOmega * xNew;
+            }
+        }
+    }
+
+    // Optional dissipation after diffusion (physical-ish “decay”)
+    if (dissipation != 0.0f) {
+        float k = std::max(0.0f, 1.0f - dissipation * dt);
+        for (size_t i = 0; i < phi.size(); ++i) phi[i] *= k;
+    }
+}
+
+
+
 void MAC2D::addForces(float buoyancy, float gravity) {
     // add vertical force to v faces using smoke as buoyancy
     for (int j = 0; j <= ny; j++) {
@@ -222,4 +369,3 @@ void MAC2D::updateAge(float dtLocal) {
         }
     }
 }
-

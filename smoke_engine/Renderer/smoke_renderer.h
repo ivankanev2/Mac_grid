@@ -3,6 +3,7 @@
 #include <cstdint>
 
 struct MAC2D;
+struct MACWater;
 
 struct SmokeRenderSettings {
     bool useColor = false;
@@ -13,6 +14,10 @@ struct SmokeRenderSettings {
     float ageGray      = 0.65f;
     float ageDarken    = 0.55f;
     float coreDark     = 0.75f;
+};
+
+struct WaterRenderSettings {
+    float alpha = 0.85f;
 };
 
 struct OverlaySettings {
@@ -29,29 +34,36 @@ public:
     SmokeRenderer(int w, int h);
     ~SmokeRenderer();
 
-    void resize(int w, int h); // optional
-    // update texture content from sim (reads sim through its const API)
+    void resize(int w, int h);
+
     void updateFromSim(const MAC2D& sim,
                        const SmokeRenderSettings& smoke,
                        const OverlaySettings& ov);
 
+    void updateWaterFromSim(const MACWater& sim,
+                            const WaterRenderSettings& water);
+
     unsigned int smokeTex() const { return m_smokeTex; }
     unsigned int divTex()   const { return m_divTex; }
     unsigned int vortTex()  const { return m_vortTex; }
+    unsigned int waterTex() const { return m_waterTex; }
 
 private:
     int m_w = 0, m_h = 0;
     unsigned int m_smokeTex = 0;
     unsigned int m_divTex = 0;
     unsigned int m_vortTex = 0;
+    unsigned int m_waterTex = 0;
 
-    // helpers
     unsigned int makeTexture(int w, int h);
     void uploadSmokeRGBA(const std::vector<float>& smoke,
                          const std::vector<float>& temp,
                          const std::vector<float>& age,
                          const std::vector<uint8_t>& solid,
                          const SmokeRenderSettings& s);
+    void uploadWaterRGBA(const std::vector<float>& water,
+                         const std::vector<uint8_t>& solid,
+                         const WaterRenderSettings& w);
     void uploadDivOverlay(const std::vector<float>& div,
                           const std::vector<uint8_t>& solid,
                           float scale, float alpha);

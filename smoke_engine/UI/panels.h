@@ -2,9 +2,11 @@
 #include <cstdint>
 
 struct MAC2D;
+struct MACWater;
 class SmokeRenderer;
 
 struct SmokeRenderSettings;
+struct WaterRenderSettings;
 struct OverlaySettings;
 
 namespace UI {
@@ -14,11 +16,11 @@ struct Settings {
     bool  playing = true;
 
     // Painting solids
-    bool  paintSolid = true;   // kept for future expansion (currently always painting when mouse down)
+    bool  paintSolid = true;
     bool  eraseSolid = false;
     bool  circleMode = true;
-    float brushRadius = 0.06f;   // in sim space (0..1)
-    float rectHalfSize = 0.06f;  // half-size for rectangle
+    float brushRadius = 0.06f;
+    float rectHalfSize = 0.06f;
 
     // Debug overlays
     bool  showDivOverlay  = false;
@@ -45,7 +47,7 @@ struct Settings {
     // Advector debug
     float lastAdvectL2 = 0.0f;
 
-    // Rendering look
+    // Rendering look (smoke)
     bool  useColorSmoke = false;
     float smokeAlphaGamma   = 0.70f;
     float smokeAlphaScale   = 1.00f;
@@ -58,9 +60,19 @@ struct Settings {
     float smokeDissipation = 1.000f;
     float tempDissipation  = 0.990f;
 
+    // Water
+    bool  paintWater      = false;
+    float waterAmount     = 0.20f;
+    float waterDissipation= 1.000f;
+    float waterGravity    = -9.8f;
+    float waterAlpha      = 0.85f;
+    float waterVelDamping = 1.0f;
+    bool  waterOpenTop    = true;
+    bool  showWaterView   = true;
+    bool  showWaterParticles = true;
+
     // Smoke view display
     float viewScale = 5.0f;
-
 };
 
 struct Probe {
@@ -77,20 +89,21 @@ struct Actions {
     bool resetRequested = false;
 };
 
-// Build renderer settings structs from UI settings
 void BuildRenderSettings(const Settings& ui,
                          SmokeRenderSettings& outSmoke,
                          OverlaySettings& outOverlay);
 
-// Draw all panels (Controls, Debug tabs, Smoke View). Also handles paint/erase & probe.
-Actions DrawAll(MAC2D& sim,
+void BuildWaterRenderSettings(const Settings& ui,
+                              WaterRenderSettings& outWater);
+
+Actions DrawAll(MAC2D& smokeSim,
+                MACWater& waterSim,
                 SmokeRenderer& renderer,
                 Settings& ui,
                 Probe& probe,
                 int NX, int NY);
 
-// -------- layout save / reset API (namespace-scope) --------
-bool ConsumeSaveLayoutRequest();   // return true once when user clicked "Save Layout"
-bool ConsumeResetLayoutRequest();  // return true once when user clicked "Reset Layout"
+bool ConsumeSaveLayoutRequest();
+bool ConsumeResetLayoutRequest();
 
-} 
+}

@@ -1,5 +1,6 @@
 #include "mac_smoke_sim.h"
 #include <cstdio>
+#include <cmath>
 
 void MAC2D::recomputeValveIndices() {
     int w = std::max(2, (int)std::round(0.10f * nx)); // 10% of width, at least 2 cells
@@ -127,7 +128,7 @@ void MAC2D::setOpenTop(bool on) {
         solid[idxP(i, ny - 1)] = openTop ? 0 : 1;
     }
 
-    markPressureMatrixDirty();
+    invalidatePressureMatrix();
 }
 
 void MAC2D::enforceBoundaries() {

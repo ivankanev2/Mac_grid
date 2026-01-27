@@ -1,7 +1,8 @@
 #include "smoke_renderer.h"
 #include "Sim/mac_smoke_sim.h"
-#include <algorithm>  
-#include <cmath>     
+#include "Sim/mac_water_sim.h"
+#include <algorithm>
+#include <cmath>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -16,7 +17,6 @@
 #include <vector>
 #include <cstdint>
 
-// ---------------- helpers ----------------
 unsigned int SmokeRenderer::makeTexture(int w, int h) {
     GLuint tex = 0;
     glGenTextures(1, &tex);
@@ -35,11 +35,13 @@ SmokeRenderer::SmokeRenderer(int w, int h) : m_w(w), m_h(h) {
     m_smokeTex = makeTexture(w, h);
     m_divTex = makeTexture(w, h);
     m_vortTex = makeTexture(w, h);
+    m_waterTex = makeTexture(w, h);
 }
 SmokeRenderer::~SmokeRenderer() {
     if (m_smokeTex) glDeleteTextures(1, (GLuint*)&m_smokeTex);
     if (m_divTex)   glDeleteTextures(1, (GLuint*)&m_divTex);
     if (m_vortTex)  glDeleteTextures(1, (GLuint*)&m_vortTex);
+    if (m_waterTex) glDeleteTextures(1, (GLuint*)&m_waterTex);
 }
 void SmokeRenderer::resize(int w, int h) {
     if (w == m_w && h == m_h) return;
@@ -47,9 +49,11 @@ void SmokeRenderer::resize(int w, int h) {
     if (m_smokeTex) glDeleteTextures(1, (GLuint*)&m_smokeTex);
     if (m_divTex)   glDeleteTextures(1, (GLuint*)&m_divTex);
     if (m_vortTex)  glDeleteTextures(1, (GLuint*)&m_vortTex);
+    if (m_waterTex) glDeleteTextures(1, (GLuint*)&m_waterTex);
     m_smokeTex = makeTexture(w,h);
     m_divTex   = makeTexture(w,h);
     m_vortTex  = makeTexture(w,h);
+    m_waterTex = makeTexture(w,h);
 }
 
 void SmokeRenderer::uploadSmokeRGBA(const std::vector<float>& smoke,
@@ -122,6 +126,54 @@ void SmokeRenderer::uploadSmokeRGBA(const std::vector<float>& smoke,
     }
 
     glBindTexture(GL_TEXTURE_2D, m_smokeTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
+}
+
+void SmokeRenderer::uploadWaterRGBA(const std::vector<float>& water,
+                                    const std::vector<uint8_t>& solid,
+                                    const WaterRenderSettings& wset)
+{
+    int w = m_w, h = m_h;
+    std::vector<uint8_t> img(w * h * 4, 0);
+
+    auto clamp01 = [](float x) {
+        if (x < 0.0f) return 0.0f;
+        if (x > 1.0f) return 1.0f;
+        return x;
+    };
+
+    for (int j = 0; j < h; ++j) {
+        int srcJ = (h - 1 - j);
+        for (int i = 0; i < w; ++i) {
+            int srcIdx = i + w * srcJ;
+            int dstIdx = i + w * j;
+
+            if (solid[srcIdx]) {
+                img[dstIdx*4 + 0] = 40;
+                img[dstIdx*4 + 1] = 90;
+                img[dstIdx*4 + 2] = 200;
+                img[dstIdx*4 + 3] = 255;
+                continue;
+            }
+
+            float raw = std::max(0.0f, water[srcIdx]);
+            float d = 1.0f - std::exp(-raw);
+            float a = clamp01(d * wset.alpha);
+
+            // Slightly bluer water tint.
+            float r = 0.02f + 0.06f * d;
+            float g = 0.14f + 0.28f * d;
+            float b = 0.62f + 0.36f * d;
+
+            img[dstIdx*4 + 0] = (uint8_t)std::lround(r * 255.0f);
+            img[dstIdx*4 + 1] = (uint8_t)std::lround(g * 255.0f);
+            img[dstIdx*4 + 2] = (uint8_t)std::lround(b * 255.0f);
+            img[dstIdx*4 + 3] = (uint8_t)std::lround(a * 255.0f);
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_2D, m_waterTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
 }
@@ -208,23 +260,25 @@ void SmokeRenderer::uploadVortOverlay(const std::vector<float>& omega,
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
 }
 
-// --- public updateFromSim ---
 void SmokeRenderer::updateFromSim(const MAC2D& sim,
                        const SmokeRenderSettings& smoke,
                        const OverlaySettings& ov)
 {
-    // update smoke texture
     uploadSmokeRGBA(sim.density(), sim.temperature(), sim.ageField(), sim.solidMask(), smoke);
 
-    // div overlay
     if (ov.showDiv) {
         uploadDivOverlay(sim.divergence(), sim.solidMask(), ov.divScale, ov.divAlpha);
     }
 
-    // vort overlay
     if (ov.showVort) {
         std::vector<float> vort(sim.nx * sim.ny);
         sim.computeVorticity(vort);
         uploadVortOverlay(vort, sim.solidMask(), ov.vortScale, ov.vortAlpha);
     }
+}
+
+void SmokeRenderer::updateWaterFromSim(const MACWater& sim,
+                                       const WaterRenderSettings& water)
+{
+    uploadWaterRGBA(sim.waterField(), sim.solidMask(), water);
 }

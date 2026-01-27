@@ -29,7 +29,7 @@ void MAC2D::clearPipe() {
     pipe.x.clear();
     pipe.y.clear();
 
-    markPressureMatrixDirty();
+    invalidatePressureMatrix();
 }
 
 void MAC2D::rebuildSolidsFromPipe(bool clearInterior) {
@@ -64,7 +64,9 @@ void MAC2D::rebuildSolidsFromPipe(bool clearInterior) {
 
             // interior of pipe
             if (d <= Rin) {
-                if (clearInterior) smoke[idxP(i,j)] = 0.0f;
+                if (clearInterior) {
+                    smoke[idxP(i,j)] = 0.0f;
+                }
                 // keep it empty (fluid)
                 continue;
             }
@@ -79,5 +81,5 @@ void MAC2D::rebuildSolidsFromPipe(bool clearInterior) {
         }
     }
 
-    markPressureMatrixDirty();
+    invalidatePressureMatrix();
 }
