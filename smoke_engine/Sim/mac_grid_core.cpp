@@ -794,11 +794,14 @@ void MACGridCore::project() {
         }
     }
 
+    // Clamp face speeds to avoid extreme velocities, they dont occur anymore as of now
     const float MAX_FACE_SPEED = 200.0f;
     for (float& val : u) val = clampf(val, -MAX_FACE_SPEED, MAX_FACE_SPEED);
     for (float& val : v) val = clampf(val, -MAX_FACE_SPEED, MAX_FACE_SPEED);
 
     computeDivergence();
+    std::printf("[AFTER ] maxDiv=%g maxFace=%g (iters=%d)\n",
+                maxAbsDiv(), maxFaceSpeed(), stats.pressureIters);
     stats.maxDivAfter = maxAbsDiv();
     stats.maxFaceSpeedAfter = maxFaceSpeed();
 }

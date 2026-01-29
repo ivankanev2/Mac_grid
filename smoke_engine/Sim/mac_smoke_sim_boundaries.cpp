@@ -23,10 +23,11 @@ void MAC2D::applyBoundary() {
         u[idxU(nx, j)] = 0.0f;
     }
 
-    // Floor: kill tangential component u(i,0) to prevent "valve sideways leak"
-    for (int i = 0; i <= nx; ++i) {
-        u[idxU(i, 0)] = 0.0f;
-    }
+    // // Floor: kill tangential component u(i,0) to prevent "valve sideways leak"
+    // its fixed, keeping it just in case
+    // for (int i = 0; i <= nx; ++i) {
+    //     u[idxU(i, 0)] = 0.0f;
+    // }
 
     // Floor / ceiling: v
     for (int i = 0; i < nx; i++) {
@@ -35,7 +36,7 @@ void MAC2D::applyBoundary() {
 
         // top: closed unless openTop (zero-gradient outflow)
         if (!openTop) v[idxV(i, ny)] = 0.0f;
-        else          v[idxV(i, ny)] = std::max(0.0f, v[idxV(i, ny - 1)]);
+        else          v[idxV(i, ny)] = v[idxV(i, ny - 1)];
     }
 
     // no-through for internal solids:
@@ -88,8 +89,6 @@ void MAC2D::addValveScalars() {
 
         smoke[id] = std::min(maxD, smoke[id] + add);
 
-        // set or max — pick one:
-        // If you want a stable hot plume, "max" is good:
         temp[id] = std::max(temp[id], addT);
 
         age[id] = 0.0f;

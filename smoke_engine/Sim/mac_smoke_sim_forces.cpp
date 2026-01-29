@@ -348,7 +348,7 @@ void MAC2D::coolAndDiffuseTemperature() {
     temp.swap(newTemp);
 }
 
-void MAC2D::addHeatSource(float cx, float cy, float radius, float amount) {
+void MAC2D::addHeatSource(float cx, float cy, float radius, float amountDeltaK) {
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             if (isSolid(i, j)) continue;
@@ -358,7 +358,7 @@ void MAC2D::addHeatSource(float cx, float cy, float radius, float amount) {
             float ry = y - cy;
             if (rx*rx + ry*ry <= radius*radius) {
                 int id = idxP(i,j);
-                temp[id] = clampf(temp[id] + amount, 0.0f, 1.0f);
+                temp[id] = clampf(temp[id] + amountDeltaK, -50.0f, 200.0f);
             }
         }
     }
