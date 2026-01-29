@@ -38,7 +38,6 @@ struct MAC2D : public MACGridCore {
 
     float velDamping       = 0.5f;
 
-    float ambientTemp      = 0.0f;
     float tempCoolRate     = 0.005f;
     float tempDiffusivity  = 0.0f;
 

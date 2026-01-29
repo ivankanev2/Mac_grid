@@ -125,8 +125,8 @@ void MAC2D::step(float vortEps) {
     applyBoundary();
 
     addForces(1.5f, 0.0f);
-    clampFaceSpeeds(u, v, 50.0f);
     applyBoundary();
+    clampFaceSpeeds(u, v, 50.0f);
 
     diffuseVelocityImplicit();
     applyBoundary();
@@ -135,6 +135,8 @@ void MAC2D::step(float vortEps) {
 
     project();
     applyBoundary();
+    computeDivergence();
+    printf("[POST-BC] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
 
     // Scalars
     advectScalar(temp,  temp0,  tempDissipation);
