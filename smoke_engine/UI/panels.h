@@ -66,7 +66,7 @@ struct Settings {
     float waterDissipation= 1.000f;
     float waterGravity    = -9.8f;
     float waterAlpha      = 0.85f;
-    float waterVelDamping = 1.0f;
+    float waterVelDamping = 0.0f;
     bool  waterOpenTop    = true;
     bool  showWaterView   = true;
     bool  showWaterParticles = true;

@@ -12,13 +12,16 @@ void MAC2D::diffuseVelocityImplicit() {
     const float alphaInvDx2 = (viscosity * dt) * invDx2; // (ν dt)/dx^2
     if (alphaInvDx2 <= 0.0f) return;
 
-    // Reuse u0/v0 as temp buffers (they already exist and are sized correctly)
-    if (u0.size() != u.size()) u0 = u;
-    if (v0.size() != v.size()) v0 = v;
+    // --- Freeze RHS (b) for the Helmholtz solve ---
+    std::vector<float> bU = u;
+    std::vector<float> bV = v;
+
+    // temp buffers
+    if (u0.size() != u.size()) u0.resize(u.size());
+    if (v0.size() != v.size()) v0.resize(v.size());
 
     auto isFixedU = [&](int i, int j) {
         if (i == 0 || i == nx) return true; // outer walls
-        // u face between (i-1,j) and (i,j)
         return isSolid(i - 1, j) || isSolid(i, j);
     };
 
@@ -28,11 +31,26 @@ void MAC2D::diffuseVelocityImplicit() {
             return !(valveOpen && inValve(i));
         }
         if (j == ny) {
-            // top is wall if closed; if openTop, treat as non-fixed (we re-apply BC after)
+            // top is wall if closed; if openTop, let it be handled by applyBoundary()
             return !openTop;
         }
-        // v face between (i,j-1) and (i,j)
         return isSolid(i, j - 1) || isSolid(i, j);
+    };
+
+    auto enforceValveVelocityOnly = [&]() {
+        if (!valveOpen) return;
+
+        // impose upward inflow through bottom boundary faces (v only)
+        for (int i = valveI0; i <= valveI1; ++i) {
+            v[idxV(i, 0)] = inletSpeed;
+        }
+
+        // kill tangential along opening (u at j=0) to prevent sideways leakage
+        for (int i = valveI0 + 1; i <= valveI1; ++i) {
+            if (i >= 1 && i <= nx - 1) {
+                u[idxU(i, 0)] = 0.0f;
+            }
+        }
     };
 
     // --- diffuse U ---
@@ -48,17 +66,17 @@ void MAC2D::diffuseVelocityImplicit() {
                 if (i - 1 >= 0)  { sumN += u[idxU(i - 1, j)]; count++; }
                 if (i + 1 <= nx) { sumN += u[idxU(i + 1, j)]; count++; }
 
-                // free-slip at top/bottom for u diffusion: only count in-domain neighbors
                 if (j - 1 >= 0)  { sumN += u[idxU(i, j - 1)]; count++; }
                 if (j + 1 < ny)  { sumN += u[idxU(i, j + 1)]; count++; }
 
-                float xNew = jacobiUpdate(u[id], sumN, count, alphaInvDx2);
+                // IMPORTANT: RHS is frozen bU[id], NOT u[id]
+                float xNew = jacobiUpdate(bU[id], sumN, count, alphaInvDx2);
                 u0[id] = (1.0f - diffuseOmega) * u[id] + diffuseOmega * xNew;
             }
         }
         u.swap(u0);
         applyBoundary();
-        if (valveOpen) applyValveBC();
+        enforceValveVelocityOnly();
     }
 
     // --- diffuse V ---
@@ -77,13 +95,14 @@ void MAC2D::diffuseVelocityImplicit() {
                 if (j - 1 >= 0)  { sumN += v[idxV(i, j - 1)]; count++; }
                 if (j + 1 <= ny) { sumN += v[idxV(i, j + 1)]; count++; }
 
-                float xNew = jacobiUpdate(v[id], sumN, count, alphaInvDx2);
+                // IMPORTANT: RHS is frozen bV[id], NOT v[id]
+                float xNew = jacobiUpdate(bV[id], sumN, count, alphaInvDx2);
                 v0[id] = (1.0f - diffuseOmega) * v[id] + diffuseOmega * xNew;
             }
         }
         v.swap(v0);
         applyBoundary();
-        if (valveOpen) applyValveBC();
+        enforceValveVelocityOnly();
     }
 }
 
@@ -148,34 +167,26 @@ void MAC2D::diffuseScalarImplicit(std::vector<float>& phi,
 
 
 
-void MAC2D::addForces(float buoyancy, float gravity) {
-    // add vertical force to v faces using smoke as buoyancy
-    for (int j = 0; j <= ny; j++) {
-        for (int i = 0; i < nx; i++) {
+void MAC2D::addForces(float /*unused*/, float gravity_param) {
+    const float g = gravity_g;
+    const float T0 = std::max(1e-3f, ambientTempK);
+
+    for (int j = 0; j <= ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
             float x = (i + 0.5f) * dx;
             float y = (j) * dx;
 
-            float t = sampleCellCentered(temp, x, y);
-            float theta = t - ambientTemp;      // temperature deviation
+            float dT = sampleCellCentered(temp, x, y); // delta-K
+            float ab = g * (dT / T0) * buoyancyScale;
 
-            v[idxV(i, j)] += dt * (buoyancy * theta + gravity);
+            v[idxV(i, j)] += dt * ab;
         }
     }
 
-    // --- NEW: simple global velocity damping (viscous drag) ---
     if (velDamping > 0.0f) {
-        // exponential decay factor per time step
         float factor = std::exp(-velDamping * dt);
-
-        // damp u faces
-        for (float& uu : u) {
-            uu *= factor;
-        }
-
-        // damp v faces
-        for (float& vv : v) {
-            vv *= factor;
-        }
+        for (float& uu : u) uu *= factor;
+        for (float& vv : v) vv *= factor;
     }
 }
 
@@ -325,12 +336,12 @@ void MAC2D::coolAndDiffuseTemperature() {
             }
 
             // --- cooling toward ambient: dT/dt = -k (T - Tamb)
-            float coolTerm = -tempCoolRate * (T - ambientTemp);
+            float coolTerm = -tempCoolRate * T;
 
             float dTdt = tempDiffusivity * lap + coolTerm;
 
             newTemp[id] = T + dt * dTdt;
-            newTemp[id] = clampf(newTemp[id], 0.0f, 1.0f);
+            newTemp[id] = clampf(newTemp[id], -50.0f, 200.0f);
         }
     }
 

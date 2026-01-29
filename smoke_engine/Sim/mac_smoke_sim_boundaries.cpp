@@ -35,7 +35,7 @@ void MAC2D::applyBoundary() {
 
         // top: closed unless openTop (zero-gradient outflow)
         if (!openTop) v[idxV(i, ny)] = 0.0f;
-        else          v[idxV(i, ny)] = v[idxV(i, ny - 1)];
+        else          v[idxV(i, ny)] = std::max(0.0f, v[idxV(i, ny - 1)]);
     }
 
     // no-through for internal solids:
@@ -64,46 +64,78 @@ void MAC2D::applyBoundary() {
     }
 }
 
-void MAC2D::applyValveBC() {
+void MAC2D::applyValveVelocityBC() {
     if (!valveOpen) return;
+    // no forced jet
+    for (int i = valveI0; i <= valveI1; ++i)
+        v[idxV(i, 0)] = 0.0f;
+}
 
-    // 1) impose upward inflow through bottom boundary faces
-    for (int i = valveI0; i <= valveI1; ++i) {
-        v[idxV(i, 0)] = inletSpeed; // +up into domain
-    }
-
-    // 2) Kill tangential velocity along the opening to prevent sideways "leak"
-    //
-    // u lives on vertical faces: i in [0..nx], so the valve opening affects faces
-    // from i=valveI0 .. valveI1+1 (inclusive).
-    //
-    // Clamp into valid u-face index range.
-    int u0 = std::max(0, valveI0);
-    int u1 = std::min(nx, valveI1 + 1);
-
-    for (int i = u0; i <= u1; ++i) {
-        u[idxU(i, 0)] = 0.0f;
-    }
-
-    // Optional but often helps a LOT:
-    // also kill tangential velocity one cell above the inlet lip (prevents "jet attaching")
-    // Comment this out if you dislike how "engineered" it feels.
-    for (int i = u0; i <= u1; ++i) {
-        if (ny > 1) u[idxU(i, 1)] = 0.0f;
-    }
-
-    // 3) Inject smoke/temp into first fluid row above the boundary (j=1)
+void MAC2D::addValveScalars() {
+    if (!valveOpen) return;
     int j = 1;
-    if (j < ny) {
-        for (int i = valveI0; i <= valveI1; ++i) {
-            if (!isSolid(i, j)) {
-                smoke[idxP(i, j)] = inletSmoke;
-                temp[idxP(i, j)]  = inletTemp;
-                age[idxP(i, j)]   = 0.0f;   // important: otherwise age can “teleport old smoke” into new inflow
-            }
-        }
+
+    // Smoke: keep your rate-based injection
+    const float add = inletSmoke * dt;
+    const float maxD = 1.0f; // clamp max density but also makes the smoke brighter
+
+    // Temperature: inject delta-K (relative to ambient)
+    const float addT = inletTempDeltaK; // e.g. 20 K hotter than ambient
+
+    for (int i = valveI0; i <= valveI1; ++i) {
+        int id = idxP(i, j);
+        if (isSolid(i, j)) continue;
+
+        smoke[id] = std::min(maxD, smoke[id] + add);
+
+        // set or max — pick one:
+        // If you want a stable hot plume, "max" is good:
+        temp[id] = std::max(temp[id], addT);
+
+        age[id] = 0.0f;
     }
 }
+
+// void MAC2D::applyValveBC() {
+//     if (!valveOpen) return;
+
+//     // 1) impose upward inflow through bottom boundary faces
+//     for (int i = valveI0; i <= valveI1; ++i) {
+//         v[idxV(i, 0)] = inletSpeed; // +up into domain
+//     }
+
+//     // 2) Kill tangential velocity along the opening to prevent sideways "leak"
+//     //
+//     // u lives on vertical faces: i in [0..nx], so the valve opening affects faces
+//     // from i=valveI0 .. valveI1+1 (inclusive).
+//     //
+//     // Clamp into valid u-face index range.
+//     int u0 = std::max(0, valveI0);
+//     int u1 = std::min(nx, valveI1 + 1);
+
+//     for (int i = u0; i <= u1; ++i) {
+//         u[idxU(i, 0)] = 0.0f;
+//     }
+
+//     // Optional but often helps a LOT:
+//     // also kill tangential velocity one cell above the inlet lip (prevents "jet attaching")
+//     // Comment this out if you dislike how "engineered" it feels.
+//     for (int i = u0; i <= u1; ++i) {
+//         if (ny > 1) u[idxU(i, 1)] = 0.0f;
+//     }
+
+//     // 3) Inject smoke/temp into first fluid row above the boundary (j=1)
+//     int j = 1;
+//     if (j < ny) {
+//         for (int i = valveI0; i <= valveI1; ++i) {
+//             if (!isSolid(i, j)) {
+//                 smoke[idxP(i, j)] = inletSmoke;
+//                 temp[idxP(i, j)]  = inletTemp;
+//                 age[idxP(i, j)]   = 0.0f;   // important: otherwise age can “teleport old smoke” into new inflow
+//             }
+//         }
+//     }
+// }
 
 void MAC2D::applyValveSink() {
     if (!valveOpen) return;
@@ -116,7 +148,7 @@ void MAC2D::applyValveSink() {
         if (vb < 0.0f) {
             int id = idxP(i, j);
             smoke[id] = 0.0f;
-            temp[id]  = ambientTemp;
+            temp[id] = 0.0f;
             age[id]   = 0.0f;
         }
     }
