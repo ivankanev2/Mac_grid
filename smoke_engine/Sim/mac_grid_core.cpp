@@ -667,12 +667,18 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
     ensurePressureMatrix();
     ensurePCGBuffers();
 
+    
     const int N = nx * ny;
 
     applyLaplacian(p, pcg_Ap);
     for (int k = 0; k < N; ++k) pcg_r[k] = rhs[k] - pcg_Ap[k];
 
     const float bNorm2 = dotVec(rhs, rhs);
+    std::printf("[PCG] bNorm2=%g\n", bNorm2);
+    if (!std::isfinite(bNorm2) || bNorm2 > 1e12f) {
+        std::printf("[PCG] RHS huge or non-finite!\n");
+    }
+
     if (bNorm2 < 1e-30f) return;
 
     if (useMGPrecond) {
@@ -730,6 +736,11 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
 
 void MACGridCore::project() {
     computeDivergence();
+
+    // before project (after computeDivergence inside project already fills stats)
+    // but add explicit print here (place near top of step or after computeDivergence)
+    std::printf("[BEFORE] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
+
     stats.dt = dt;
     stats.maxDivBefore = maxAbsDiv();
     stats.maxFaceSpeedBefore = maxFaceSpeed();
@@ -783,7 +794,7 @@ void MACGridCore::project() {
         }
     }
 
-    const float MAX_FACE_SPEED = 5000.0f;
+    const float MAX_FACE_SPEED = 200.0f;
     for (float& val : u) val = clampf(val, -MAX_FACE_SPEED, MAX_FACE_SPEED);
     for (float& val : v) val = clampf(val, -MAX_FACE_SPEED, MAX_FACE_SPEED);
 

@@ -33,6 +33,7 @@ struct MACGridCore {
     void resetCore();
 
 
+
     float maxAbsDiv() const;
     float maxFaceSpeed() const;
     void setDt(float newDt) { dt = newDt; }

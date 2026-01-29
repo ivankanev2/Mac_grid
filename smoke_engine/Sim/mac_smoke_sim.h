@@ -39,7 +39,7 @@ struct MAC2D : public MACGridCore {
     float velDamping       = 0.5f;
 
     float ambientTemp      = 0.0f;
-    float tempCoolRate     = 0.3f;
+    float tempCoolRate     = 0.005f;
     float tempDiffusivity  = 0.0f;
 
 
@@ -49,7 +49,7 @@ struct MAC2D : public MACGridCore {
     // Units (if dx is meters, dt is seconds):
     //  - viscosity [m^2/s] (air ~ 1.5e-5)
     //  - diffusivity [m^2/s]
-    float viscosity        = 0.0f;     // start 0, then try 1e-4 .. 5e-3 depending on dx
+    float viscosity        = 1e-4f;     // start 0, then try 1e-4 .. 5e-3 depending on dx
     float smokeDiffusivity = 0.0f;     // start 0, then try 1e-5 .. 1e-3
 
     int   diffuseIters     = 20;       // 10–40 typical
@@ -67,9 +67,21 @@ struct MAC2D : public MACGridCore {
     bool isValveOpen() const { return valveOpen; }
     void setValveSpan(int i0, int i1) { valveI0 = std::max(0, i0); valveI1 = std::min(nx-1, i1); }
 
-    float inletSpeed = 1.0f;
+    float inletSpeed = 0.0f;
     float inletSmoke = 1.0f;
     float inletTemp  = 1.0f;
+
+    // Physical buoyancy parameters (new) hope it works
+    float gravity_g       = 9.81f;     // m/s^2
+    float ambientTempK    = 293.15f;   // Kelvin (default 20 °C)
+    float buoyancyScale   = 1.0f;      // extra visual tuning multiplier (1.0 -> physical)
+
+    // Convenience: if you currently use inletTemp as a delta (°C) instead of absolute K,
+    // you can keep that variable and use inletTempDeltaK below when injecting.
+    // If you want to make inletTemp absolute Kelvin, replace uses accordingly.
+    // currently deciding what to do, it will be a mess rewiring everything
+    float inletTempDeltaK = 50.0f;     // default: inlet is ambient + 20 K
+    bool  inletTempIsAbsoluteK = false; // set true if your inletTemp already stores Kelvin
 
     struct PipePolyline {
         std::vector<float> x;
@@ -91,6 +103,12 @@ private:
     void applyBoundary();
     void coolAndDiffuseTemperature();
 
+    // --- physically-consistent scalar outflow ---
+    // Prevent "scalar parking" at an open top boundary by applying a convective
+    // outflow sponge based on upward face velocity.
+    void applyScalarOutflowTop(std::vector<float>& phi, float outsideValue,
+                            int layers = 3);
+
     void diffuseVelocityImplicit();
     void diffuseScalarImplicit(std::vector<float>& phi,
                             std::vector<float>& tmp,
@@ -106,6 +124,9 @@ private:
 
     void applyValveBC();
     void applyValveSink();
+
+    void applyValveVelocityBC();
+    void addValveScalars();
 
     static float distPointToSegment(float px,float py, float ax,float ay, float bx,float by);
     float distPointToPolyline(float px,float py) const;
