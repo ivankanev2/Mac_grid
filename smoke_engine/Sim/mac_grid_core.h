@@ -37,12 +37,12 @@ struct MACGridCore {
     bool getOpenTop() const { return openTopBC; }
 
 
-    inline bool isDirichletP(int i, int j) const {
-    // Pin pressure on the top row when openTop is enabled
-    // doesnt currently work well, so its temporarely disabled
-    // return openTopBC && (j == ny - 1) && !isSolid(i, j);
-    return false;
-    }
+    // inline bool isDirichletP(int i, int j) const {
+    // // Pin pressure on the top row when openTop is enabled
+    // // doesnt currently work well, so its temporarely disabled
+    // // return openTopBC && (j == ny - 1) && !isSolid(i, j);
+    // return false;
+    // }
 
     float maxAbsDiv() const;
     float maxFaceSpeed() const;
@@ -55,8 +55,12 @@ struct MACGridCore {
     inline int idxV(int i,int j) const { return i + nx*j; }
     inline bool isSolid(int i,int j) const { return solid[idxP(i,j)] != 0; }
 
-    static inline float clampf(float x,float a,float b) {
-        return std::max(a, std::min(b, x));
+    
+    static inline float clampf(float x, float a, float b) {
+        if (!std::isfinite(x)) return 0.0f;
+        if (x < a) return a;
+        if (x > b) return b;
+        return x;
     }
 
     void worldToCell(float x, float y, int& i, int& j) const;
@@ -72,6 +76,14 @@ struct MACGridCore {
     void computeDivergence();
 
     void solvePressurePCG(int maxIters = 200, float tol = 1e-6f);
+    void solvePressureMG(int vcycles = 20, float tol = 1e-6f);
+    void debugCheckMGvsPCGOperator();
+
+    inline bool isDirichletP(int i, int j) const {
+    // Top row is pressure Dirichlet when open
+    return openTopBC && (j == ny - 1) && !isSolid(i,j);
+    }
+
     void applyLaplacian(const std::vector<float>& x, std::vector<float>& Ax) const;
     void project();
 
