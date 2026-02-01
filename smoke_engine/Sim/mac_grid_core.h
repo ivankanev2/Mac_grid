@@ -39,7 +39,9 @@ struct MACGridCore {
 
     inline bool isDirichletP(int i, int j) const {
     // Pin pressure on the top row when openTop is enabled
-    return openTopBC && (j == ny - 1) && !isSolid(i, j);
+    // doesnt currently work well, so its temporarely disabled
+    // return openTopBC && (j == ny - 1) && !isSolid(i, j);
+    return false;
     }
 
     float maxAbsDiv() const;
