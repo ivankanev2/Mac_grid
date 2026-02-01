@@ -1,6 +1,7 @@
 #include "mac_smoke_sim.h"
 #include <cstdio>
 #include <cmath>
+#include <algorithm> 
 
 void MAC2D::recomputeValveIndices() {
     int w = std::max(2, (int)std::round(0.10f * nx)); // 10% of width, at least 2 cells
@@ -158,6 +159,7 @@ void MAC2D::applyValveSink() {
 
 void MAC2D::setOpenTop(bool on) {
     openTop = on;
+    MACGridCore::setOpenTop(on); // forgot to add this earlier ops
     for (int i = 0; i < nx; ++i) {
         solid[idxP(i, ny - 1)] = openTop ? 0 : 1;
     }

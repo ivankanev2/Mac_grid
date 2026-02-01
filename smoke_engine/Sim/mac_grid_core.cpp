@@ -341,12 +341,7 @@ void MACGridCore::ensurePressureMatrix() {
                 lapDiagInv[id] = 0.0f;
                 continue;
             }
-            if (isDirichletP(i, j)) {
-            // Dirichlet cell: A = I
-            lapL[id] = lapR[id] = lapB[id] = lapT[id] = -1;
-            lapDiagInv[id] = 1.0f;
-            continue;
-        }
+            
 
             int count = 0;
             if (i > 0 && !isSolid(i - 1, j))     { lapL[id] = idxP(i - 1, j); count++; }
@@ -662,10 +657,7 @@ void MACGridCore::applyLaplacian(const std::vector<float>& x, std::vector<float>
             const int id = idxP(i, j);
             if (isSolid(i, j)) { Ax[id] = 0.0f; continue; }
 
-            if (isDirichletP(i, j)) {
-            Ax[id] = x[id];   // A = I for pinned cells
-            continue;
-        }
+            
 
             float sum = 0.0f;
             int count = 0;
@@ -686,37 +678,94 @@ void MACGridCore::applyLaplacian(const std::vector<float>& x, std::vector<float>
     }
 }
 
+// hours wasted on this function : 5
 void MACGridCore::solvePressurePCG(int maxIters, float tol) {
+    std::printf("[PCG] tol=%g (openTopBC=%d)\n", tol, (int)openTopBC);
+
     ensurePressureMatrix();
     ensurePCGBuffers();
 
-    
     const int N = nx * ny;
 
+    auto dotFluid = [&](const std::vector<float>& a, const std::vector<float>& b) -> float {
+        double s = 0.0;
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (isSolid(i,j)) continue;
+                int id = idxP(i,j);
+                s += (double)a[id] * (double)b[id];
+            }
+        }
+        return (float)s;
+    };
+
+    auto maxAbsResidualFluid = [&]() -> float {
+        float m = 0.0f;
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (isSolid(i,j)) continue;
+                float a = std::fabs(pcg_r[idxP(i,j)]);
+                if (a > m) m = a;
+            }
+        }
+        return m;
+    };
+
+    auto maxAbsBFluid = [&]() -> float {
+        float m = 0.0f;
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (isSolid(i,j)) continue;
+                float a = std::fabs(rhs[idxP(i,j)]);
+                if (a > m) m = a;
+            }
+        }
+        return m;
+    };
+
+    // r = b - A p   (warm start using current p)
     applyLaplacian(p, pcg_Ap);
     for (int k = 0; k < N; ++k) pcg_r[k] = rhs[k] - pcg_Ap[k];
 
-    const float bNorm2 = dotVec(rhs, rhs);
-    std::printf("[PCG] bNorm2=%g\n", bNorm2);
-    if (!std::isfinite(bNorm2) || bNorm2 > 1e12f) {
-        std::printf("[PCG] RHS huge or non-finite!\n");
+    // Early out: if RHS is basically zero, pressure solve is pointless
+    const float bInf = maxAbsBFluid();
+    if (bInf * dt <= tol) {
+        stats.pressureIters = 0;
+        if (!openTopBC) removePressureMean();
+        return;
     }
 
-    if (bNorm2 < 1e-30f) return;
+    const float rInf0 = maxAbsResidualFluid();
+    std::printf("[PCG] predDiv_initial=%g\n", rInf0 * dt);
+    if (rInf0 * dt <= tol) {
+        stats.pressureIters = 0;
+        if (!openTopBC) removePressureMean();
+        return;
+    }
 
-        const bool useMG = useMGPrecond && !openTopBC;
-        if (useMG) {
-            applyMGPrecond(pcg_r, pcg_z);
-        } else {
-            for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
-        }
+    // Precondition
+    const bool useMG = useMGPrecond && !openTopBC;
+    if (useMG) {
+        applyMGPrecond(pcg_r, pcg_z);
+    } else {
+        for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
+    }
     pcg_d = pcg_z;
 
-    float deltaNew = dotVec(pcg_r, pcg_z);
-    float delta0   = deltaNew;
-    if (deltaNew < 1e-30f) return;
+    float deltaNew = dotFluid(pcg_r, pcg_z);
+    if (deltaNew <= 1e-30f || !std::isfinite(deltaNew)) {
+        stats.pressureIters = 0;
+        if (!openTopBC) removePressureMean();
+        return;
+    }
 
-    const float tol2 = tol * tol;
+    const float r0Norm2 = dotFluid(pcg_r, pcg_r);
+    const float r0Norm2Safe = std::max(r0Norm2, 1e-30f);
+
+    // Optional relative tolerance (keeps accuracy; just avoids wasted late iters)
+    const float relTol = 1e-3f;
+    const float relTol2 = relTol * relTol;
+
     int it_used = 0;
 
     for (int it = 0; it < maxIters; ++it) {
@@ -724,37 +773,45 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
 
         applyLaplacian(pcg_d, pcg_q);
 
-        float dq = dotVec(pcg_d, pcg_q);
-        if (std::fabs(dq) < 1e-30f) break;
+        const float dq = dotFluid(pcg_d, pcg_q);
+        if (!std::isfinite(dq) || std::fabs(dq) < 1e-30f) break;
 
-        float alpha = deltaNew / dq;
+        const float alpha = deltaNew / dq;
 
         for (int k = 0; k < N; ++k) {
             p[k]     += alpha * pcg_d[k];
             pcg_r[k] -= alpha * pcg_q[k];
         }
 
-        float rNorm2 = dotVec(pcg_r, pcg_r);
-        if (rNorm2 <= tol2 * bNorm2) break;
+        const float rInf = maxAbsResidualFluid();
+        if ((it & 7) == 0) std::printf("[PCG] it=%d predDiv=%g\n", it, rInf * dt);
 
+        // Primary stopping: divergence-style (matches your logs)
+        if (rInf * dt <= tol) break;
+
+        // Secondary stopping: relative L2 residual
+        const float rNorm2 = dotFluid(pcg_r, pcg_r);
+        if (rNorm2 <= relTol2 * r0Norm2Safe) break;
+
+        // Precondition again
         if (useMG) {
             applyMGPrecond(pcg_r, pcg_z);
         } else {
             for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
         }
 
-        float deltaOld = deltaNew;
-        deltaNew = dotVec(pcg_r, pcg_z);
+        const float deltaOld = deltaNew;
+        deltaNew = dotFluid(pcg_r, pcg_z);
+        if (!std::isfinite(deltaNew) || deltaNew <= 1e-30f) break;
 
-        if (deltaNew <= tol2 * delta0) break;
-
-        float beta = deltaNew / (deltaOld + 1e-30f);
-
+        const float beta = deltaNew / (deltaOld + 1e-30f);
         for (int k = 0; k < N; ++k)
             pcg_d[k] = pcg_z[k] + beta * pcg_d[k];
     }
 
     stats.pressureIters = it_used;
+
+    // For closed domains, remove gauge freedom
     if (!openTopBC) removePressureMean();
 }
 
@@ -772,10 +829,10 @@ void MACGridCore::project() {
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             int id = idxP(i, j);
-            if (isSolid(i, j) || isDirichletP(i, j)) {
+            if (isSolid(i, j)) {
             rhs[id] = 0.0f;
         } else {
-            rhs[id] = (-div[id] / dt);
+            rhs[id] = (-div[id] / dt); // dont remove this negative sign
         }
         }
     }
@@ -804,7 +861,10 @@ void MACGridCore::project() {
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    solvePressurePCG(80, 1e-4f);
+
+    float pcgDivTol = openTopBC ? 5e-4f : 1e-4f;
+    solvePressurePCG(80, pcgDivTol);
+
     auto t1 = std::chrono::high_resolution_clock::now();
     stats.pressureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
 
