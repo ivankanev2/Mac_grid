@@ -33,6 +33,14 @@ struct MACGridCore {
     void resetCore();
 
 
+    void setOpenTop(bool v) { openTopBC = v; markPressureMatrixDirty(); mgDirty = true; }
+    bool getOpenTop() const { return openTopBC; }
+
+
+    inline bool isDirichletP(int i, int j) const {
+    // Pin pressure on the top row when openTop is enabled
+    return openTopBC && (j == ny - 1) && !isSolid(i, j);
+    }
 
     float maxAbsDiv() const;
     float maxFaceSpeed() const;
@@ -75,6 +83,8 @@ struct MACGridCore {
     void invalidatePressureMatrix() { markPressureMatrixDirty(); }
     const FrameStats& getStats() const { return stats; }
 
+    
+
 private:
     // ---- Pressure solve caches ----
     bool pressureMatrixDirty = true;
@@ -89,6 +99,8 @@ private:
     void ensurePressureMatrix();
     void ensurePCGBuffers();
     void removePressureMean();
+
+    bool openTopBC = false;
 
     // ---- Multigrid Preconditioner ----
     struct MGLevel {

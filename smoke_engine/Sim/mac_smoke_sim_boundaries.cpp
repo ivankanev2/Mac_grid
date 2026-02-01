@@ -35,8 +35,11 @@ void MAC2D::applyBoundary() {
         if (!(valveOpen && inValve(i))) v[idxV(i, 0)] = 0.0f;
 
         // top: closed unless openTop (zero-gradient outflow)
-        if (!openTop) v[idxV(i, ny)] = 0.0f;
-        else          v[idxV(i, ny)] = v[idxV(i, ny - 1)];
+        if (!openTop) {
+        v[idxV(i, ny)] = 0.0f;   // closed top
+        } else {
+            // openTopBC: do nothing here (projection already set v(i,ny))
+        }
     }
 
     // no-through for internal solids:

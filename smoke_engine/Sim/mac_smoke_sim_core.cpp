@@ -133,6 +133,7 @@ void MAC2D::step(float vortEps) {
 
     addVorticityConfinement(vortEps);
 
+    setOpenTop(openTop);
     project();
     applyBoundary();
     computeDivergence();
