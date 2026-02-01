@@ -12,6 +12,8 @@ namespace {
     }
 }
 
+
+
 static inline int mgIdx(int i, int j, int nx) { return i + nx * j; }
 
 MACGridCore::MACGridCore(int NX, int NY, float DX, float DT)
@@ -339,12 +341,22 @@ void MACGridCore::ensurePressureMatrix() {
                 lapDiagInv[id] = 0.0f;
                 continue;
             }
+            if (isDirichletP(i, j)) {
+            // Dirichlet cell: A = I
+            lapL[id] = lapR[id] = lapB[id] = lapT[id] = -1;
+            lapDiagInv[id] = 1.0f;
+            continue;
+        }
 
             int count = 0;
             if (i > 0 && !isSolid(i - 1, j))     { lapL[id] = idxP(i - 1, j); count++; }
             if (i + 1 < nx && !isSolid(i + 1, j)) { lapR[id] = idxP(i + 1, j); count++; }
             if (j > 0 && !isSolid(i, j - 1))     { lapB[id] = idxP(i, j - 1); count++; }
             if (j + 1 < ny && !isSolid(i, j + 1)) { lapT[id] = idxP(i, j + 1); count++; }
+
+            if (openTopBC && j == ny - 1) {
+            count++; // Dirichlet neighbor contributes to diagonal
+        }
 
             const float diag = (float)count * invDx2_cache;
             lapDiagInv[id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
@@ -650,6 +662,11 @@ void MACGridCore::applyLaplacian(const std::vector<float>& x, std::vector<float>
             const int id = idxP(i, j);
             if (isSolid(i, j)) { Ax[id] = 0.0f; continue; }
 
+            if (isDirichletP(i, j)) {
+            Ax[id] = x[id];   // A = I for pinned cells
+            continue;
+        }
+
             float sum = 0.0f;
             int count = 0;
 
@@ -657,6 +674,12 @@ void MACGridCore::applyLaplacian(const std::vector<float>& x, std::vector<float>
             n = lapR[id];     if (n >= 0) { sum += x[n]; count++; }
             n = lapB[id];     if (n >= 0) { sum += x[n]; count++; }
             n = lapT[id];     if (n >= 0) { sum += x[n]; count++; }
+
+            if (openTopBC && j == ny - 1) {
+            // Dirichlet p_out = 0 at top boundary:
+            // counts as a neighbor in the stencil, but sum += 0 so nothing to add
+            count++;
+        }
 
             Ax[id] = (count * x[id] - sum) * invDx2;
         }
@@ -681,11 +704,12 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
 
     if (bNorm2 < 1e-30f) return;
 
-    if (useMGPrecond) {
-        applyMGPrecond(pcg_r, pcg_z);
-    } else {
-        for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
-    }
+        const bool useMG = useMGPrecond && !openTopBC;
+        if (useMG) {
+            applyMGPrecond(pcg_r, pcg_z);
+        } else {
+            for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
+        }
     pcg_d = pcg_z;
 
     float deltaNew = dotVec(pcg_r, pcg_z);
@@ -713,7 +737,7 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
         float rNorm2 = dotVec(pcg_r, pcg_r);
         if (rNorm2 <= tol2 * bNorm2) break;
 
-        if (useMGPrecond) {
+        if (useMG) {
             applyMGPrecond(pcg_r, pcg_z);
         } else {
             for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
@@ -731,7 +755,7 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
     }
 
     stats.pressureIters = it_used;
-    removePressureMean();
+    if (!openTopBC) removePressureMean();
 }
 
 void MACGridCore::project() {
@@ -748,10 +772,15 @@ void MACGridCore::project() {
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             int id = idxP(i, j);
-            rhs[id] = isSolid(i, j) ? 0.0f : (-div[id] / dt);
+            if (isSolid(i, j) || isDirichletP(i, j)) {
+            rhs[id] = 0.0f;
+        } else {
+            rhs[id] = (-div[id] / dt);
+        }
         }
     }
 
+    if (!openTopBC) {
     double sum = 0.0;
     int cnt = 0;
     for (int j = 0; j < ny; ++j) {
@@ -771,6 +800,7 @@ void MACGridCore::project() {
                 rhs[id] -= mean;
             }
         }
+    }
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();
@@ -793,6 +823,26 @@ void MACGridCore::project() {
             v[idxV(i, j)] -= dt * gradp;
         }
     }
+
+    if (openTopBC) {
+    const int jFace = ny;        // v-face index at the top boundary
+    const int jCell = ny - 1;    // top row of cells
+
+    for (int i = 0; i < nx; ++i) {
+        // If the top cell is solid, don't allow flow through
+        if (isSolid(i, jCell)) { 
+            v[idxV(i, jFace)] = 0.0f; 
+            continue; 
+        }
+
+        const float p_inside  = p[idxP(i, jCell)];
+        const float p_outside = 0.0f;            // Dirichlet pressure outside
+
+        // gradp = (p_out - p_in)/dx
+        const float gradp = (p_outside - p_inside) / dx;
+        v[idxV(i, jFace)] -= dt * gradp;
+    }
+}
 
     // Clamp face speeds to avoid extreme velocities, they dont occur anymore as of now
     const float MAX_FACE_SPEED = 200.0f;
