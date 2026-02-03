@@ -65,7 +65,7 @@ void MACGridCore::resetCore() {
 
     markPressureMatrixDirty();
     mgDirty = true;
-    
+
     ensurePCGBuffers();   // allocate once, no per-solve resize later
 }
 
@@ -608,6 +608,7 @@ void MACGridCore::mgApplyA(int lev, const std::vector<float>& x, std::vector<flo
     }
 }
 
+// retarted Jacobi smoother, will use better one in the future
 void MACGridCore::mgSmoothJacobi(int lev, int iters) {
     MGLevel& L = mgLevels[lev];
     const int N = L.nx * L.ny;
@@ -622,6 +623,48 @@ void MACGridCore::mgSmoothJacobi(int lev, int iters) {
     }
 }
 
+void MACGridCore::mgSmoothRBGS(int lev, int iters)
+{
+    MGLevel& L = mgLevels[lev];
+    const int nx = L.nx, ny = L.ny;
+
+    // Use this as SOR omega (1.0 = plain GS, 1.3–1.8 typical).
+    const float omega = mgOmega;
+
+    for (int it = 0; it < iters; ++it) {
+        for (int color = 0; color < 2; ++color) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    if (((i + j) & 1) != color) continue;
+
+                    int id = mgIdx(i, j, nx);
+                    if (L.solid[id]) continue;
+
+                    float sum = 0.0f;
+                    int count = 0;
+
+                    int n = L.L[id]; if (n >= 0) { sum += L.x[n]; count++; }
+                    n = L.R[id];     if (n >= 0) { sum += L.x[n]; count++; }
+                    n = L.B[id];     if (n >= 0) { sum += L.x[n]; count++; }
+                    n = L.T[id];     if (n >= 0) { sum += L.x[n]; count++; }
+
+                    // Dirichlet neighbor at top contributes to diagonal only (value=0)
+                    if (openTopBC && j == ny - 1) count++;
+
+                    if (count == 0) continue;
+
+                    // A x = b, where A is (count*x - sum)*invDx2
+                    // => count*x - sum = b / invDx2  => x = (sum + b/invDx2) / count
+                    const float x_gs = (sum + L.b[id] / L.invDx2) / (float)count;
+
+                    // SOR update
+                    L.x[id] = (1.0f - omega) * L.x[id] + omega * x_gs;
+                }
+            }
+        }
+    }
+}
+
 void MACGridCore::mgComputeResidual(int lev) {
     MGLevel& L = mgLevels[lev];
     mgApplyA(lev, L.x, L.Ax);
@@ -632,81 +675,110 @@ void MACGridCore::mgComputeResidual(int lev) {
     }
 }
 
-void MACGridCore::mgRestrictResidual(int fineLev) {
+void MACGridCore::mgRestrictResidual(int fineLev)
+{
     MGLevel& F = mgLevels[fineLev];
     MGLevel& C = mgLevels[fineLev + 1];
 
     std::fill(C.b.begin(), C.b.end(), 0.0f);
     std::fill(C.x.begin(), C.x.end(), 0.0f);
 
+    auto addSample = [&](int fi, int fj, float w, float& sum, float& wsum) {
+        if (fi < 0 || fj < 0 || fi >= F.nx || fj >= F.ny) return;
+        int fid = mgIdx(fi, fj, F.nx);
+        if (F.solid[fid]) return;
+        sum  += w * F.r[fid];
+        wsum += w;
+    };
+
     for (int J = 0; J < C.ny; ++J) {
         for (int I = 0; I < C.nx; ++I) {
-            int cid = mgIdx(I,J,C.nx);
+            int cid = mgIdx(I, J, C.nx);
             if (C.solid[cid]) { C.b[cid] = 0.0f; continue; }
 
-            float sum = 0.0f;
-            // float w = 0.0f;
+            const int fi = 2 * I;
+            const int fj = 2 * J;
 
-            int fi = 2*I;
-            int fj = 2*J;
-            for (int dj = 0; dj < 2; ++dj) {
-                for (int di = 0; di < 2; ++di) {
-                    int ii = fi + di;
-                    int jj = fj + dj;
-                    if (ii < F.nx && jj < F.ny) {
-                        int fid = mgIdx(ii,jj,F.nx);
-                        if (!F.solid[fid]) {
-                            sum += F.r[fid];
-                            // w += 1.0f;
-                        }
-                    }
-                }
+            float sum = 0.0f, wsum = 0.0f;
+
+            // center weight 4
+            addSample(fi,   fj,   4.0f, sum, wsum);
+
+            // edge weights 2
+            addSample(fi-1, fj,   2.0f, sum, wsum);
+            addSample(fi+1, fj,   2.0f, sum, wsum);
+            addSample(fi,   fj-1, 2.0f, sum, wsum);
+            addSample(fi,   fj+1, 2.0f, sum, wsum);
+
+            // corner weights 1
+            addSample(fi-1, fj-1, 1.0f, sum, wsum);
+            addSample(fi+1, fj-1, 1.0f, sum, wsum);
+            addSample(fi-1, fj+1, 1.0f, sum, wsum);
+            addSample(fi+1, fj+1, 1.0f, sum, wsum);
+
+            if (wsum > 0.0f) {
+                // Normal full-weighting assumes wsum==16, but renormalize near solids/bounds
+                C.b[cid] = sum / wsum;
+            } else {
+                C.b[cid] = 0.0f;
             }
-            // C.b[cid] = (w > 0.0f) ? (sum / w) : 0.0f;
-            C.b[cid] = 0.25f * sum;
         }
     }
 }
 
-void MACGridCore::mgProlongateAndAdd(int coarseLev) {
+void MACGridCore::mgProlongateAndAdd(int coarseLev)
+{
     MGLevel& C = mgLevels[coarseLev];
     MGLevel& F = mgLevels[coarseLev - 1];
 
-    for (int J = 0; J < C.ny; ++J) {
-        for (int I = 0; I < C.nx; ++I) {
-            int cid = mgIdx(I,J,C.nx);
-            float e = C.x[cid];
+    auto cAt = [&](int I, int J) -> float {
+        I = std::max(0, std::min(I, C.nx - 1));
+        J = std::max(0, std::min(J, C.ny - 1));
+        int cid = mgIdx(I, J, C.nx);
+        return C.solid[cid] ? 0.0f : C.x[cid];
+    };
 
-            int fi = 2*I;
-            int fj = 2*J;
-            for (int dj = 0; dj < 2; ++dj) {
-                for (int di = 0; di < 2; ++di) {
-                    int ii = fi + di;
-                    int jj = fj + dj;
-                    if (ii < F.nx && jj < F.ny) {
-                        int fid = mgIdx(ii,jj,F.nx);
-                        if (!F.solid[fid]) F.x[fid] += e;
-                    }
-                }
+    for (int fj = 0; fj < F.ny; ++fj) {
+        for (int fi = 0; fi < F.nx; ++fi) {
+            int fid = mgIdx(fi, fj, F.nx);
+            if (F.solid[fid]) continue;
+
+            const int I = fi >> 1;
+            const int J = fj >> 1;
+            const int ox = fi & 1;
+            const int oy = fj & 1;
+
+            float e = 0.0f;
+
+            if (ox == 0 && oy == 0) {
+                e = cAt(I, J);
+            } else if (ox == 1 && oy == 0) {
+                e = 0.5f * (cAt(I, J) + cAt(I + 1, J));
+            } else if (ox == 0 && oy == 1) {
+                e = 0.5f * (cAt(I, J) + cAt(I, J + 1));
+            } else { // ox==1 && oy==1
+                e = 0.25f * (cAt(I, J) + cAt(I + 1, J) + cAt(I, J + 1) + cAt(I + 1, J + 1));
             }
+
+            F.x[fid] += e;
         }
     }
 }
 
 void MACGridCore::mgVCycle(int lev) {
     if (lev == (int)mgLevels.size() - 1) {
-        mgSmoothJacobi(lev, mgCoarseSmooth);
+        mgSmoothRBGS(lev, mgCoarseSmooth);
         return;
     }
 
-    mgSmoothJacobi(lev, mgPreSmooth);
+    mgSmoothRBGS(lev, mgPreSmooth);
     mgComputeResidual(lev);
     mgRestrictResidual(lev);
 
     mgVCycle(lev + 1);
 
     mgProlongateAndAdd(lev + 1);
-    mgSmoothJacobi(lev, mgPostSmooth);
+    mgSmoothRBGS(lev, mgPostSmooth);
 }
 
 void MACGridCore::applyMGPrecond(const std::vector<float>& r, std::vector<float>& z) {
@@ -1046,7 +1118,7 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
             std::printf("[MG ] WARNING: residual increased (%g -> %g). Resetting x and switching to smoothing-only this frame.\n", prev, rInf);
             std::fill(F.x.begin(), F.x.end(), 0.0f);
             // do a few fine smooths to keep the sim alive
-            mgSmoothJacobi(0, 20);
+            mgSmoothRBGS(0, 20);
             mgComputeResidual(0);
             break;
         }
@@ -1182,6 +1254,8 @@ void MACGridCore::project() {
 //    solvePressurePCG(80, pcgDivTol); 
 
     float divTol = openTopBC ? 5e-4f : 1e-4f;
+
+
     solvePressureMG(20, divTol);   // start with ~10–30 V-cycles
 
     auto t1 = std::chrono::high_resolution_clock::now();
