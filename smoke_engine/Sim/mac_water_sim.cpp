@@ -159,6 +159,7 @@ void MACWater::applyBoundary() {
     }
 }
 
+
 void MACWater::addWaterSource(float cx, float cy, float radius, float amount) {
     std::uniform_real_distribution<float> uni(-0.45f, 0.45f);
     std::uniform_real_distribution<float> uJitter(-0.25f, 0.25f);
@@ -1060,6 +1061,7 @@ void MACWater::projectLiquid() {
 
     // Assemble the liquid Laplacian.
     // Air neighbors use Dirichlet p=0. Solid neighbors use Neumann (no contribution).
+    int diagZeroCount = 0;
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const int id = idxP(i, j);
@@ -1127,12 +1129,19 @@ void MACWater::projectLiquid() {
                 rhs[id] = 0.0f;
                 div[id] = 0.0f;
                 p[id] = 0.0f;
+                diagZeroCount++;
                 continue;
             }
 
             lapDiag[id] = diag;
             lapDiagInv[id] = 1.0f / diag;
         }
+    }
+
+    if (pressureDiagnostics && pressureDiagInterval > 0 &&
+        (stepCounter % pressureDiagInterval) == 0) {
+        std::printf("[water][pressure] diagZero=%d hasDirichlet=%d liquidCells=%d\n",
+                    diagZeroCount, (int)hasDirichletAnchor, liquidCountBefore);
     }
 
     // A fully closed container with only Neumann boundaries is singular.
@@ -1610,16 +1619,35 @@ void MACWater::mgApplyA(int lev, const std::vector<float>& x, std::vector<float>
     }
 }
 
-void MACWater::mgSmoothJacobi(int lev, int iters) {
+void MACWater::mgSmoothRBGS(int lev, int iters)
+{
     MGLevel& L = mgLevels[lev];
-    const int N = L.nx * L.ny;
+    const int nx = L.nx, ny = L.ny;
+    const float omega = mgOmega;
 
     for (int it = 0; it < iters; ++it) {
-        mgApplyA(lev, L.x, L.Ax);
-        for (int id = 0; id < N; ++id) {
-            if (!L.fluid[id]) continue;
-            float r = L.b[id] - L.Ax[id];
-            L.x[id] += mgOmega * (L.diagInv[id] * r);
+        for (int color = 0; color < 2; ++color) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    if (((i + j) & 1) != color) continue;
+
+                    const int id = mgIdx(i, j, nx);
+                    if (!L.fluid[id]) continue;
+
+                    float sum = 0.0f;
+                    int n = L.L[id]; if (n >= 0) sum += L.x[n];
+                    n = L.R[id];     if (n >= 0) sum += L.x[n];
+                    n = L.B[id];     if (n >= 0) sum += L.x[n];
+                    n = L.T[id];     if (n >= 0) sum += L.x[n];
+
+                    const float diag = (L.diagInv[id] > 0.0f) ? (1.0f / L.diagInv[id]) : 0.0f;
+                    if (diag <= 0.0f) continue;
+
+                    // A x = b, where A is (diag*x - invDx2*sum)
+                    const float x_gs = (L.invDx2 * sum + L.b[id]) / diag;
+                    L.x[id] = (1.0f - omega) * L.x[id] + omega * x_gs;
+                }
+            }
         }
     }
 }
@@ -1641,25 +1669,36 @@ void MACWater::mgRestrictResidual(int fineLev) {
     std::fill(C.b.begin(), C.b.end(), 0.0f);
     std::fill(C.x.begin(), C.x.end(), 0.0f);
 
+    auto addSample = [&](int fi, int fj, float w, float& sum, float& wsum) {
+        if (fi < 0 || fj < 0 || fi >= F.nx || fj >= F.ny) return;
+        const int fid = mgIdx(fi, fj, F.nx);
+        if (!F.fluid[fid]) return;
+        sum  += w * F.r[fid];
+        wsum += w;
+    };
+
     for (int J = 0; J < C.ny; ++J) {
         for (int I = 0; I < C.nx; ++I) {
-            int cid = mgIdx(I, J, C.nx);
+            const int cid = mgIdx(I, J, C.nx);
             if (!C.fluid[cid]) { C.b[cid] = 0.0f; continue; }
 
-            float sum = 0.0f;
-            int fi = 2 * I;
-            int fj = 2 * J;
-            for (int dj = 0; dj < 2; ++dj) {
-                for (int di = 0; di < 2; ++di) {
-                    int ii = fi + di;
-                    int jj = fj + dj;
-                    if (ii < F.nx && jj < F.ny) {
-                        int fid = mgIdx(ii, jj, F.nx);
-                        if (F.fluid[fid]) sum += F.r[fid];
-                    }
-                }
-            }
-            C.b[cid] = 0.25f * sum;
+            const int fi = 2 * I;
+            const int fj = 2 * J;
+
+            float sum = 0.0f, wsum = 0.0f;
+
+            addSample(fi,   fj,   4.0f, sum, wsum);
+            addSample(fi-1, fj,   2.0f, sum, wsum);
+            addSample(fi+1, fj,   2.0f, sum, wsum);
+            addSample(fi,   fj-1, 2.0f, sum, wsum);
+            addSample(fi,   fj+1, 2.0f, sum, wsum);
+
+            addSample(fi-1, fj-1, 1.0f, sum, wsum);
+            addSample(fi+1, fj-1, 1.0f, sum, wsum);
+            addSample(fi-1, fj+1, 1.0f, sum, wsum);
+            addSample(fi+1, fj+1, 1.0f, sum, wsum);
+
+            C.b[cid] = (wsum > 0.0f) ? (sum / wsum) : 0.0f;
         }
     }
 }
@@ -1668,41 +1707,53 @@ void MACWater::mgProlongateAndAdd(int coarseLev) {
     MGLevel& C = mgLevels[coarseLev];
     MGLevel& F = mgLevels[coarseLev - 1];
 
-    for (int J = 0; J < C.ny; ++J) {
-        for (int I = 0; I < C.nx; ++I) {
-            int cid = mgIdx(I, J, C.nx);
-            float e = C.x[cid];
+    auto cAt = [&](int I, int J) -> float {
+        I = std::max(0, std::min(I, C.nx - 1));
+        J = std::max(0, std::min(J, C.ny - 1));
+        const int cid = mgIdx(I, J, C.nx);
+        return C.fluid[cid] ? C.x[cid] : 0.0f;
+    };
 
-            int fi = 2 * I;
-            int fj = 2 * J;
-            for (int dj = 0; dj < 2; ++dj) {
-                for (int di = 0; di < 2; ++di) {
-                    int ii = fi + di;
-                    int jj = fj + dj;
-                    if (ii < F.nx && jj < F.ny) {
-                        int fid = mgIdx(ii, jj, F.nx);
-                        if (F.fluid[fid]) F.x[fid] += e;
-                    }
-                }
+    for (int fj = 0; fj < F.ny; ++fj) {
+        for (int fi = 0; fi < F.nx; ++fi) {
+            const int fid = mgIdx(fi, fj, F.nx);
+            if (!F.fluid[fid]) continue;
+
+            const int I = fi >> 1;
+            const int J = fj >> 1;
+            const int ox = fi & 1;
+            const int oy = fj & 1;
+
+            float e = 0.0f;
+            if (ox == 0 && oy == 0) {
+                e = cAt(I, J);
+            } else if (ox == 1 && oy == 0) {
+                e = 0.5f * (cAt(I, J) + cAt(I + 1, J));
+            } else if (ox == 0 && oy == 1) {
+                e = 0.5f * (cAt(I, J) + cAt(I, J + 1));
+            } else {
+                e = 0.25f * (cAt(I, J) + cAt(I + 1, J) + cAt(I, J + 1) + cAt(I + 1, J + 1));
             }
+
+            F.x[fid] += e;
         }
     }
 }
 
 void MACWater::mgVCycle(int lev) {
     if (lev == (int)mgLevels.size() - 1) {
-        mgSmoothJacobi(lev, mgCoarseSmooth);
+        mgSmoothRBGS(lev, mgCoarseSmooth);
         return;
     }
 
-    mgSmoothJacobi(lev, mgPreSmooth);
+    mgSmoothRBGS(lev, mgPreSmooth);
     mgComputeResidual(lev);
     mgRestrictResidual(lev);
 
     mgVCycle(lev + 1);
 
     mgProlongateAndAdd(lev + 1);
-    mgSmoothJacobi(lev, mgPostSmooth);
+    mgSmoothRBGS(lev, mgPostSmooth);
 }
 
 void MACWater::mgRemoveMeanFine() {
@@ -1767,6 +1818,11 @@ void MACWater::solvePressureMGWater(int vcycles, float tol) {
     }
 
     const float bInf = maxAbsBFluid();
+    const float relTol = 1e-3f;
+    if (pressureDiagnostics && pressureDiagInterval > 0 &&
+        (stepCounter % pressureDiagInterval) == 0) {
+        std::printf("[water][MG ] bInf=%g tol=%g vcycles=%d\n", bInf, tol, vcycles);
+    }
     if (bInf * dt <= tol) {
         if (!mgHasDirichlet) mgRemoveMeanFine();
         for (int id = 0; id < N; ++id) {
@@ -1794,7 +1850,7 @@ void MACWater::solvePressureMGWater(int vcycles, float tol) {
 
         if (rInf > prev * 1.2f) {
             std::fill(F.x.begin(), F.x.end(), 0.0f);
-            mgSmoothJacobi(0, 20);
+            mgSmoothRBGS(0, 20);
             mgComputeResidual(0);
             break;
         }
@@ -1803,7 +1859,11 @@ void MACWater::solvePressureMGWater(int vcycles, float tol) {
 
         mgComputeResidual(0);
         rInf = maxAbsResidualFluid();
-        if (!std::isfinite(rInf) || rInf * dt <= tol) break;
+        if (pressureDiagnostics && pressureDiagInterval > 0 &&
+            (stepCounter % pressureDiagInterval) == 0 && (k % 5) == 0) {
+            std::printf("[water][MG ] v=%d rInf=%g predDiv=%g\n", k, rInf, rInf * dt);
+        }
+        if (!std::isfinite(rInf) || rInf * dt <= tol || (bInf > 0.0f && rInf <= relTol * bInf)) break;
     }
 
     if (!mgHasDirichlet) mgRemoveMeanFine();
@@ -2264,17 +2324,9 @@ void MACWater::step() {
     removeParticlesInSolids();
     enforceParticleBounds();
 
-    advectParticles();
-    enforceParticleBounds();
-    removeParticlesInSolids();
-    separateParticles();
-    relaxParticleDensity();
-    relaxColumnDensity();
-    reseedParticlesFromField(water0);
-
+    // P2G (particles -> MAC faces)
     particleToGrid();
     buildLiquidMask();
-    extrapolateVelocity();
 
     // gravity only near liquid faces
     auto isLiquidCell = [&](int i, int j) {
@@ -2304,24 +2356,35 @@ void MACWater::step() {
     uPrev = u;
     vPrev = v;
 
-    const int repeats = std::max(1, pressureRepeats);
-    for (int r = 0; r < repeats; ++r) {
-        projectLiquid();
-        extrapolateVelocity();
-        applyBoundary();
-    }
-    // Remove any residual drift, clamp boundaries, then do a final projection.
-    removeLiquidDrift();
-    applyBoundary();
+    // include drift compensation here if used
+    //removeLiquidDrift();
+
+    // Project liquid (MG + polish)
     projectLiquid();
+    applyBoundary();
+
+    // Extrapolate into air for sampling/advection
+    extrapolateVelocity();
     applyBoundary();
 
     for (size_t i = 0; i < u.size(); ++i) uDelta[i] = u[i] - uPrev[i];
     for (size_t i = 0; i < v.size(); ++i) vDelta[i] = v[i] - vPrev[i];
 
+    // G2P (PIC/FLIP blend)
     gridToParticles();
     enforceParticleBounds();
     removeParticlesInSolids();
+
+    // Advect particles through velocity field (RK2) + collisions
+    advectParticles();
+    enforceParticleBounds();
+    removeParticlesInSolids();
+
+    // Optional particle maintenance
+    separateParticles();
+    relaxParticleDensity();
+    relaxColumnDensity();
+    reseedParticlesFromField(water0);
 
     if (restVelocity > 0.0f) {
         const float restVel = restVelocity * dx;
