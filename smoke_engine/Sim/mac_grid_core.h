@@ -147,6 +147,7 @@ private:
 
     std::vector<MGLevel> mgLevels;
     bool mgDirty = true;
+    bool mgInitialized = false;
 
     void markMGDirty() { mgDirty = true; }
     void ensureMultigrid();

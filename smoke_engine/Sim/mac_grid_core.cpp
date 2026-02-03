@@ -65,6 +65,8 @@ void MACGridCore::resetCore() {
 
     markPressureMatrixDirty();
     mgDirty = true;
+    
+    ensurePCGBuffers();   // allocate once, no per-solve resize later
 }
 
 float MACGridCore::maxAbsDiv() const {
