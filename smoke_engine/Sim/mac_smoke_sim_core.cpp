@@ -50,10 +50,11 @@ void MAC2D::reset() {
     age.assign(Nc, 0.0f);
     age0.assign(Nc, 0.0f);
 
+
     // Outer walls
     for (int i = 0; i < nx; ++i) {
         solid[idxP(i, 0)]      = 1;   // bottom wall cells (except valve gets carved)
-        solid[idxP(i, ny - 1)] = 1;   // IMPORTANT: top row is never solid; BC handles open/closed
+        solid[idxP(i, ny - 1)] = 0;   // IMPORTANT: top row is never solid; BC handles open/closed
     }
     for (int j = 0; j < ny; ++j) {
         solid[idxP(0, j)]       = 1;
@@ -74,6 +75,7 @@ void MAC2D::reset() {
             if (solid[idxP(i, j)]) smoke[idxP(i, j)] = 0.0f;
         }
     }
+
 
     invalidatePressureMatrix();
 }
