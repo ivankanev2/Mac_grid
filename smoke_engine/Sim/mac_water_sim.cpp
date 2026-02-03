@@ -34,6 +34,8 @@ static int maxParticleLimit(int maxParticles) {
     if (maxParticles > 0) return maxParticles;
     return std::numeric_limits<int>::max() / 4;
 }
+
+static inline int mgIdx(int i, int j, int nx) { return i + nx * j; }
 }
 
 MACWater::MACWater(int NX, int NY, float DX, float DT)
@@ -77,6 +79,10 @@ void MACWater::reset() {
     pcg_Ap.assign(Nc, 0.0f);
 
     stepCounter = 0;
+    mgDirty = true;
+    mgHasDirichlet = false;
+    mgOpenTop = openTop;
+    mgLevels.clear();
     enforceBorderSolids();
 }
 
@@ -197,6 +203,7 @@ void MACWater::addWaterSource(float cx, float cy, float radius, float amount) {
 void MACWater::syncSolidsFrom(const MACGridCore& src) {
     if (src.solid.size() != solid.size()) return;
     solid = src.solid;
+    mgDirty = true;
 
     enforceBorderSolids();
 
@@ -727,6 +734,14 @@ void MACWater::buildLiquidMask() {
     for (size_t k = 0; k < liquid.size() && k < solid.size(); ++k) {
         if (solid[k]) liquid[k] = 0;
     }
+
+    bool maskChanged = (liquidPrev.size() != liquid.size());
+    if (!maskChanged) {
+        for (size_t k = 0; k < liquid.size(); ++k) {
+            if (liquid[k] != liquidPrev[k]) { maskChanged = true; break; }
+        }
+    }
+    if (maskChanged) mgDirty = true;
     liquidPrev = liquid;
 }
 
@@ -789,6 +804,89 @@ void MACWater::applyHeightPressureForce() {
 
             u[(size_t)idxU(i, j)] += dt * accel;
         }
+    }
+}
+
+void MACWater::applyViscosity() {
+    if (waterViscosity <= 0.0f || viscosityIters <= 0) return;
+
+    const float invDx2 = 1.0f / (dx * dx);
+    const float alphaInvDx2 = (waterViscosity * dt) * invDx2;
+    if (alphaInvDx2 <= 0.0f) return;
+
+    const float omega = std::max(0.0f, std::min(1.0f, viscosityOmega));
+
+    std::vector<float> bU = u;
+    std::vector<float> bV = v;
+
+    if (u0.size() != u.size()) u0.resize(u.size());
+    if (v0.size() != v.size()) v0.resize(v.size());
+
+    auto isLiquidCell = [&](int i, int j) {
+        if (i < 0 || i >= nx || j < 0 || j >= ny) return false;
+        const int id = idxP(i, j);
+        return !solid[(size_t)id] && liquid[(size_t)id];
+    };
+    auto liquidAdjacentU = [&](int i, int j) {
+        return isLiquidCell(i - 1, j) || isLiquidCell(i, j);
+    };
+    auto liquidAdjacentV = [&](int i, int j) {
+        return isLiquidCell(i, j - 1) || isLiquidCell(i, j);
+    };
+
+    auto isFixedU = [&](int i, int j) {
+        if (i == 0 || i == nx) return true;
+        if (j == 0) return true; // floor tangential
+        return isSolid(i - 1, j) || isSolid(i, j);
+    };
+    auto isFixedV = [&](int i, int j) {
+        if (j == 0) return true;
+        if (j == ny) return !openTop;
+        return isSolid(i, j - 1) || isSolid(i, j);
+    };
+
+    // diffuse U
+    for (int it = 0; it < viscosityIters; ++it) {
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                int id = idxU(i, j);
+                if (isFixedU(i, j) || !liquidAdjacentU(i, j)) { u0[id] = u[id]; continue; }
+
+                float sumN = 0.0f;
+                int count = 0;
+                if (i - 1 >= 0)  { sumN += u[idxU(i - 1, j)]; count++; }
+                if (i + 1 <= nx) { sumN += u[idxU(i + 1, j)]; count++; }
+                if (j - 1 >= 0)  { sumN += u[idxU(i, j - 1)]; count++; }
+                if (j + 1 < ny)  { sumN += u[idxU(i, j + 1)]; count++; }
+
+                float xNew = (bU[id] + alphaInvDx2 * sumN) / (1.0f + alphaInvDx2 * (float)count);
+                u0[id] = (1.0f - omega) * u[id] + omega * xNew;
+            }
+        }
+        u.swap(u0);
+        applyBoundary();
+    }
+
+    // diffuse V
+    for (int it = 0; it < viscosityIters; ++it) {
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                int id = idxV(i, j);
+                if (isFixedV(i, j) || !liquidAdjacentV(i, j)) { v0[id] = v[id]; continue; }
+
+                float sumN = 0.0f;
+                int count = 0;
+                if (i - 1 >= 0) { sumN += v[idxV(i - 1, j)]; count++; }
+                if (i + 1 < nx) { sumN += v[idxV(i + 1, j)]; count++; }
+                if (j - 1 >= 0)  { sumN += v[idxV(i, j - 1)]; count++; }
+                if (j + 1 <= ny) { sumN += v[idxV(i, j + 1)]; count++; }
+
+                float xNew = (bV[id] + alphaInvDx2 * sumN) / (1.0f + alphaInvDx2 * (float)count);
+                v0[id] = (1.0f - omega) * v[id] + omega * xNew;
+            }
+        }
+        v.swap(v0);
+        applyBoundary();
     }
 }
 
@@ -1048,67 +1146,85 @@ void MACWater::projectLiquid() {
         p[anchorId] = 0.0f;
     }
 
-    auto applyA = [&](const std::vector<float>& x, std::vector<float>& Ax) {
-        if ((int)Ax.size() != N) Ax.assign(N, 0.0f);
+    auto pcgSolve = [&](int maxIters, float tol) -> bool {
+        auto applyA = [&](const std::vector<float>& x, std::vector<float>& Ax) {
+            if ((int)Ax.size() != N) Ax.assign(N, 0.0f);
 
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxP(i, j);
-                if (!isLiquidCell(i, j)) { Ax[id] = 0.0f; continue; }
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int id = idxP(i, j);
+                    if (!isLiquidCell(i, j)) { Ax[id] = 0.0f; continue; }
 
-                float sum = 0.0f;
-                if (lapL[id] >= 0) sum += x[lapL[id]];
-                if (lapR[id] >= 0) sum += x[lapR[id]];
-                if (lapB[id] >= 0) sum += x[lapB[id]];
-                if (lapT[id] >= 0) sum += x[lapT[id]];
+                    float sum = 0.0f;
+                    if (lapL[id] >= 0) sum += x[lapL[id]];
+                    if (lapR[id] >= 0) sum += x[lapR[id]];
+                    if (lapB[id] >= 0) sum += x[lapB[id]];
+                    if (lapT[id] >= 0) sum += x[lapT[id]];
 
-                Ax[id] = lapDiag[id] * x[id] - invDx2 * sum;
+                    Ax[id] = lapDiag[id] * x[id] - invDx2 * sum;
+                }
             }
-        }
-    };
+        };
 
-    // PCG solve
-    applyA(p, pcg_Ap);
-    for (int k = 0; k < N; ++k) pcg_r[k] = rhs[k] - pcg_Ap[k];
+        applyA(p, pcg_Ap);
+        for (int k = 0; k < N; ++k) pcg_r[k] = rhs[k] - pcg_Ap[k];
 
-    const float bNorm2 = dotVec(rhs, rhs);
-    if (bNorm2 < 1e-20f) return;
-
-    for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
-    pcg_d = pcg_z;
-
-    float deltaNew = dotVec(pcg_r, pcg_z);
-    const float delta0 = deltaNew;
-    if (deltaNew < 1e-20f) return;
-
-    const float tol = std::max(1e-8f, pressureTol);
-    const float tol2 = tol * tol;
-    const int maxIters = std::max(40, pressureMaxIters);
-
-    for (int it = 0; it < maxIters; ++it) {
-        applyA(pcg_d, pcg_q);
-
-        const float dq = dotVec(pcg_d, pcg_q);
-        if (std::fabs(dq) < 1e-30f) break;
-
-        const float alpha = deltaNew / dq;
-
-        for (int k = 0; k < N; ++k) {
-            p[k]     += alpha * pcg_d[k];
-            pcg_r[k] -= alpha * pcg_q[k];
-        }
-
-        const float rNorm2 = dotVec(pcg_r, pcg_r);
-        if (rNorm2 <= tol2 * bNorm2) break;
+        const float bNorm2 = dotVec(rhs, rhs);
+        if (bNorm2 < 1e-20f) return true;
 
         for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
+        pcg_d = pcg_z;
 
-        const float deltaOld = deltaNew;
-        deltaNew = dotVec(pcg_r, pcg_z);
-        if (deltaNew <= tol2 * delta0) break;
+        float deltaNew = dotVec(pcg_r, pcg_z);
+        const float delta0 = deltaNew;
+        if (deltaNew < 1e-20f) return true;
 
-        const float beta = deltaNew / (deltaOld + 1e-30f);
-        for (int k = 0; k < N; ++k) pcg_d[k] = pcg_z[k] + beta * pcg_d[k];
+        const float tolSafe = std::max(1e-8f, tol);
+        const float tol2 = tolSafe * tolSafe;
+        const int maxIterSafe = std::max(10, maxIters);
+
+        bool converged = false;
+        for (int it = 0; it < maxIterSafe; ++it) {
+            applyA(pcg_d, pcg_q);
+
+            const float dq = dotVec(pcg_d, pcg_q);
+            if (std::fabs(dq) < 1e-30f) break;
+
+            const float alpha = deltaNew / dq;
+
+            for (int k = 0; k < N; ++k) {
+                p[k]     += alpha * pcg_d[k];
+                pcg_r[k] -= alpha * pcg_q[k];
+            }
+
+            const float rNorm2 = dotVec(pcg_r, pcg_r);
+            if (rNorm2 <= tol2 * bNorm2) { converged = true; break; }
+
+            for (int k = 0; k < N; ++k) pcg_z[k] = pcg_r[k] * lapDiagInv[k];
+
+            const float deltaOld = deltaNew;
+            deltaNew = dotVec(pcg_r, pcg_z);
+            if (deltaNew <= tol2 * delta0) { converged = true; break; }
+
+            const float beta = deltaNew / (deltaOld + 1e-30f);
+            for (int k = 0; k < N; ++k) pcg_d[k] = pcg_z[k] + beta * pcg_d[k];
+        }
+        return converged;
+    };
+
+    if (useMGPressure) {
+        if (mgOpenTop != openTop) { mgOpenTop = openTop; mgDirty = true; }
+        const float tol = (pressureMGTol > 0.0f) ? pressureMGTol : (openTop ? 5e-4f : 1e-4f);
+        solvePressureMGWater(pressureMGVcycles, tol);
+        const int polishIters = std::max(0, std::min(pressureMGPolishIters, pressureMaxIters));
+        if (polishIters > 0) {
+            const bool converged = pcgSolve(polishIters, pressureTol);
+            if (!converged && polishIters < pressureMaxIters) {
+                pcgSolve(pressureMaxIters, pressureTol);
+            }
+        }
+    } else {
+        pcgSolve(pressureMaxIters, pressureTol);
     }
 
     // apply pressure gradient with p_air = 0
@@ -1279,6 +1395,422 @@ void MACWater::removeLiquidDrift() {
     }
 
     // Do not remove mean vertical velocity: that cancels gravity.
+}
+
+void MACWater::snapToRest(float restVel) {
+    if (restVel <= 0.0f) return;
+
+    auto isLiquidCell = [&](int i, int j) {
+        if (i < 0 || i >= nx || j < 0 || j >= ny) return false;
+        const int id = idxP(i, j);
+        return !solid[(size_t)id] && liquid[(size_t)id];
+    };
+    auto liquidAdjacentU = [&](int i, int j) {
+        return isLiquidCell(i - 1, j) || isLiquidCell(i, j);
+    };
+    auto liquidAdjacentV = [&](int i, int j) {
+        return isLiquidCell(i, j - 1) || isLiquidCell(i, j);
+    };
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i <= nx; ++i) {
+            if (!liquidAdjacentU(i, j)) continue;
+            const int id = idxU(i, j);
+            if (std::fabs(u[(size_t)id]) < restVel) u[(size_t)id] = 0.0f;
+        }
+    }
+
+    for (int j = 0; j <= ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            if (!liquidAdjacentV(i, j)) continue;
+            const int id = idxV(i, j);
+            if (std::fabs(v[(size_t)id]) < restVel) v[(size_t)id] = 0.0f;
+        }
+    }
+
+    const float restVel2 = restVel * restVel;
+    for (Particle& p : particles) {
+        if (p.u * p.u + p.v * p.v < restVel2) {
+            p.u = 0.0f;
+            p.v = 0.0f;
+        }
+    }
+
+    applyBoundary();
+}
+
+void MACWater::ensureWaterMG() {
+    if (!mgDirty) return;
+    mgDirty = false;
+    mgLevels.clear();
+    mgLevels.reserve(mgMaxLevels);
+    mgHasDirichlet = false;
+
+    {
+        MGLevel L0;
+        L0.nx = nx; L0.ny = ny;
+        L0.invDx2 = 1.0f / (dx * dx);
+
+        const int N = nx * ny;
+        L0.solid.assign(N, 0);
+        L0.fluid.assign(N, 0);
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const int id = idxP(i, j);
+                L0.solid[id] = solid[(size_t)id] ? 1 : 0;
+                if (!L0.solid[id] && liquid[(size_t)id]) L0.fluid[id] = 1;
+            }
+        }
+
+        L0.L.assign(N, -1); L0.R.assign(N, -1); L0.B.assign(N, -1); L0.T.assign(N, -1);
+        L0.diagInv.assign(N, 0.0f);
+        L0.x.assign(N, 0.0f);
+        L0.b.assign(N, 0.0f);
+        L0.Ax.assign(N, 0.0f);
+        L0.r.assign(N, 0.0f);
+
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const int id = idxP(i, j);
+                if (!L0.fluid[id]) continue;
+
+                int count = 0;
+                auto handleNeighbor = [&](int ni, int nj, int& outIdx) {
+                    if (ni < 0 || ni >= L0.nx || nj < 0) return;
+                    if (nj >= L0.ny) {
+                        if (openTop) { count++; mgHasDirichlet = true; }
+                        return;
+                    }
+                    const int nid = mgIdx(ni, nj, L0.nx);
+                    if (L0.solid[nid]) return;
+                    if (L0.fluid[nid]) { outIdx = nid; count++; }
+                    else { count++; mgHasDirichlet = true; }
+                };
+
+                handleNeighbor(i - 1, j, L0.L[id]);
+                handleNeighbor(i + 1, j, L0.R[id]);
+                handleNeighbor(i, j - 1, L0.B[id]);
+                handleNeighbor(i, j + 1, L0.T[id]);
+
+                if (count <= 0) {
+                    L0.diagInv[id] = 1.0f;
+                } else {
+                    const float diag = (float)count * L0.invDx2;
+                    L0.diagInv[id] = 1.0f / diag;
+                }
+            }
+        }
+
+        mgLevels.push_back(std::move(L0));
+    }
+
+    while ((int)mgLevels.size() < mgMaxLevels) {
+        const MGLevel& F = mgLevels.back();
+        if (F.nx <= 4 || F.ny <= 4) break;
+
+        int cnx = F.nx / 2;
+        int cny = F.ny / 2;
+        if (cnx < 2 || cny < 2) break;
+
+        MGLevel C;
+        C.nx = cnx; C.ny = cny;
+        C.invDx2 = F.invDx2 * 0.25f;
+
+        const int CN = cnx * cny;
+        C.solid.assign(CN, 0);
+        C.fluid.assign(CN, 0);
+        C.L.assign(CN, -1); C.R.assign(CN, -1); C.B.assign(CN, -1); C.T.assign(CN, -1);
+        C.diagInv.assign(CN, 0.0f);
+        C.x.assign(CN, 0.0f);
+        C.b.assign(CN, 0.0f);
+        C.Ax.assign(CN, 0.0f);
+        C.r.assign(CN, 0.0f);
+
+        for (int J = 0; J < cny; ++J) {
+            for (int I = 0; I < cnx; ++I) {
+                int fi = 2 * I;
+                int fj = 2 * J;
+
+                bool allSolid = true;
+                bool anyFluid = false;
+                bool anyAir = false;
+                for (int dj = 0; dj < 2; ++dj) {
+                    for (int di = 0; di < 2; ++di) {
+                        int ii = fi + di;
+                        int jj = fj + dj;
+                        if (ii < F.nx && jj < F.ny) {
+                            int fid = mgIdx(ii, jj, F.nx);
+                            if (!F.solid[fid]) allSolid = false;
+                            if (F.fluid[fid]) anyFluid = true;
+                            else if (!F.solid[fid]) anyAir = true;
+                        }
+                    }
+                }
+
+                int cid = mgIdx(I, J, cnx);
+                C.solid[cid] = allSolid ? 1 : 0;
+                C.fluid[cid] = anyFluid ? 1 : 0;
+                if (allSolid) C.fluid[cid] = 0;
+                if (!anyFluid && anyAir) C.solid[cid] = 0;
+            }
+        }
+
+        for (int J = 0; J < cny; ++J) {
+            for (int I = 0; I < cnx; ++I) {
+                int id = mgIdx(I, J, cnx);
+                if (!C.fluid[id]) continue;
+
+                int count = 0;
+                auto handleNeighbor = [&](int ni, int nj, int& outIdx) {
+                    if (ni < 0 || ni >= cnx || nj < 0) return;
+                    if (nj >= cny) {
+                        if (openTop) { count++; }
+                        return;
+                    }
+                    int nid = mgIdx(ni, nj, cnx);
+                    if (C.solid[nid]) return;
+                    if (C.fluid[nid]) { outIdx = nid; count++; }
+                    else { count++; }
+                };
+
+                handleNeighbor(I - 1, J, C.L[id]);
+                handleNeighbor(I + 1, J, C.R[id]);
+                handleNeighbor(I, J - 1, C.B[id]);
+                handleNeighbor(I, J + 1, C.T[id]);
+
+                if (count <= 0) {
+                    C.diagInv[id] = 1.0f;
+                } else {
+                    const float diag = (float)count * C.invDx2;
+                    C.diagInv[id] = 1.0f / diag;
+                }
+            }
+        }
+
+        mgLevels.push_back(std::move(C));
+    }
+}
+
+void MACWater::mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const {
+    const MGLevel& L = mgLevels[lev];
+    const int N = L.nx * L.ny;
+    if ((int)Ax.size() != N) Ax.resize(N);
+
+    for (int id = 0; id < N; ++id) {
+        if (!L.fluid[id]) { Ax[id] = 0.0f; continue; }
+
+        float sum = 0.0f;
+        int n = L.L[id]; if (n >= 0) sum += x[n];
+        n = L.R[id];     if (n >= 0) sum += x[n];
+        n = L.B[id];     if (n >= 0) sum += x[n];
+        n = L.T[id];     if (n >= 0) sum += x[n];
+
+        const float diag = (L.diagInv[id] > 0.0f) ? (1.0f / L.diagInv[id]) : 0.0f;
+        Ax[id] = diag * x[id] - L.invDx2 * sum;
+    }
+}
+
+void MACWater::mgSmoothJacobi(int lev, int iters) {
+    MGLevel& L = mgLevels[lev];
+    const int N = L.nx * L.ny;
+
+    for (int it = 0; it < iters; ++it) {
+        mgApplyA(lev, L.x, L.Ax);
+        for (int id = 0; id < N; ++id) {
+            if (!L.fluid[id]) continue;
+            float r = L.b[id] - L.Ax[id];
+            L.x[id] += mgOmega * (L.diagInv[id] * r);
+        }
+    }
+}
+
+void MACWater::mgComputeResidual(int lev) {
+    MGLevel& L = mgLevels[lev];
+    mgApplyA(lev, L.x, L.Ax);
+    const int N = L.nx * L.ny;
+    for (int id = 0; id < N; ++id) {
+        if (!L.fluid[id]) { L.r[id] = 0.0f; continue; }
+        L.r[id] = L.b[id] - L.Ax[id];
+    }
+}
+
+void MACWater::mgRestrictResidual(int fineLev) {
+    MGLevel& F = mgLevels[fineLev];
+    MGLevel& C = mgLevels[fineLev + 1];
+
+    std::fill(C.b.begin(), C.b.end(), 0.0f);
+    std::fill(C.x.begin(), C.x.end(), 0.0f);
+
+    for (int J = 0; J < C.ny; ++J) {
+        for (int I = 0; I < C.nx; ++I) {
+            int cid = mgIdx(I, J, C.nx);
+            if (!C.fluid[cid]) { C.b[cid] = 0.0f; continue; }
+
+            float sum = 0.0f;
+            int fi = 2 * I;
+            int fj = 2 * J;
+            for (int dj = 0; dj < 2; ++dj) {
+                for (int di = 0; di < 2; ++di) {
+                    int ii = fi + di;
+                    int jj = fj + dj;
+                    if (ii < F.nx && jj < F.ny) {
+                        int fid = mgIdx(ii, jj, F.nx);
+                        if (F.fluid[fid]) sum += F.r[fid];
+                    }
+                }
+            }
+            C.b[cid] = 0.25f * sum;
+        }
+    }
+}
+
+void MACWater::mgProlongateAndAdd(int coarseLev) {
+    MGLevel& C = mgLevels[coarseLev];
+    MGLevel& F = mgLevels[coarseLev - 1];
+
+    for (int J = 0; J < C.ny; ++J) {
+        for (int I = 0; I < C.nx; ++I) {
+            int cid = mgIdx(I, J, C.nx);
+            float e = C.x[cid];
+
+            int fi = 2 * I;
+            int fj = 2 * J;
+            for (int dj = 0; dj < 2; ++dj) {
+                for (int di = 0; di < 2; ++di) {
+                    int ii = fi + di;
+                    int jj = fj + dj;
+                    if (ii < F.nx && jj < F.ny) {
+                        int fid = mgIdx(ii, jj, F.nx);
+                        if (F.fluid[fid]) F.x[fid] += e;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void MACWater::mgVCycle(int lev) {
+    if (lev == (int)mgLevels.size() - 1) {
+        mgSmoothJacobi(lev, mgCoarseSmooth);
+        return;
+    }
+
+    mgSmoothJacobi(lev, mgPreSmooth);
+    mgComputeResidual(lev);
+    mgRestrictResidual(lev);
+
+    mgVCycle(lev + 1);
+
+    mgProlongateAndAdd(lev + 1);
+    mgSmoothJacobi(lev, mgPostSmooth);
+}
+
+void MACWater::mgRemoveMeanFine() {
+    if (mgLevels.empty()) return;
+    MGLevel& F = mgLevels[0];
+    double sum = 0.0;
+    int cnt = 0;
+    const int N = F.nx * F.ny;
+    for (int id = 0; id < N; ++id) {
+        if (!F.fluid[id]) continue;
+        sum += (double)F.x[id];
+        cnt++;
+    }
+    if (cnt == 0) return;
+    float mean = (float)(sum / (double)cnt);
+    for (int id = 0; id < N; ++id) {
+        if (!F.fluid[id]) continue;
+        F.x[id] -= mean;
+    }
+}
+
+void MACWater::solvePressureMGWater(int vcycles, float tol) {
+    ensureWaterMG();
+    if (mgLevels.empty()) return;
+
+    MGLevel& F = mgLevels[0];
+    const int N = F.nx * F.ny;
+
+    auto maxAbsResidualFluid = [&]() -> float {
+        float m = 0.0f;
+        for (int id = 0; id < N; ++id) {
+            if (!F.fluid[id]) continue;
+            float a = std::fabs(F.r[id]);
+            if (!std::isfinite(a)) return std::numeric_limits<float>::infinity();
+            m = std::max(m, a);
+        }
+        return m;
+    };
+
+    auto maxAbsBFluid = [&]() -> float {
+        float m = 0.0f;
+        for (int id = 0; id < N; ++id) {
+            if (!F.fluid[id]) continue;
+            float a = std::fabs(F.b[id]);
+            if (!std::isfinite(a)) return std::numeric_limits<float>::infinity();
+            m = std::max(m, a);
+        }
+        return m;
+    };
+
+    if ((int)F.x.size() != N) F.x.assign(N, 0.0f);
+    if ((int)F.b.size() != N) F.b.assign(N, 0.0f);
+
+    for (int id = 0; id < N; ++id) {
+        if (F.fluid[id]) {
+            F.x[id] = p[(size_t)id];
+            F.b[id] = rhs[(size_t)id];
+        } else {
+            F.x[id] = 0.0f;
+            F.b[id] = 0.0f;
+        }
+    }
+
+    const float bInf = maxAbsBFluid();
+    if (bInf * dt <= tol) {
+        if (!mgHasDirichlet) mgRemoveMeanFine();
+        for (int id = 0; id < N; ++id) {
+            p[(size_t)id] = F.fluid[id] ? F.x[id] : 0.0f;
+        }
+        return;
+    }
+
+    mgComputeResidual(0);
+    float rInf = maxAbsResidualFluid();
+    if (!std::isfinite(rInf) || rInf * dt <= tol) {
+        if (!mgHasDirichlet) mgRemoveMeanFine();
+        for (int id = 0; id < N; ++id) {
+            p[(size_t)id] = F.fluid[id] ? F.x[id] : 0.0f;
+        }
+        return;
+    }
+
+    const int maxVCycles = std::max(1, vcycles);
+    for (int k = 0; k < maxVCycles; ++k) {
+        float prev = rInf;
+        mgVCycle(0);
+        mgComputeResidual(0);
+        rInf = maxAbsResidualFluid();
+
+        if (rInf > prev * 1.2f) {
+            std::fill(F.x.begin(), F.x.end(), 0.0f);
+            mgSmoothJacobi(0, 20);
+            mgComputeResidual(0);
+            break;
+        }
+
+        if (!mgHasDirichlet) mgRemoveMeanFine();
+
+        mgComputeResidual(0);
+        rInf = maxAbsResidualFluid();
+        if (!std::isfinite(rInf) || rInf * dt <= tol) break;
+    }
+
+    if (!mgHasDirichlet) mgRemoveMeanFine();
+
+    for (int id = 0; id < N; ++id) {
+        p[(size_t)id] = F.fluid[id] ? F.x[id] : 0.0f;
+    }
 }
 
 void MACWater::reseedParticlesFromField(const std::vector<float>& targetWater) {
@@ -1765,6 +2297,7 @@ void MACWater::step() {
     }
 
     applyHeightPressureForce();
+    applyViscosity();
     applyBoundary();
 
     // store pre-projection grid for FLIP delta
@@ -1789,6 +2322,58 @@ void MACWater::step() {
     gridToParticles();
     enforceParticleBounds();
     removeParticlesInSolids();
+
+    if (restVelocity > 0.0f) {
+        const float restVel = restVelocity * dx;
+
+        auto isLiquidCell = [&](int i, int j) {
+            if (i < 0 || i >= nx || j < 0 || j >= ny) return false;
+            const int id = idxP(i, j);
+            return !solid[(size_t)id] && liquid[(size_t)id];
+        };
+        auto liquidAdjacentU = [&](int i, int j) {
+            return isLiquidCell(i - 1, j) || isLiquidCell(i, j);
+        };
+        auto liquidAdjacentV = [&](int i, int j) {
+            return isLiquidCell(i, j - 1) || isLiquidCell(i, j);
+        };
+
+        float maxFace = 0.0f;
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                if (!liquidAdjacentU(i, j)) continue;
+                const float s = std::fabs(u[(size_t)idxU(i, j)]);
+                if (s > maxFace) maxFace = s;
+            }
+        }
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (!liquidAdjacentV(i, j)) continue;
+                const float s = std::fabs(v[(size_t)idxV(i, j)]);
+                if (s > maxFace) maxFace = s;
+            }
+        }
+
+        const float maxPart = maxParticleSpeed();
+        if (maxFace < restVel && maxPart < restVel) {
+            snapToRest(restVel);
+        } else if (maxFace < restVel) {
+            // Grid is nearly at rest; damp any straggler particle velocities toward PIC.
+            const float restVel2 = restVel * restVel;
+            for (Particle& p : particles) {
+                float picU, picV;
+                velAt(p.x, p.y, u, v, picU, picV);
+                const float picS2 = picU * picU + picV * picV;
+                if (picS2 < restVel2) {
+                    p.u = 0.0f;
+                    p.v = 0.0f;
+                } else {
+                    p.u = picU;
+                    p.v = picV;
+                }
+            }
+        }
+    }
 
     rasterizeWaterField();
 }

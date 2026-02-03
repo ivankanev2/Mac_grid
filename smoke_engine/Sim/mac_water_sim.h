@@ -33,13 +33,21 @@ struct MACWater : public MACGridCore {
     float sourceDownwardSpeed = 2.0f;
     float sourceVelBlend   = 0.85f;
     float sourceVelHold    = 0.12f;
-    float velDamping       = 1.0f;
+    float velDamping       = 0.0f;
+    float waterViscosity   = 5e-6f; // ~water-like, tune with dx/dt
+    int   viscosityIters   = 20;
+    float viscosityOmega   = 0.8f; // weighted Jacobi relaxation
+    float restVelocity     = 3.0f; // cells/sec; 0 disables rest snapping
     bool  openTop          = true;
-    float flipBlend        = 0.10f;
+    float flipBlend        = 0.9f;
     int   particlesPerCell = 6;
     int   pressureMaxIters = 400;
     float pressureTol      = 1e-6f;
     int   pressureRepeats  = 2;
+    bool  useMGPressure    = true;
+    int   pressureMGVcycles = 200;
+    float pressureMGTol    = 0.0f; // <=0 uses default open/closed tolerance
+    int   pressureMGPolishIters = 40;
     int   extrapIters      = 12;
     int   maskDilations    = 1;
     int   borderThickness  = 2;
@@ -51,7 +59,7 @@ struct MACWater : public MACGridCore {
     float targetMass       = 0.0f;
     float waterTargetDecay = 0.995f;
     float waterTargetMax   = 0.0f; // 0 = unlimited
-    int   separationIters  = 10;
+    int   separationIters  = 5;
     float particleRadiusScale = 0.4f;
     float separationStrength  = 0.8f;
     int   densityRelaxIters   = 1;
@@ -90,6 +98,29 @@ private:
     std::vector<int> lapL, lapR, lapB, lapT;
     std::vector<float> pcg_r, pcg_z, pcg_d, pcg_q, pcg_Ap;
 
+    struct MGLevel {
+        int nx = 0, ny = 0;
+        float invDx2 = 0.0f;
+        std::vector<uint8_t> solid;
+        std::vector<uint8_t> fluid;
+        std::vector<int> L, R, B, T;
+        std::vector<float> diagInv;
+        std::vector<float> x;
+        std::vector<float> b;
+        std::vector<float> Ax;
+        std::vector<float> r;
+    };
+
+    std::vector<MGLevel> mgLevels;
+    bool mgDirty = true;
+    bool mgHasDirichlet = false;
+    bool mgOpenTop = true;
+    int  mgMaxLevels = 6;
+    int  mgPreSmooth = 2;
+    int  mgPostSmooth = 2;
+    int  mgCoarseSmooth = 30;
+    float mgOmega = 0.8f;
+
     int stepCounter = 0;
     PressureDiagnostics lastPressureDiag;
 
@@ -101,12 +132,23 @@ private:
     void buildLiquidMask();
     void projectLiquid();
     void applyHeightPressureForce();
+    void applyViscosity();
     void rasterizeWaterField();
     void reseedParticlesFromField(const std::vector<float>& targetWater);
     void separateParticles();
     void relaxParticleDensity();
     void relaxColumnDensity();
     void removeLiquidDrift();
+    void snapToRest(float restVel);
+    void ensureWaterMG();
+    void solvePressureMGWater(int vcycles, float tol);
+    void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
+    void mgSmoothJacobi(int lev, int iters);
+    void mgComputeResidual(int lev);
+    void mgRestrictResidual(int fineLev);
+    void mgProlongateAndAdd(int coarseLev);
+    void mgVCycle(int lev);
+    void mgRemoveMeanFine();
     void removeParticlesInSolids();
     void enforceParticleBounds();
 };
