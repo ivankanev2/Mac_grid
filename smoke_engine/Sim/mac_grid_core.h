@@ -33,18 +33,12 @@ struct MACGridCore {
     void resetCore();
 
 
-    // void setOpenTop(bool v) { openTopBC = v; markPressureMatrixDirty(); mgDirty = true; }
 
     void setOpenTopBC(bool enabled); // testing stuff
     bool getOpenTop() const { return openTopBC; }
 
 
-    // inline bool isDirichletP(int i, int j) const {
-    // // Pin pressure on the top row when openTop is enabled
-    // // doesnt currently work well, so its temporarely disabled
-    // // return openTopBC && (j == ny - 1) && !isSolid(i, j);
-    // return false;
-    // }
+    
 
     float maxAbsDiv() const;
     float maxFaceSpeed() const;
@@ -79,7 +73,10 @@ struct MACGridCore {
 
     void solvePressurePCG(int maxIters = 200, float tol = 1e-6f);
     void solvePressureMG(int vcycles = 20, float tol = 1e-6f);
-    void debugCheckMGvsPCGOperator();
+    bool debugCheckMGvsPCGOperator(float eps = 1e-4f);
+
+    float divLInfFluid() const;
+    float divL2Fluid() const;
 
     void setSolidCell(int i, int j, bool s);
 
@@ -137,7 +134,7 @@ private:
     int  mgMaxLevels = 6;
     int  mgPreSmooth = 2;
     int  mgPostSmooth = 2;
-    float mgOmega = 1.4f;
+    float mgOmega = 1.4f; // DO NOT TOUCH THIS PLEASE
     int  mgCoarseSmooth = 120;
     int  mgVcyclesPerApply = 1;
     bool mgBuiltOpenTopBC = false;

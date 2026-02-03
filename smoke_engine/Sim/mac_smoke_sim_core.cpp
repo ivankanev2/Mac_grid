@@ -139,8 +139,14 @@ void MAC2D::step(float vortEps) {
     // setOpenTop(openTop);
     project();
 
+    computeDivergence();
+    std::printf("[POST-PROJ] maxDiv=%g\n", maxAbsDiv());
 
     applyBoundary();
+
+    computeDivergence();
+    std::printf("[POST-BC2 ] maxDiv=%g\n", maxAbsDiv());
+
     computeDivergence();
     printf("[POST-BC] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
 

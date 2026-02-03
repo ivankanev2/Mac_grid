@@ -91,6 +91,29 @@ float MACGridCore::maxFaceSpeed() const {
     return m;
 }
 
+float MACGridCore::divLInfFluid() const {
+    float m = 0.0f;
+    for (int j = 0; j < ny; ++j)
+        for (int i = 0; i < nx; ++i) {
+            if (isSolid(i,j)) continue;
+            m = std::max(m, std::fabs(div[idxP(i,j)]));
+        }
+    return m;
+}
+
+float MACGridCore::divL2Fluid() const {
+    double s = 0.0;
+    int cnt = 0;
+    for (int j = 0; j < ny; ++j)
+        for (int i = 0; i < nx; ++i) {
+            if (isSolid(i,j)) continue;
+            float d = div[idxP(i,j)];
+            s += (double)d * (double)d;
+            cnt++;
+        }
+    return (cnt > 0) ? (float)std::sqrt(s / (double)cnt) : 0.0f;
+}
+
 static bool findFirstNonFinite(const char* name, const std::vector<float>& a, int& outIdx, float& outVal) {
     for (int i = 0; i < (int)a.size(); ++i) {
         if (!std::isfinite(a[i])) { outIdx = i; outVal = a[i]; return true; }
@@ -578,6 +601,9 @@ void MACGridCore::ensureMultigrid() {
 
         mgLevels.push_back(std::move(C));
     }
+    #ifndef NDEBUG
+    debugCheckMGvsPCGOperator(1e-4f);
+    #endif
 }
 
 void MACGridCore::mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const {
@@ -1148,40 +1174,39 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     if (!openTopBC) removePressureMean();
 }
 
-void MACGridCore::debugCheckMGvsPCGOperator() {
+bool MACGridCore::debugCheckMGvsPCGOperator(float eps) {
     ensurePressureMatrix();
     ensureMultigrid();
 
     if (mgLevels.empty()) {
         std::printf("[DEBUG] No MG levels.\n");
-        return;
+        return true; // nothing to compare
     }
 
-    MGLevel& F = mgLevels[0];
     const int N = nx * ny;
-
     std::vector<float> x(N), Ax_mg(N), Ax_pcg(N);
-    // Fill x with something nontrivial but finite
-    for (int k = 0; k < N; ++k) x[k] = (float)((k % 17) - 8); // small-ish pattern
 
-    // MG operator on level 0
+    for (int k = 0; k < N; ++k) x[k] = (float)((k % 17) - 8);
+
     mgApplyA(0, x, Ax_mg);
-
-    // PCG operator
     applyLaplacian(x, Ax_pcg);
 
     float maxDiff = 0.0f;
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            int id = idxP(i, j);
-            if (isSolid(i, j)) continue;
-
-            float d = std::fabs(Ax_mg[id] - Ax_pcg[id]);
-            if (d > maxDiff) maxDiff = d;
+            if (isSolid(i,j)) continue;
+            int id = idxP(i,j);
+            maxDiff = std::max(maxDiff, std::fabs(Ax_mg[id] - Ax_pcg[id]));
         }
     }
 
-    std::printf("[DEBUG] max |A_mg - A_pcg| = %g\n", maxDiff);
+    if (maxDiff > eps) {
+        std::printf("[DEBUG] FAIL: max |A_mg - A_pcg| = %g (eps=%g)\n", maxDiff, eps);
+        return false;
+    } else {
+        std::printf("[DEBUG] OK  : max |A_mg - A_pcg| = %g\n", maxDiff);
+        return true;
+    }
 }
 
 void MACGridCore::project() {
@@ -1258,8 +1283,36 @@ void MACGridCore::project() {
 
     solvePressureMG(20, divTol);   // start with ~10–30 V-cycles
 
+
     auto t1 = std::chrono::high_resolution_clock::now();
     stats.pressureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
+
+    if (openTopBC) {
+        const int jCell = ny - 1; // top row of cells
+        const int jFace = ny;     // top boundary v-face row
+
+        float pTopMax = 0.0f;
+        float vTopMax = 0.0f;
+        int   pTopMaxI = -1;
+        int   vTopMaxI = -1;
+
+        for (int i = 0; i < nx; ++i) {
+            if (!isSolid(i, jCell)) {
+                float ap = std::fabs(p[idxP(i, jCell)]);
+                if (ap > pTopMax) { pTopMax = ap; pTopMaxI = i; }
+            }
+
+            // v at the top boundary face exists for all i in [0, nx-1]
+            float av = std::fabs(v[idxV(i, jFace)]);
+            if (av > vTopMax) { vTopMax = av; vTopMaxI = i; }
+        }
+
+        static int dbgFrame = 0;
+        if ((dbgFrame++ & 31) == 0) {
+            std::printf("[TOP ] |p|_max(topCells)=%g at i=%d   |v|_max(topFace)=%g at i=%d\n",
+                        pTopMax, pTopMaxI, vTopMax, vTopMaxI);
+        }
+    }
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 1; i < nx; ++i) {
@@ -1295,6 +1348,14 @@ void MACGridCore::project() {
         const float gradp = (p_outside - p_inside) / dx;
         v[idxV(i, jFace)] -= dt * gradp;
     }
+    if (openTopBC) {
+        float vTopMax2 = 0.0f;
+        for (int i = 0; i < nx; ++i)
+            vTopMax2 = std::max(vTopMax2, std::fabs(v[idxV(i, ny)]));
+        static int dbg2 = 0;
+        if ((dbg2++ & 31) == 0)
+            std::printf("[TOP2] |v|_max(topFace AFTER bc)=%g\n", vTopMax2);
+    }
 }
 
     // Clamp face speeds to avoid extreme velocities, they dont occur anymore as of now
@@ -1303,8 +1364,14 @@ void MACGridCore::project() {
     for (float& val : v) val = clampf(val, -MAX_FACE_SPEED, MAX_FACE_SPEED);
 
     computeDivergence();
-    std::printf("[AFTER ] maxDiv=%g maxFace=%g (iters=%d)\n",
-                maxAbsDiv(), maxFaceSpeed(), stats.pressureIters);
+
+    const float divInf = divLInfFluid();
+    const float divL2  = divL2Fluid();
+    std::printf("[AFTER ] divInf=%g divL2=%g maxFace=%g (iters=%d)\n",
+                divInf, divL2, maxFaceSpeed(), stats.pressureIters);
+
+    // std::printf("[AFTER ] maxDiv=%g maxFace=%g (iters=%d)\n",
+    //             maxAbsDiv(), maxFaceSpeed(), stats.pressureIters);
     stats.maxDivAfter = maxAbsDiv();
     stats.maxFaceSpeedAfter = maxFaceSpeed();
 }
