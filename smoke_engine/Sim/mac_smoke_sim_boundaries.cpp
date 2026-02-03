@@ -24,11 +24,7 @@ void MAC2D::applyBoundary() {
         u[idxU(nx, j)] = 0.0f;
     }
 
-    // // Floor: kill tangential component u(i,0) to prevent "valve sideways leak"
-    // its fixed, keeping it just in case
-    // for (int i = 0; i <= nx; ++i) {
-    //     u[idxU(i, 0)] = 0.0f;
-    // }
+    
 
     // Floor / ceiling: v
     for (int i = 0; i < nx; i++) {
@@ -39,8 +35,8 @@ void MAC2D::applyBoundary() {
         if (!getOpenTop()) {
             v[idxV(i, ny)] = 0.0f;
         } else {
-            // copy from interior face and clamp to outflow-only
-            v[idxV(i, ny)] = std::max(0.0f, v[idxV(i, ny - 1)]);
+            // OPEN TOP: leave v(i,ny) alone.
+            // Do NOT clamp/copy here or you will break the divergence projection.
         }
     }
 
@@ -168,15 +164,15 @@ void MAC2D::setOpenTop(bool on)
     printf("[setOpenTop] applied. now=%d\n", (int)getOpenTop());
 
     
-    for (int i = 1; i < nx - 1; ++i)
-        solid[idxP(i, ny - 1)] = on ? 0 : 1;
+    // for (int i = 1; i < nx - 1; ++i)
+    //     solid[idxP(i, ny - 1)] = on ? 0 : 1;
 
     if (!on) {
         for (int i = 0; i < nx; ++i)
             v[idxV(i, ny)] = 0.0f;
     }
 
-    invalidatePressureMatrix();
+    // invalidatePressureMatrix();
     enforceBoundaries();
 }
 
