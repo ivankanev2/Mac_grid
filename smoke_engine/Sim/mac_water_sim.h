@@ -34,19 +34,19 @@ struct MACWater : public MACGridCore {
     float sourceVelBlend   = 0.85f;
     float sourceVelHold    = 0.12f;
     float velDamping       = 0.0f;
-    float waterViscosity   = 5e-6f; // ~water-like, tune with dx/dt
-    int   viscosityIters   = 20;
+    float waterViscosity   = 5e-10f; // lighter viscosity to avoid "solid block"
+    int   viscosityIters   = 10;
     float viscosityOmega   = 0.8f; // weighted Jacobi relaxation
     float restVelocity     = 3.0f; // cells/sec; 0 disables rest snapping
     bool  openTop          = true;
-    float flipBlend        = 0.9f;
+    float flipBlend        = 0.1f;
     int   particlesPerCell = 6;
     int   pressureMaxIters = 400;
     float pressureTol      = 1e-6f;
     int   pressureRepeats  = 2;
     bool  useMGPressure    = true;
     int   pressureMGVcycles = 200;
-    float pressureMGTol    = 0.0f; // <=0 uses default open/closed tolerance
+    float pressureMGTol    = 1e-4f;
     int   pressureMGPolishIters = 40;
     int   extrapIters      = 12;
     int   maskDilations    = 1;
@@ -82,7 +82,7 @@ struct MACWater : public MACGridCore {
     };
 
     // Optional per-step pressure diagnostics (printed from the water solver only).
-    bool pressureDiagnostics = false;
+    bool pressureDiagnostics = true;
     int  pressureDiagInterval = 1;
     const PressureDiagnostics& lastPressureDiagnostics() const { return lastPressureDiag; }
 
@@ -143,7 +143,7 @@ private:
     void ensureWaterMG();
     void solvePressureMGWater(int vcycles, float tol);
     void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
-    void mgSmoothJacobi(int lev, int iters);
+    void mgSmoothRBGS(int lev, int iters);
     void mgComputeResidual(int lev);
     void mgRestrictResidual(int fineLev);
     void mgProlongateAndAdd(int coarseLev);
