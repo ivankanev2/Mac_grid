@@ -19,6 +19,20 @@ struct MACGridCore {
     // Solids
     std::vector<uint8_t> solid;
 
+    enum PressureSolverKind : int {
+        SOLVER_PCG = 0,
+        SOLVER_MG  = 1
+    };
+
+    enum PressureStopReason : int {
+        STOP_NONE = 0,
+        STOP_ABS_TOL,
+        STOP_REL_TOL,
+        STOP_MAX_ITERS,
+        STOP_NONFINITE,
+        STOP_RESIDUAL_INCREASE
+    };
+
     struct FrameStats {
         float dt = 0.0f;
         float maxDivBefore = 0.0f;
@@ -27,6 +41,21 @@ struct MACGridCore {
         float maxFaceSpeedAfter  = 0.0f;
         int   pressureIters = 0;
         float pressureMs    = 0.0f;
+
+        int   openTopBC = 0;                 // 0/1
+        int   pressureSolver = SOLVER_MG;    // PCG or MG
+
+        float rhsMaxPredDiv  = 0.0f;         // bInf * dt
+        float predDivInitial = 0.0f;         // rInf0 * dt
+        float predDivFinal   = 0.0f;         // rInfEnd * dt
+
+        int   pressureStopReason = STOP_NONE;
+
+        int   opCheckPass = 0;               // 0/1
+        float opDiffMax   = 0.0f;            // max |A_mg - A_pcg|
+
+        int   mgResidualIncrease = 0;        // 0/1
+
     };
 
     MACGridCore(int NX, int NY, float DX, float DT);
@@ -73,8 +102,8 @@ struct MACGridCore {
 
     void solvePressurePCG(int maxIters = 200, float tol = 1e-6f);
     void solvePressureMG(int vcycles = 20, float tol = 1e-6f);
-    bool debugCheckMGvsPCGOperator(float eps = 1e-4f);
-
+    bool debugCheckMGvsPCGOperator(float eps = 1e-4f, float* outMaxDiff = nullptr);
+    
     float divLInfFluid() const;
     float divL2Fluid() const;
 

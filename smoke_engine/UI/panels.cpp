@@ -56,7 +56,19 @@ enum StatID {
     STAT_MAXSPEED_AFTER,
     STAT_PRES_ITERS,
     STAT_PRES_MS,
+
+
+    STAT_OP_CHECK_PASS,       // 0/1 if op check passed
+    STAT_OP_DIFF_MAX,         // max |A_mg - A_pcg|
+    STAT_MG_RESIDUAL_INCR,    // 0/1 if MG residual increased during v-cycles
+    STAT_RHS_MAX_PREDDIV,     // bInf * dt
+    STAT_PREDDIV_INITIAL,     // initial rInf * dt (before solve)
+    STAT_PREDDIV_FINAL,       // final rInf * dt (after solve)
+    STAT_PRESSURE_STOP_REASON,// enum value (int)
+    STAT_PRESSURE_SOLVER,     // enum value: SOLVER_MG / SOLVER_PCG
+
     STAT_COUNT
+
 };
 
 static const char* kStatNames[STAT_COUNT] = {
@@ -66,11 +78,21 @@ static const char* kStatNames[STAT_COUNT] = {
     "max face speed (before)",
     "max face speed (after)",
     "pressure iters",
-    "pressure ms"
+    "pressure ms",
+
+    "op check pass",
+    "op diff max",
+    "mg residual incr",
+    "rhs max predDiv",
+    "predDiv initial",
+    "predDiv final",
+    "pressure stop reason",
+    "pressure solver"
 };
 
 static Ring g_hist[STAT_COUNT] = {
-    Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360)
+    Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360),
+    Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360), Ring(360)
 };
 
 static int  g_selectedStat = STAT_PRES_MS;
@@ -600,13 +622,38 @@ static void drawDebugTabs(MAC2D& sim, MACWater& water, Settings& ui, Probe& prob
                     case STAT_MAXSPEED_AFTER: return st.maxFaceSpeedAfter;
                     case STAT_PRES_ITERS:     return (float)st.pressureIters;
                     case STAT_PRES_MS:        return st.pressureMs;
+
+                    case STAT_OP_CHECK_PASS:      return (float)st.opCheckPass;
+                    case STAT_OP_DIFF_MAX:        return st.opDiffMax;
+                    case STAT_MG_RESIDUAL_INCR:   return (float)st.mgResidualIncrease;
+                    case STAT_RHS_MAX_PREDDIV:    return st.rhsMaxPredDiv;
+                    case STAT_PREDDIV_INITIAL:    return st.predDivInitial;
+                    case STAT_PREDDIV_FINAL:      return st.predDivFinal;
+                    case STAT_PRESSURE_STOP_REASON: return (float)st.pressureStopReason;
+                    case STAT_PRESSURE_SOLVER:    return (float)st.pressureSolver;
+
                     default: return 0.0f;
                 }
             };
 
             float cur = currentValue(g_selectedStat);
             ImGui::Text("Selected: %s", kStatNames[g_selectedStat]);
-            ImGui::Text("Current: %.6f", cur);
+
+            // human readable for two enum-like stats
+            if (g_selectedStat == STAT_PRESSURE_STOP_REASON) {
+                const int code = (int)cur;
+                const char* names[] = {
+                    "STOP_NONE", "STOP_ABS_TOL", "STOP_REL_TOL", "STOP_MAX_ITERS", "STOP_NONFINITE", "STOP_RESIDUAL_INCREASE"
+                };
+                const char* s = (code >= 0 && code < (int)(sizeof(names)/sizeof(names[0]))) ? names[code] : "UNKNOWN";
+                ImGui::Text("Current: %d (%s)", code, s);
+            } else if (g_selectedStat == STAT_PRESSURE_SOLVER) {
+                const int code = (int)cur;
+                const char* s = (code == 0) ? "PCG" : (code == 1) ? "MG" : "UNKNOWN";
+                ImGui::Text("Current: %d (%s)", code, s);
+            } else {
+                ImGui::Text("Current: %.6f", cur);
+            }
 
             ImGui::Separator();
 
@@ -915,6 +962,15 @@ Actions DrawAll(MAC2D& sim,
         g_hist[STAT_MAXSPEED_AFTER].push(st.maxFaceSpeedAfter);
         g_hist[STAT_PRES_ITERS].push((float)st.pressureIters);
         g_hist[STAT_PRES_MS].push(st.pressureMs);
+
+        g_hist[STAT_OP_CHECK_PASS].push((float)st.opCheckPass);
+        g_hist[STAT_OP_DIFF_MAX].push(st.opDiffMax);
+        g_hist[STAT_MG_RESIDUAL_INCR].push((float)st.mgResidualIncrease);
+        g_hist[STAT_RHS_MAX_PREDDIV].push(st.rhsMaxPredDiv);
+        g_hist[STAT_PREDDIV_INITIAL].push(st.predDivInitial);
+        g_hist[STAT_PREDDIV_FINAL].push(st.predDivFinal);
+        g_hist[STAT_PRESSURE_STOP_REASON].push((float)st.pressureStopReason);
+        g_hist[STAT_PRESSURE_SOLVER].push((float)st.pressureSolver);
     }
 
     Actions a = drawControls(sim, water, ui);

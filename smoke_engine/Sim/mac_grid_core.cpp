@@ -602,7 +602,10 @@ void MACGridCore::ensureMultigrid() {
         mgLevels.push_back(std::move(C));
     }
     #ifndef NDEBUG
-    debugCheckMGvsPCGOperator(1e-4f);
+    float md = 0.0f;
+    bool ok = debugCheckMGvsPCGOperator(1e-4f, &md);
+    stats.opCheckPass = ok ? 1 : 0;
+    stats.opDiffMax   = md;
     #endif
 }
 
@@ -949,6 +952,9 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
     applyLaplacian(p, pcg_Ap);
     for (int k = 0; k < N; ++k) pcg_r[k] = rhs[k] - pcg_Ap[k];
 
+    // Initial residual magnitude (for relative stopping)
+    const float rInf0 = std::max(maxAbsResidualFluid(), 1e-30f); // avoid div0
+
     // Early out: if RHS is basically zero, pressure solve is pointless
     const float bInf = maxAbsBFluid();
     if (bInf * dt <= tol) {
@@ -1002,8 +1008,12 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
         const float rInf = maxAbsResidualFluid();
         if ((it & 7) == 0) std::printf("[PCG] it=%d predDiv=%g\n", it, rInf * dt);
 
-        // Primary stopping: divergence-style (matches your logs)
-        if (rInf * dt <= tol) break;
+
+        if (rInf * dt <= tol || rInf <= relTol * rInf0)
+        {
+            break;
+        } 
+                
 
         // Secondary stopping: relative L2 residual
         const float rNorm2 = dotFluid(pcg_r, pcg_r);
@@ -1035,13 +1045,9 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
 void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     std::printf("[MG ] tol=%g (openTopBC=%d)\n", tol, (int)openTopBC);
 
-    // If solids / topology changed you should already have set mgDirty,
-    // but forcing a rebuild here is safe (just a bit slower).
-    // mgDirty = true;
     ensureMultigrid();
 
     if (mgLevels.empty()) {
-        // Fallback if MG not built for some reason
         solvePressurePCG(80, tol);
         return;
     }
@@ -1072,7 +1078,7 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     };
 
     auto removeMeanFromFineX = [&]() {
-        if (openTopBC) return; // Dirichlet already fixes the gauge
+        if (openTopBC) return;
         double sum = 0.0;
         int cnt = 0;
         for (int id = 0; id < N; ++id) {
@@ -1089,8 +1095,7 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     };
 
     auto allFinite = [](const std::vector<float>& a) {
-        for (float v : a)
-            if (!std::isfinite(v)) return false;
+        for (float v : a) if (!std::isfinite(v)) return false;
         return true;
     };
 
@@ -1110,10 +1115,15 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     F.x = p;
     F.b = rhs;
 
-    // Early out if RHS is tiny (matches PCG logic)
+    // ---- Step 2: define rhsInf once and use it for relative stopping ----
     const float bInf = maxAbsBFluid();
-    if (bInf * dt <= tol) {
+    stats.rhsMaxPredDiv = bInf * dt;
+
+    // Early out if RHS is tiny (keep your behavior)
+    if (!std::isfinite(bInf) || bInf * dt <= tol) {
         stats.pressureIters = 0;
+        stats.predDivInitial = 0.0f;
+        stats.predDivFinal   = 0.0f;
         if (!openTopBC) removePressureMean();
         return;
     }
@@ -1121,6 +1131,7 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     // Initial residual
     mgComputeResidual(0);
     float rInf = maxAbsResidualFluid();
+    stats.predDivInitial = rInf * dt;
     std::printf("[MG ] predDiv_initial=%g\n", rInf * dt);
 
     if (!std::isfinite(rInf) || rInf * dt <= tol) {
@@ -1130,53 +1141,100 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
         return;
     }
 
+    // ---- Step 2 stopping params (ABS + REL but never looser than abs) ----
+    const float relTol = 1e-3f;
+
+    // rhs magnitude in "predDiv space"
+    const float rhsPredDiv = bInf * dt;
+
+    // relative target in predDiv space
+    const float relPredDiv = relTol * rhsPredDiv;
+
+    // final stop threshold in predDiv space (NEVER looser than abs tol)
+    const float stopPredDiv = std::min(tol, relPredDiv);
+
+    // (optional) for logging only
+    const float relThrResidual = std::max(bInf * relTol, 1e-30f);
+
+
     int used = 0;
+
     for (int k = 0; k < maxVCycles; ++k) {
         used = k + 1;
 
-        float prev = rInf;
-        // Full V-cycle starting from level 0
+        const float prev = rInf;
+
+        // Full V-cycle
         mgVCycle(0);
-        mgComputeResidual(0);
-        rInf = maxAbsResidualFluid();
 
-        if (rInf > prev * 1.2f) {
-            std::printf("[MG ] WARNING: residual increased (%g -> %g). Resetting x and switching to smoothing-only this frame.\n", prev, rInf);
-            std::fill(F.x.begin(), F.x.end(), 0.0f);
-            // do a few fine smooths to keep the sim alive
-            mgSmoothRBGS(0, 20);
-            mgComputeResidual(0);
-            break;
-        }
-
-
-        // For closed domains, keep the solution in the zero-mean subspace
+        // Gauge fix for closed domain
         removeMeanFromFineX();
 
-        // Recompute residual on the fine level
+        // Compute residual ONCE per cycle (important)
         mgComputeResidual(0);
         rInf = maxAbsResidualFluid();
 
-        if ((k & 3) == 0) {
-            std::printf("[MG ] v=%d predDiv=%g\n", k, rInf * dt);
+        const float predDiv = rInf * dt;
+
+        // Step 2: stop if predDiv <= min(absTol, relTol * rhsPredDiv)
+        if (predDiv <= stopPredDiv) {
+            stats.pressureStopReason = (stopPredDiv == tol) ? STOP_ABS_TOL : STOP_REL_TOL;
+            break;
         }
 
-        if (!std::isfinite(rInf) || rInf * dt <= tol)
+        // Your safety: detect blow-up and recover
+        if (rInf > prev * 1.2f) {
+            stats.mgResidualIncrease = 1;
+            stats.pressureStopReason = STOP_RESIDUAL_INCREASE;
+            std::printf("[MG ] WARNING: residual increased (%g -> %g). Resetting x and smoothing.\n", prev, rInf);
+            std::fill(F.x.begin(), F.x.end(), 0.0f);
+            mgSmoothRBGS(0, 20);
+            mgComputeResidual(0);
+            rInf = maxAbsResidualFluid();
             break;
+        }
+
+        if (!std::isfinite(rInf)) {
+            stats.pressureStopReason = STOP_NONFINITE;
+            break;
+        }
+
+       
+
+        if ((k & 3) == 0) {
+            std::printf("[MG ] v=%d predDiv=%g  (absTol=%g  relPredDiv=%g  stop=%g)\n",
+                        k, predDiv, tol, relPredDiv, stopPredDiv);
+        }
+
+        
+        // if ((k & 3) == 0) {
+        //     std::printf("[MG ] v=%d predDiv=%g (stop=%g abs=%g rel=%g)\n",
+        //                 k, predDiv, stopPredDiv, tol, relPredDiv);
+        // }
+
+        // if (predDiv <= stopPredDiv) {
+        //     stats.pressureStopReason = (stopPredDiv == tol) ? STOP_ABS_TOL : STOP_REL_TOL;
+        //     break;
+        // }
     }
+
+    if (stats.pressureStopReason == STOP_NONE)
+        stats.pressureStopReason = STOP_MAX_ITERS;
 
     stats.pressureIters = used;
 
-    // Copy solution back to main pressure field
+    mgComputeResidual(0);
+    rInf = maxAbsResidualFluid();
+    stats.predDivFinal = rInf * dt;
+
     p = F.x;
 
-    // Gauge fix for closed domains (keeps continuity w/ PCG path)
     if (!openTopBC) removePressureMean();
 }
 
-bool MACGridCore::debugCheckMGvsPCGOperator(float eps) {
+bool MACGridCore::debugCheckMGvsPCGOperator(float eps, float* outMaxDiff) {
     ensurePressureMatrix();
-    ensureMultigrid();
+    // ensureMultigrid();
 
     if (mgLevels.empty()) {
         std::printf("[DEBUG] No MG levels.\n");
@@ -1199,6 +1257,8 @@ bool MACGridCore::debugCheckMGvsPCGOperator(float eps) {
             maxDiff = std::max(maxDiff, std::fabs(Ax_mg[id] - Ax_pcg[id]));
         }
     }
+
+    if (outMaxDiff) *outMaxDiff = maxDiff;
 
     if (maxDiff > eps) {
         std::printf("[DEBUG] FAIL: max |A_mg - A_pcg| = %g (eps=%g)\n", maxDiff, eps);
@@ -1242,6 +1302,15 @@ void MACGridCore::project() {
     stats.maxDivBefore = maxAbsDiv();
     stats.maxFaceSpeedBefore = maxFaceSpeed();
 
+    stats.openTopBC = openTopBC ? 1 : 0;
+    stats.pressureStopReason = STOP_NONE;
+    stats.mgResidualIncrease = 0;
+    stats.opCheckPass = 0;
+    stats.opDiffMax = 0.0f;
+    stats.rhsMaxPredDiv = 0.0f;
+    stats.predDivInitial = 0.0f;
+    stats.predDivFinal = 0.0f;
+
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             int id = idxP(i, j);
@@ -1249,6 +1318,15 @@ void MACGridCore::project() {
             else              rhs[id] = -div[id] / dt; // i swear to got if the sign change here breaks another thing
         }
     }
+
+    // rhsMaxPredDiv = max|rhs| * dt  (predicts max divergence after solve)
+    float bInf = 0.0f;
+    for (int j = 0; j < ny; ++j)
+    for (int i = 0; i < nx; ++i) {
+        if (isSolid(i,j)) continue;
+        bInf = std::max(bInf, std::fabs(rhs[idxP(i,j)]));
+    }
+    stats.rhsMaxPredDiv = bInf * dt;
 
     if (!openTopBC) {
     double sum = 0.0;
@@ -1280,6 +1358,7 @@ void MACGridCore::project() {
 
     float divTol = openTopBC ? 5e-4f : 1e-4f;
 
+    stats.pressureSolver = SOLVER_MG;
 
     solvePressureMG(20, divTol);   // start with ~10–30 V-cycles
 
