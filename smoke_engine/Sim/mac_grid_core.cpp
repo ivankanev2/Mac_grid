@@ -642,12 +642,14 @@ void MACGridCore::mgSmoothJacobi(int lev, int iters) {
     MGLevel& L = mgLevels[lev];
     const int N = L.nx * L.ny;
 
+    const float omega = std::max(0.0f, std::min(mgJacobiOmega, 1.0f)); // Jacobi should be <= 1
+
     for (int it = 0; it < iters; ++it) {
         mgApplyA(lev, L.x, L.Ax);
         for (int id = 0; id < N; ++id) {
             if (L.solid[id]) continue;
             float r = L.b[id] - L.Ax[id];
-            L.x[id] += mgOmega * (L.diagInv[id] * r);
+            L.x[id] += omega * (L.diagInv[id] * r);
         }
     }
 }
@@ -657,8 +659,13 @@ void MACGridCore::mgSmoothRBGS(int lev, int iters)
     MGLevel& L = mgLevels[lev];
     const int nx = L.nx, ny = L.ny;
 
-    // Use this as SOR omega (1.0 = plain GS, 1.3–1.8 typical).
-    const float omega = mgOmega;
+    // Default: plain GS (ω = 1.4) => stable
+    float omega = 1.0f;
+
+      // SOR, but clamped so it can’t explode.
+    if (mgUseSOR) {
+        omega = clampf(mgSORomega, 1.0f, 1.9f);
+    }
 
     for (int it = 0; it < iters; ++it) {
         for (int color = 0; color < 2; ++color) {

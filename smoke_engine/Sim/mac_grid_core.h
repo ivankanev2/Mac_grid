@@ -103,7 +103,7 @@ struct MACGridCore {
     void solvePressurePCG(int maxIters = 200, float tol = 1e-6f);
     void solvePressureMG(int vcycles = 20, float tol = 1e-6f);
     bool debugCheckMGvsPCGOperator(float eps = 1e-4f, float* outMaxDiff = nullptr);
-    
+
     float divLInfFluid() const;
     float divL2Fluid() const;
 
@@ -163,7 +163,10 @@ private:
     int  mgMaxLevels = 6;
     int  mgPreSmooth = 2;
     int  mgPostSmooth = 2;
-    float mgOmega = 1.4f; // DO NOT TOUCH THIS PLEASE
+    // float mgOmega = 1.4f; // DO NOT TOUCH THIS PLEASE
+    float mgJacobiOmega = 0.67f;   // only used by Jacobi (if you keep it)
+    float mgSORomega    = 1.4f;    // used by RBGS as SOR ω (default safe)
+    bool  mgUseSOR       = true;  // default OFF: RBGS uses plain GS (ω=1)
     int  mgCoarseSmooth = 120;
     int  mgVcyclesPerApply = 1;
     bool mgBuiltOpenTopBC = false;
