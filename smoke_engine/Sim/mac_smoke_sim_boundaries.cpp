@@ -36,10 +36,11 @@ void MAC2D::applyBoundary() {
         if (!(valveOpen && inValve(i))) v[idxV(i, 0)] = 0.0f;
 
         // top: closed unless openTop (zero-gradient outflow)
-        if (!openTop) {
-        v[idxV(i, ny)] = 0.0f;   // closed top
+        if (!getOpenTop()) {
+            v[idxV(i, ny)] = 0.0f;
         } else {
-            // openTopBC: do nothing here (projection already set v(i,ny))
+            // copy from interior face and clamp to outflow-only
+            v[idxV(i, ny)] = std::max(0.0f, v[idxV(i, ny - 1)]);
         }
     }
 
@@ -156,15 +157,27 @@ void MAC2D::applyValveSink() {
         }
     }
 }
+void MAC2D::setOpenTop(bool on)
+{
+    printf("[setOpenTop] requested=%d current=%d\n", (int)on, (int)getOpenTop());
 
-void MAC2D::setOpenTop(bool on) {
-    openTop = on;
-    MACGridCore::setOpenTop(on); // forgot to add this earlier ops
-    for (int i = 0; i < nx; ++i) {
-        solid[idxP(i, ny - 1)] = openTop ? 0 : 1;
+    if (getOpenTop() == on) return;
+
+    setOpenTopBC(on);
+
+    printf("[setOpenTop] applied. now=%d\n", (int)getOpenTop());
+
+    
+    for (int i = 1; i < nx - 1; ++i)
+        solid[idxP(i, ny - 1)] = on ? 0 : 1;
+
+    if (!on) {
+        for (int i = 0; i < nx; ++i)
+            v[idxV(i, ny)] = 0.0f;
     }
 
     invalidatePressureMatrix();
+    enforceBoundaries();
 }
 
 void MAC2D::enforceBoundaries() {

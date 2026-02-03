@@ -4,7 +4,7 @@
 
 void MAC2D::applyScalarOutflowTop(std::vector<float>& phi, float outsideValue, int layers)
 {
-    if (!openTop) return;
+    if (!getOpenTop()) return;
     layers = std::max(1, std::min(layers, ny));
 
     for (int j = ny - layers; j < ny; ++j) {
@@ -52,8 +52,8 @@ void MAC2D::reset() {
 
     // Outer walls
     for (int i = 0; i < nx; ++i) {
-        solid[idxP(i, 0)]       = 1;
-        solid[idxP(i, ny - 1)]  = openTop ? 0 : 1;
+        solid[idxP(i, 0)]      = 1;   // bottom wall cells (except valve gets carved)
+        solid[idxP(i, ny - 1)] = 1;   // IMPORTANT: top row is never solid; BC handles open/closed
     }
     for (int j = 0; j < ny; ++j) {
         solid[idxP(0, j)]       = 1;
@@ -116,6 +116,7 @@ void MAC2D::addSolidCircle(float cx, float cy, float r) {
 }
 
 void MAC2D::step(float vortEps) {
+    printf("[step] openTop=%d\n", (int)getOpenTop());
     // Velocity BC only (don’t inject scalars here)
     applyValveVelocityBC();
     applyBoundary();
@@ -133,8 +134,10 @@ void MAC2D::step(float vortEps) {
 
     addVorticityConfinement(vortEps);
 
-    setOpenTop(openTop);
+    // setOpenTop(openTop);
     project();
+
+
     applyBoundary();
     computeDivergence();
     printf("[POST-BC] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
@@ -152,7 +155,7 @@ void MAC2D::step(float vortEps) {
 
 
     // top outflow (now it won’t fight your injection timing)
-    if (openTop) {
+    if (getOpenTop()) {
         applyScalarOutflowTop(smoke, 0.0f,        4);
         applyScalarOutflowTop(temp,  0.0f, 4);
         applyScalarOutflowTop(age,   0.0f,        4);

@@ -418,7 +418,7 @@ static Actions drawControls(MAC2D& sim, MACWater& water, Settings& ui) {
     ImGui::Checkbox("Play", &ui.playing);
     ImGui::Separator();
 
-    bool ot = sim.openTop;
+    bool ot = sim.getOpenTop();
     if (ImGui::Checkbox("Open top (outflow)", &ot)) sim.setOpenTop(ot);
 
     bool open = sim.isValveOpen();
@@ -802,10 +802,16 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
                             float dx = (x + 0.5f) / sim.nx - sx;
                             float dy = (y + 0.5f) / sim.ny - sy;
                             if (dx*dx + dy*dy <= ui.brushRadius*ui.brushRadius) {
-                                sim.solid[sim.idxP(x,y)] = 0;
+                                const int id = sim.idxP(x,y);
+                                sim.solid[id] = 0;
+                                sim.smoke[id] = 0.0f;
+                                sim.temp[id]  = 0.0f;
+                                sim.age[id]   = 0.0f;
                             }
                         }
                     }
+                    sim.invalidatePressureMatrix();
+                    sim.enforceBoundaries();
                 }
             }
         }

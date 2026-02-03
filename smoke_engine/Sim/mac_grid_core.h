@@ -33,7 +33,9 @@ struct MACGridCore {
     void resetCore();
 
 
-    void setOpenTop(bool v) { openTopBC = v; markPressureMatrixDirty(); mgDirty = true; }
+    // void setOpenTop(bool v) { openTopBC = v; markPressureMatrixDirty(); mgDirty = true; }
+
+    void setOpenTopBC(bool enabled); // testing stuff
     bool getOpenTop() const { return openTopBC; }
 
 
@@ -79,6 +81,8 @@ struct MACGridCore {
     void solvePressureMG(int vcycles = 20, float tol = 1e-6f);
     void debugCheckMGvsPCGOperator();
 
+    void setSolidCell(int i, int j, bool s);
+
     inline bool isDirichletP(int i, int j) const {
     // Top row is pressure Dirichlet when open
     return openTopBC && (j == ny - 1) && !isSolid(i,j);
@@ -94,7 +98,7 @@ struct MACGridCore {
                                 std::vector<float>& phi0,
                                 float dissipation);
 
-    void invalidatePressureMatrix() { markPressureMatrixDirty(); }
+    void invalidatePressureMatrix() { markPressureMatrixDirty(); mgDirty = true; }
     const FrameStats& getStats() const { return stats; }
 
     
@@ -109,7 +113,7 @@ private:
 
     std::vector<float> pcg_r, pcg_z, pcg_d, pcg_q, pcg_Ap;
 
-    void markPressureMatrixDirty() { pressureMatrixDirty = true; markMGDirty(); }
+    void markPressureMatrixDirty() { pressureMatrixDirty = true; }
     void ensurePressureMatrix();
     void ensurePCGBuffers();
     void removePressureMean();
@@ -136,6 +140,10 @@ private:
     float mgOmega = 0.8f;
     int  mgCoarseSmooth = 30;
     int  mgVcyclesPerApply = 1;
+    bool mgBuiltOpenTopBC = false;
+    int  mgBuiltNx = 0;
+    int  mgBuiltNy = 0;
+    bool mgBuiltValid = false;
 
     std::vector<MGLevel> mgLevels;
     bool mgDirty = true;

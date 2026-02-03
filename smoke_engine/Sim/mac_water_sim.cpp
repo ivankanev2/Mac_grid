@@ -891,7 +891,7 @@ void MACWater::projectLiquid() {
     auto isSolidOrBoundary = [&](int i, int j) {
         if (i < 0 || i >= nx) return true;
         if (j < 0) return true;
-        if (j >= ny) return !openTop;
+        if (j >= ny) return !getOpenTop();
         return solid[(size_t)idxP(i, j)] != 0;
     };
 

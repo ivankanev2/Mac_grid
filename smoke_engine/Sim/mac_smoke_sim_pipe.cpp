@@ -39,7 +39,7 @@ void MAC2D::rebuildSolidsFromPipe(bool clearInterior) {
     // 2) re-apply outer walls
     for (int i = 0; i < nx; ++i) {
         solid[idxP(i, 0)] = 1;
-        solid[idxP(i, ny - 1)] = openTop ? 0 : 1;
+        solid[idxP(i, ny - 1)] = getOpenTop() ? 0 : 1;
     }
     for (int j = 0; j < ny; ++j) { solid[idxP(0, j)] = 1; solid[idxP(nx - 1, j)] = 1; }
 
