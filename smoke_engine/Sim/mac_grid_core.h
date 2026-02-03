@@ -137,8 +137,8 @@ private:
     int  mgMaxLevels = 6;
     int  mgPreSmooth = 2;
     int  mgPostSmooth = 2;
-    float mgOmega = 0.8f;
-    int  mgCoarseSmooth = 30;
+    float mgOmega = 1.4f;
+    int  mgCoarseSmooth = 120;
     int  mgVcyclesPerApply = 1;
     bool mgBuiltOpenTopBC = false;
     int  mgBuiltNx = 0;
@@ -153,7 +153,11 @@ private:
     void ensureMultigrid();
 
     void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
+
+    // the smoothers 
     void mgSmoothJacobi(int lev, int iters);
+    void mgSmoothRBGS(int lev, int iters);
+
     void mgComputeResidual(int lev);
     void mgRestrictResidual(int fineLev);
     void mgProlongateAndAdd(int coarseLev);
