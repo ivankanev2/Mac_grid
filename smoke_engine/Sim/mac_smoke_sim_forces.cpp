@@ -32,7 +32,7 @@ void MAC2D::diffuseVelocityImplicit() {
         }
         if (j == ny) {
             // top is wall if closed; if openTop, let it be handled by applyBoundary()
-            return !openTop;
+            return !getOpenTop();
         }
         return isSolid(i, j - 1) || isSolid(i, j);
     };

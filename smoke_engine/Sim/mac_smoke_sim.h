@@ -29,8 +29,8 @@ struct MAC2D : public MACGridCore {
     float compareAdvectors(float dissipation);
 
     bool useMacCormack = true;
-    
-    bool openTop = false;
+
+    // bool openTop = false;
 
     void setOpenTop(bool on);
 

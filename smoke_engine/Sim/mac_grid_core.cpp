@@ -29,6 +29,25 @@ MACGridCore::MACGridCore(int NX, int NY, float DX, float DT)
     resetCore();
 }
 
+void MACGridCore::setSolidCell(int i, int j, bool s) {
+    int id = idxP(i,j);
+    uint8_t ns = s ? 1 : 0;
+    if (solid[id] == ns) return;
+    solid[id] = ns;
+
+    pressureMatrixDirty = true;
+    mgDirty = true;
+}
+
+void MACGridCore::setOpenTopBC(bool enabled) {
+    if (openTopBC == enabled) return;
+    openTopBC = enabled;
+
+    markPressureMatrixDirty();
+    mgDirty = true; // safe even with the auto-check, and handles solids too
+}
+
+
 void MACGridCore::resetCore() {
     const size_t Nu = (size_t)(nx + 1) * (size_t)ny;
     const size_t Nv = (size_t)nx * (size_t)(ny + 1);
@@ -45,6 +64,7 @@ void MACGridCore::resetCore() {
     solid.assign(Nc, 0);
 
     markPressureMatrixDirty();
+    mgDirty = true;
 }
 
 float MACGridCore::maxAbsDiv() const {
@@ -430,8 +450,19 @@ void MACGridCore::ensurePressureMatrix() {
 }
 
 void MACGridCore::ensureMultigrid() {
-    if (!mgDirty) return;
+    // Rebuild if dirty OR if operator-defining params changed
+    if (!mgDirty && mgBuiltValid &&
+        mgBuiltOpenTopBC == openTopBC &&
+        mgBuiltNx == nx && mgBuiltNy == ny)
+    {
+        return;
+    }
+
     mgDirty = false;
+    mgBuiltValid = true;
+    mgBuiltOpenTopBC = openTopBC;
+    mgBuiltNx = nx;
+    mgBuiltNy = ny;
 
     mgLevels.clear();
     mgLevels.reserve(mgMaxLevels);
@@ -906,7 +937,7 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
 
     // If solids / topology changed you should already have set mgDirty,
     // but forcing a rebuild here is safe (just a bit slower).
-    mgDirty = true;
+    // mgDirty = true;
     ensureMultigrid();
 
     if (mgLevels.empty()) {
