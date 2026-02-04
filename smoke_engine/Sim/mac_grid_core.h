@@ -18,6 +18,7 @@ struct MACGridCore {
 
     // Solids
     std::vector<uint8_t> solid;
+    std::vector<uint8_t> fluid;
 
     enum PressureSolverKind : int {
         SOLVER_PCG = 0,
@@ -78,7 +79,21 @@ struct MACGridCore {
     inline int idxP(int i,int j) const { return i + nx*j; }
     inline int idxU(int i,int j) const { return i + (nx+1)*j; }
     inline int idxV(int i,int j) const { return i + nx*j; }
+
     inline bool isSolid(int i,int j) const { return solid[idxP(i,j)] != 0; }
+
+    bool isFluidCell(int i, int j) const { return fluid[idxP(i,j)] != 0; }
+    const std::vector<uint8_t>& fluidMask() const { return fluid; }
+
+    // Sets the fluid mask from an external mask (same size as p). Solids are always forced to non-fluid.
+    void setFluidMask(const std::vector<uint8_t>& mask);
+
+    // Convenience: set all non-solid cells to fluid (useful for smoke default behavior).
+    void setFluidMaskAllNonSolid();
+
+    inline void setFluidCell(int i, int j, bool f) {
+    fluid[idxP(i,j)] = f ? 1 : 0;
+    }
 
     
     static inline float clampf(float x, float a, float b) {
@@ -135,6 +150,7 @@ private:
     float invDx2_cache = 0.0f;
 
     std::vector<int> lapL, lapR, lapB, lapT;
+    std::vector<uint8_t> lapCount; // diagonal stencil count (includes Dirichlet neighbors)
     std::vector<float> lapDiagInv;
 
     std::vector<float> pcg_r, pcg_z, pcg_d, pcg_q, pcg_Ap;
@@ -146,12 +162,16 @@ private:
 
     bool openTopBC = false;
 
+    
+
     // ---- Multigrid Preconditioner ----
     struct MGLevel {
         int nx = 0, ny = 0;
         float invDx2 = 0.0f;
         std::vector<uint8_t> solid;
+        std::vector<uint8_t> fluid; // 1 = fluid cell, 0 = not-fluid (e.g. air); solids will be forced to 0
         std::vector<int> L, R, B, T;
+        std::vector<uint8_t> diagCount; // diagonal stencil count (includes Dirichlet neighbors)
         std::vector<float> diagInv;
         std::vector<float> x;
         std::vector<float> b;
@@ -177,6 +197,8 @@ private:
     std::vector<MGLevel> mgLevels;
     bool mgDirty = true;
     bool mgInitialized = false;
+
+    int mgCoarseIters = 80;
 
     void markMGDirty() { mgDirty = true; }
     void ensureMultigrid();
