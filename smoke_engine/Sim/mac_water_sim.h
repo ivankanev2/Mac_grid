@@ -1,8 +1,20 @@
 #pragma once
-#include <vector>
-#include <cstdint>
+
+#include <cmath>  // IMPORTANT: mac_grid_core.h uses std::isfinite but doesn't include <cmath>.
+
 #include "mac_grid_core.h"
 
+#include <cstdint>
+#include <vector>
+
+// -----------------------------------------------------------------------------
+// Refactored MAC water simulation (PIC/FLIP particles + liquid-only projection).
+//
+// Notes:
+//  - Keep the public API relied on by UI/renderer/main.
+//  - Only water code lives here; no changes required elsewhere.
+//  - Pressure solve uses a simple PCG (stable, deterministic, debuggable).
+// -----------------------------------------------------------------------------
 struct MACWater : public MACGridCore {
     struct Particle {
         float x = 0.0f;
@@ -12,143 +24,83 @@ struct MACWater : public MACGridCore {
         float age = 0.0f;
     };
 
-    std::vector<float> water, water0;
-    std::vector<float> waterTarget;
-    std::vector<uint8_t> liquid;
-    std::vector<uint8_t> liquidPrev;
+    // --- Public simulation state (used for rendering/debug) ---
+    std::vector<float>   water;     // cell-centered "water amount" for rendering (nx*ny)
+    std::vector<uint8_t> liquid;    // cell-centered liquid mask used by the solver (nx*ny)
     std::vector<Particle> particles;
 
+    // --- UI controlled parameters ---
+    float waterDissipation = 1.0f;  // 1 = no dissipation, <1 removes particles over time
+    float waterGravity     = -9.8f; // negative pulls down
+    float velDamping       = 4.0f;  // exponential damping rate
+    bool  openTop          = true;  // if true, top boundary is open (pressure ~ 0 to air)
+
+    // --- Simulation controls ---
+    int   particlesPerCell   = 0;       // visualization/initial sampling density
+    float flipBlend          = 0.1f;    // 0=PIC, 1=FLIP
+    int   borderThickness    = 2;       // solid border thickness (cells)
+    int   maxParticles       = 0;  // safety cap
+
+    int   maskDilations      = 1;       // expand liquid mask by N 4-neighborhood dilations
+    int   extrapolationIters = 10;      // fill velocities into air for stable sampling
+
+    int   pressureMaxIters   = 200;
+    float pressureTol        = 1e-6f;   // residual infinity-norm tolerance
+
+    // Used only for UI debug display in this project.
+    float targetMass         = 0.0f;
+
     MACWater(int NX, int NY, float DX, float DT);
+
     void reset();
     void step();
 
     void addWaterSource(float cx, float cy, float radius, float amount);
-
     void applyBoundary();
+
+    // Copy solid cells from another sim (smoke), then re-apply water borders.
     void syncSolidsFrom(const MACGridCore& src);
 
-    float waterDissipation = 1.0f;
-    float waterGravity     = -9.8f;
-    float heightPressureScale = 0.0f;
-    float sourceDownwardSpeed = 2.0f;
-    float sourceVelBlend   = 0.85f;
-    float sourceVelHold    = 0.12f;
-    float velDamping       = 0.0f;
-    float waterViscosity   = 5e-10f; // lighter viscosity to avoid "solid block"
-    int   viscosityIters   = 10;
-    float viscosityOmega   = 0.8f; // weighted Jacobi relaxation
-    float restVelocity     = 3.0f; // cells/sec; 0 disables rest snapping
-    bool  openTop          = true;
-    float flipBlend        = 0.1f;
-    int   particlesPerCell = 6;
-    int   pressureMaxIters = 400;
-    float pressureTol      = 1e-6f;
-    int   pressureRepeats  = 2;
-    bool  useMGPressure    = true;
-    int   pressureMGVcycles = 200;
-    float pressureMGTol    = 1e-4f;
-    int   pressureMGPolishIters = 40;
-    int   extrapIters      = 12;
-    int   maskDilations    = 1;
-    int   borderThickness  = 2;
-    int   maxParticles     = 0; // 0 = unlimited
-    float liquidThreshold  = 0.01f;
-    float maxWaterPerCell  = 0.0f; // disable bottom-up reconstruction by default
-    float columnDiffusion  = 0.06f;
-    int   columnDiffusionIters = 2;
-    float targetMass       = 0.0f;
-    float waterTargetDecay = 0.995f;
-    float waterTargetMax   = 0.0f; // 0 = unlimited
-    int   separationIters  = 5;
-    float particleRadiusScale = 0.4f;
-    float separationStrength  = 0.8f;
-    int   densityRelaxIters   = 1;
-    int   densityRelaxInterval = 3;
-    float densityRelaxMaxYFrac = 0.45f;
-    int   columnRelaxIters    = 1;
-    float columnRelaxSlackFrac = 0.15f;
-    int   columnRelaxInterval = 2;
-    float columnRelaxMaxYFrac = 0.55f;
-
-    struct PressureDiagnostics {
-        float maxAbsDivBefore = 0.0f;
-        float maxAbsDivAfter  = 0.0f;
-        float maxAbsDivNearSolidBefore = 0.0f;
-        float maxAbsDivNearSolidAfter  = 0.0f;
-        float meanAbsDivBefore = 0.0f;
-        float meanAbsDivAfter  = 0.0f;
-        int   liquidCells = 0;
-        int   liquidCellsNearSolid = 0;
-    };
-
-    // Optional per-step pressure diagnostics (printed from the water solver only).
-    bool pressureDiagnostics = true;
-    int  pressureDiagInterval = 1;
-    const PressureDiagnostics& lastPressureDiagnostics() const { return lastPressureDiag; }
-
     const std::vector<float>& waterField() const { return water; }
+
     float maxParticleSpeed() const;
 
 private:
+    // External solids (from user painting in the smoke sim). We rebuild `solid`
+    // each step as: solid = solidUser OR borderSolids.
+    std::vector<uint8_t> solidUser;
+
+    // Particle->grid weights
     std::vector<float> uWeight, vWeight;
+
+    // FLIP buffers
     std::vector<float> uPrev, vPrev;
     std::vector<float> uDelta, vDelta;
 
-    std::vector<float> lapDiag, lapDiagInv;
-    std::vector<int> lapL, lapR, lapB, lapT;
+    // Extrapolation masks
+    std::vector<uint8_t> validU, validV;
+
+    // PCG pressure solve buffers (cell-centered)
+    std::vector<float> diagInv;
     std::vector<float> pcg_r, pcg_z, pcg_d, pcg_q, pcg_Ap;
 
-    struct MGLevel {
-        int nx = 0, ny = 0;
-        float invDx2 = 0.0f;
-        std::vector<uint8_t> solid;
-        std::vector<uint8_t> fluid;
-        std::vector<int> L, R, B, T;
-        std::vector<float> diagInv;
-        std::vector<float> x;
-        std::vector<float> b;
-        std::vector<float> Ax;
-        std::vector<float> r;
-    };
-
-    std::vector<MGLevel> mgLevels;
-    bool mgDirty = true;
-    bool mgHasDirichlet = false;
-    bool mgOpenTop = true;
-    int  mgMaxLevels = 6;
-    int  mgPreSmooth = 2;
-    int  mgPostSmooth = 2;
-    int  mgCoarseSmooth = 30;
-    float mgOmega = 0.8f;
-
     int stepCounter = 0;
-    PressureDiagnostics lastPressureDiag;
 
-    void advectParticles();
-    void particleToGrid();
-    void gridToParticles();
-    void enforceBorderSolids();
-    void extrapolateVelocity();
-    void buildLiquidMask();
-    void projectLiquid();
-    void applyHeightPressureForce();
-    void applyViscosity();
-    void rasterizeWaterField();
-    void reseedParticlesFromField(const std::vector<float>& targetWater);
-    void separateParticles();
-    void relaxParticleDensity();
-    void relaxColumnDensity();
-    void removeLiquidDrift();
-    void snapToRest(float restVel);
-    void ensureWaterMG();
-    void solvePressureMGWater(int vcycles, float tol);
-    void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
-    void mgSmoothRBGS(int lev, int iters);
-    void mgComputeResidual(int lev);
-    void mgRestrictResidual(int fineLev);
-    void mgProlongateAndAdd(int coarseLev);
-    void mgVCycle(int lev);
-    void mgRemoveMeanFine();
+    // --- internal helpers ---
+    void rebuildSolidsFromUser();
     void removeParticlesInSolids();
     void enforceParticleBounds();
+
+    void particleToGrid();
+    void buildLiquidMask();
+    void projectLiquid();
+    void extrapolateVelocity();
+
+    void gridToParticles();
+    void advectParticles();
+    void applyDissipation();
+    void rasterizeWaterField();
 };
+
+#include "Water/water_particles.h"
+#include "Water/water_rasterize.h"
