@@ -121,6 +121,8 @@ void MACWater::step() {
     }
 
     applyBoundary();
+    diffuseVelocityImplicit();
+    applyBoundary();
 
     // Save for FLIP delta (BEFORE projection).
     uPrev = u;
