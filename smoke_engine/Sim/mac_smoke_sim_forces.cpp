@@ -284,7 +284,7 @@ void MAC2D::addVelocityImpulse(float cx, float cy, float radius, float strength)
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             int id = idxP(i,j);
-            if (isSolid(i,j)) continue;
+            if (!isFluidCell(i,j)) continue;
             float x = (i + 0.5f) * dx;
             float y = (j + 0.5f) * dx;
             float rx = x - cx;

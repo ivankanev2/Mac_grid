@@ -35,6 +35,11 @@ void MACGridCore::setSolidCell(int i, int j, bool s) {
     if (solid[id] == ns) return;
     solid[id] = ns;
 
+    // If a cell becomes solid, it cannot be fluid.
+    // If it becomes non-solid again, default it back to fluid.
+    if (s) fluid[id] = 0;
+    else   fluid[id] = 1;
+
     pressureMatrixDirty = true;
     mgDirty = true;
 }
@@ -62,6 +67,14 @@ void MACGridCore::resetCore() {
     v0 = v;
 
     solid.assign(Nc, 0);
+    fluid.assign(Nc, 1); // default: everything fluid unless solid
+
+    for (int j = 0; j < ny; ++j)
+    for (int i = 0; i < nx; ++i)
+    {
+        if (solid[idxP(i,j)]) fluid[idxP(i,j)] = 0;
+    }
+
 
     markPressureMatrixDirty();
     mgDirty = true;
@@ -95,7 +108,7 @@ float MACGridCore::divLInfFluid() const {
     float m = 0.0f;
     for (int j = 0; j < ny; ++j)
         for (int i = 0; i < nx; ++i) {
-            if (isSolid(i,j)) continue;
+            if (!isFluidCell(i,j)) continue;
             m = std::max(m, std::fabs(div[idxP(i,j)]));
         }
     return m;
@@ -106,7 +119,7 @@ float MACGridCore::divL2Fluid() const {
     int cnt = 0;
     for (int j = 0; j < ny; ++j)
         for (int i = 0; i < nx; ++i) {
-            if (isSolid(i,j)) continue;
+            if (!isFluidCell(i,j)) continue;
             float d = div[idxP(i,j)];
             s += (double)d * (double)d;
             cnt++;
@@ -443,6 +456,7 @@ void MACGridCore::ensurePressureMatrix() {
     lapB.assign(N, -1);
     lapT.assign(N, -1);
     lapDiagInv.assign(N, 0.0f);
+    lapCount.assign(N, 0);
 
     invDx2_cache = 1.0f / (dx * dx);
 
@@ -451,23 +465,34 @@ void MACGridCore::ensurePressureMatrix() {
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const int id = idxP(i, j);
-            if (isSolid(i, j)) {
+            if (!isFluidCell(i, j)) {
+                // Not in pressure domain (air or solid) -> mark as inactive
                 lapL[id] = lapR[id] = lapB[id] = lapT[id] = -1;
                 lapDiagInv[id] = 0.0f;
                 continue;
             }
-            
 
             int count = 0;
-            if (i > 0 && !isSolid(i - 1, j))     { lapL[id] = idxP(i - 1, j); count++; }
-            if (i + 1 < nx && !isSolid(i + 1, j)) { lapR[id] = idxP(i + 1, j); count++; }
-            if (j > 0 && !isSolid(i, j - 1))     { lapB[id] = idxP(i, j - 1); count++; }
-            if (j + 1 < ny && !isSolid(i, j + 1)) { lapT[id] = idxP(i, j + 1); count++; }
+            // Build stencil for FLUID unknowns:
+            // - fluid neighbor   => connect + count++
+            // - air neighbor     => Dirichlet p=0 => count++ (no connection)
+            // - solid neighbor   => Neumann => nothing
+            auto addNbr = [&](int ni, int nj, int& slot) {
+                const int nid = idxP(ni, nj);
+                if (isFluidCell(ni, nj)) { slot = nid; count++; }
+                else if (!isSolid(ni, nj)) { count++; } // air Dirichlet
+            };
+
+            if (i > 0)      addNbr(i - 1, j, lapL[id]);
+            if (i + 1 < nx) addNbr(i + 1, j, lapR[id]);
+            if (j > 0)      addNbr(i, j - 1, lapB[id]);
+            if (j + 1 < ny) addNbr(i, j + 1, lapT[id]);
 
             if (openTopBC && j == ny - 1) {
             count++; // Dirichlet neighbor contributes to diagonal
         }
 
+            lapCount[id] = (uint8_t)count;
             const float diag = (float)count * invDx2_cache;
             lapDiagInv[id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
         }
@@ -499,12 +524,18 @@ void MACGridCore::ensureMultigrid() {
 
         const int N = nx * ny;
         L0.solid.assign(N, 0);
+        L0.fluid.assign(N, 0);
 
         for (int j = 0; j < ny; ++j)
-            for (int i = 0; i < nx; ++i)
-                L0.solid[idxP(i,j)] = isSolid(i,j) ? 1 : 0;
+            for (int i = 0; i < nx; ++i) {
+                const int id = idxP(i,j);
+                L0.solid[id] = isSolid(i,j) ? 1 : 0;
+                L0.fluid[id] = isFluidCell(i,j) ? 1 : 0;
+                if (L0.solid[id]) L0.fluid[id] = 0; // solids never fluid
+            }
 
         L0.L.assign(N, -1); L0.R.assign(N, -1); L0.B.assign(N, -1); L0.T.assign(N, -1);
+        L0.diagCount.assign(N, 0);
         L0.diagInv.assign(N, 0.0f);
 
         L0.x.assign(N, 0.0f);
@@ -515,20 +546,30 @@ void MACGridCore::ensureMultigrid() {
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
                 int id = idxP(i,j);
-                if (L0.solid[id]) continue;
+                if (!L0.fluid[id]) continue;
 
                 int count = 0;
-                if (i > 0     && !L0.solid[idxP(i-1,j)]) { L0.L[id] = idxP(i-1,j); count++; }
-                if (i+1 < nx  && !L0.solid[idxP(i+1,j)]) { L0.R[id] = idxP(i+1,j); count++; }
-                if (j > 0     && !L0.solid[idxP(i,j-1)]) { L0.B[id] = idxP(i,j-1); count++; }
-                if (j+1 < ny  && !L0.solid[idxP(i,j+1)]) { L0.T[id] = idxP(i,j+1); count++; }
+                // Build stencil for FLUID unknowns:
+                // - fluid neighbor   => connect + count++
+                // - air neighbor     => Dirichlet p=0 => count++ (no connection)
+                // - solid neighbor   => Neumann => nothing
+                auto addNbr = [&](int ni, int nj, int& slot) {
+                    const int nid = idxP(ni, nj);
+                    if (L0.fluid[nid]) { slot = nid; count++; }
+                    else if (!L0.solid[nid]) { count++; } // air Dirichlet
+                };
 
-                if (openTopBC && j == ny - 1) {
-                count++;
-            }
+                if (i > 0)      addNbr(i - 1, j, L0.L[id]);
+                if (i + 1 < nx) addNbr(i + 1, j, L0.R[id]);
+                if (j > 0)      addNbr(i, j - 1, L0.B[id]);
+                if (j + 1 < ny) addNbr(i, j + 1, L0.T[id]);
 
-                float diag = (float)count * L0.invDx2;
-                L0.diagInv[id] = (diag > 0.0f) ? 1.0f / diag : 0.0f;
+                if (openTopBC && j == ny - 1) count++;
+
+                L0.diagCount[id] = (uint8_t)count;
+
+                const float diag = (float)count * L0.invDx2;
+                L0.diagInv[id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
             }
         }
 
@@ -548,8 +589,11 @@ void MACGridCore::ensureMultigrid() {
         C.invDx2 = F.invDx2 * 0.25f;
 
         const int CN = cnx * cny;
+
         C.solid.assign(CN, 0);
+        C.fluid.assign(CN, 0);
         C.L.assign(CN, -1); C.R.assign(CN, -1); C.B.assign(CN, -1); C.T.assign(CN, -1);
+        C.diagCount.assign(CN, 0);
         C.diagInv.assign(CN, 0.0f);
 
         C.x.assign(CN, 0.0f);
@@ -563,39 +607,49 @@ void MACGridCore::ensureMultigrid() {
                 int fj = 2*J;
 
                 bool allSolid = true;
+                bool anyFluid = false;
+
                 for (int dj = 0; dj < 2; ++dj) {
                     for (int di = 0; di < 2; ++di) {
                         int ii = fi + di;
                         int jj = fj + dj;
                         if (ii < F.nx && jj < F.ny) {
-                            if (!F.solid[mgIdx(ii,jj,F.nx)]) allSolid = false;
-                        } else {
-                            // out of bounds shouldn't happen with /2 sizes, but treat as solid if it does
+                            const int fid = mgIdx(ii, jj, F.nx);
+                            if (!F.solid[fid]) allSolid = false;
+                            if (F.fluid[fid])  anyFluid = true;
                         }
                     }
                 }
 
-                C.solid[mgIdx(I,J,cnx)] = allSolid ? 1 : 0;
+                const int cid = mgIdx(I, J, cnx);
+                C.solid[cid] = allSolid ? 1 : 0;
+                C.fluid[cid] = (!allSolid && anyFluid) ? 1 : 0;
             }
 }
 
         for (int J = 0; J < cny; ++J) {
             for (int I = 0; I < cnx; ++I) {
                 int id = mgIdx(I,J,cnx);
-                if (C.solid[id]) continue;
+                if (!C.fluid[id]) continue;
 
                 int count = 0;
-                if (I > 0      && !C.solid[mgIdx(I-1,J,cnx)]) { C.L[id] = mgIdx(I-1,J,cnx); count++; }
-                if (I+1 < cnx  && !C.solid[mgIdx(I+1,J,cnx)]) { C.R[id] = mgIdx(I+1,J,cnx); count++; }
-                if (J > 0      && !C.solid[mgIdx(I,J-1,cnx)]) { C.B[id] = mgIdx(I,J-1,cnx); count++; }
-                if (J+1 < cny  && !C.solid[mgIdx(I,J+1,cnx)]) { C.T[id] = mgIdx(I,J+1,cnx); count++; }
+                auto addNbrC = [&](int NI, int NJ, int& slot) {
+                    const int nid = mgIdx(NI, NJ, cnx);
+                    if (C.fluid[nid]) { slot = nid; count++; }
+                    else if (!C.solid[nid]) { count++; } // air Dirichlet
+                };
 
-                if (openTopBC && J == cny - 1) {
-                count++;
-            }
+                if (I > 0)      addNbrC(I - 1, J, C.L[id]);
+                if (I + 1 < cnx) addNbrC(I + 1, J, C.R[id]);
+                if (J > 0)      addNbrC(I, J - 1, C.B[id]);
+                if (J + 1 < cny) addNbrC(I, J + 1, C.T[id]);
 
-                float diag = (float)count * C.invDx2;
-                C.diagInv[id] = (diag > 0.0f) ? 1.0f / diag : 0.0f;
+                if (openTopBC && J == cny - 1) count++;
+
+                C.diagCount[id] = (uint8_t)count;
+
+                const float diag = (float)count * C.invDx2;
+                C.diagInv[id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
             }
         }
 
@@ -615,24 +669,16 @@ void MACGridCore::mgApplyA(int lev, const std::vector<float>& x, std::vector<flo
     if ((int)Ax.size() != N) Ax.resize(N);
 
     for (int id = 0; id < N; ++id) {
-        if (L.solid[id]) { Ax[id] = 0.0f; continue; }
+        if (!L.fluid[id]) { Ax[id] = 0.0f; continue; }
 
         float sum = 0.0f;
-        int count = 0;
 
-        int n = L.L[id]; if (n >= 0) { sum += x[n]; count++; }
-        n = L.R[id];     if (n >= 0) { sum += x[n]; count++; }
-        n = L.B[id];     if (n >= 0) { sum += x[n]; count++; }
-        n = L.T[id];     if (n >= 0) { sum += x[n]; count++; }
+        int n = L.L[id]; if (n >= 0) sum += x[n];
+        n = L.R[id];     if (n >= 0) sum += x[n];
+        n = L.B[id];     if (n >= 0) sum += x[n];
+        n = L.T[id];     if (n >= 0) sum += x[n];
 
-        if (openTopBC) {
-            const int j = id / L.nx;
-            if (j == L.ny - 1) {
-                // Dirichlet p_out = 0 contributes to diagonal only (sum += 0)
-                count++;
-            }
-        }
-
+        const int count = (int)L.diagCount[id];
         Ax[id] = (count * x[id] - sum) * L.invDx2;
     }
 }
@@ -647,7 +693,7 @@ void MACGridCore::mgSmoothJacobi(int lev, int iters) {
     for (int it = 0; it < iters; ++it) {
         mgApplyA(lev, L.x, L.Ax);
         for (int id = 0; id < N; ++id) {
-            if (L.solid[id]) continue;
+            if (!L.fluid[id]) continue;
             float r = L.b[id] - L.Ax[id];
             L.x[id] += omega * (L.diagInv[id] * r);
         }
@@ -674,19 +720,16 @@ void MACGridCore::mgSmoothRBGS(int lev, int iters)
                     if (((i + j) & 1) != color) continue;
 
                     int id = mgIdx(i, j, nx);
-                    if (L.solid[id]) continue;
+                    if (!L.fluid[id]) continue;
 
                     float sum = 0.0f;
-                    int count = 0;
 
-                    int n = L.L[id]; if (n >= 0) { sum += L.x[n]; count++; }
-                    n = L.R[id];     if (n >= 0) { sum += L.x[n]; count++; }
-                    n = L.B[id];     if (n >= 0) { sum += L.x[n]; count++; }
-                    n = L.T[id];     if (n >= 0) { sum += L.x[n]; count++; }
+                    int n = L.L[id]; if (n >= 0) sum += L.x[n];
+                    n = L.R[id];     if (n >= 0) sum += L.x[n];
+                    n = L.B[id];     if (n >= 0) sum += L.x[n];
+                    n = L.T[id];     if (n >= 0) sum += L.x[n];
 
-                    // Dirichlet neighbor at top contributes to diagonal only (value=0)
-                    if (openTopBC && j == ny - 1) count++;
-
+                    const int count = (int)L.diagCount[id];
                     if (count == 0) continue;
 
                     // A x = b, where A is (count*x - sum)*invDx2
@@ -706,7 +749,7 @@ void MACGridCore::mgComputeResidual(int lev) {
     mgApplyA(lev, L.x, L.Ax);
     const int N = L.nx * L.ny;
     for (int id = 0; id < N; ++id) {
-        if (L.solid[id]) { L.r[id] = 0.0f; continue; }
+        if (!L.fluid[id]) { L.r[id] = 0.0f; continue; }
         L.r[id] = L.b[id] - L.Ax[id];
     }
 }
@@ -722,7 +765,7 @@ void MACGridCore::mgRestrictResidual(int fineLev)
     auto addSample = [&](int fi, int fj, float w, float& sum, float& wsum) {
         if (fi < 0 || fj < 0 || fi >= F.nx || fj >= F.ny) return;
         int fid = mgIdx(fi, fj, F.nx);
-        if (F.solid[fid]) return;
+        if (!F.fluid[fid]) return;
         sum  += w * F.r[fid];
         wsum += w;
     };
@@ -730,7 +773,7 @@ void MACGridCore::mgRestrictResidual(int fineLev)
     for (int J = 0; J < C.ny; ++J) {
         for (int I = 0; I < C.nx; ++I) {
             int cid = mgIdx(I, J, C.nx);
-            if (C.solid[cid]) { C.b[cid] = 0.0f; continue; }
+            if (!C.fluid[cid]) { C.b[cid] = 0.0f; continue; }
 
             const int fi = 2 * I;
             const int fj = 2 * J;
@@ -771,13 +814,13 @@ void MACGridCore::mgProlongateAndAdd(int coarseLev)
         I = std::max(0, std::min(I, C.nx - 1));
         J = std::max(0, std::min(J, C.ny - 1));
         int cid = mgIdx(I, J, C.nx);
-        return C.solid[cid] ? 0.0f : C.x[cid];
+        return C.fluid[cid] ? C.x[cid] : 0.0f;
     };
 
     for (int fj = 0; fj < F.ny; ++fj) {
         for (int fi = 0; fi < F.nx; ++fi) {
             int fid = mgIdx(fi, fj, F.nx);
-            if (F.solid[fid]) continue;
+            if (!F.fluid[fid]) continue;
 
             const int I = fi >> 1;
             const int J = fj >> 1;
@@ -803,7 +846,8 @@ void MACGridCore::mgProlongateAndAdd(int coarseLev)
 
 void MACGridCore::mgVCycle(int lev) {
     if (lev == (int)mgLevels.size() - 1) {
-        mgSmoothRBGS(lev, mgCoarseSmooth);
+        // Coarse solve: spend REAL work here
+        mgSmoothRBGS(lev, mgCoarseIters); // e.g. 100-300
         return;
     }
 
@@ -840,7 +884,7 @@ void MACGridCore::removePressureMean() {
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            if (isSolid(i,j)) continue;
+            if (!isFluidCell(i,j)) continue;
             sum += (double)p[idxP(i,j)];
             cnt++;
         }
@@ -851,7 +895,7 @@ void MACGridCore::removePressureMean() {
     float mean = (float)(sum / (double)cnt);
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            if (isSolid(i,j)) continue;
+            if (!isFluidCell(i,j)) continue;
             p[idxP(i,j)] -= mean;
         }
     }
@@ -886,23 +930,23 @@ void MACGridCore::applyLaplacian(const std::vector<float>& x, std::vector<float>
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const int id = idxP(i, j);
-            if (isSolid(i, j)) { Ax[id] = 0.0f; continue; }
+            if (!isFluidCell(i, j)) { Ax[id] = 0.0f; continue; }
 
             
 
             float sum = 0.0f;
-            int count = 0;
+            int count = (int)lapCount[id];
 
-            int n = lapL[id]; if (n >= 0) { sum += x[n]; count++; }
-            n = lapR[id];     if (n >= 0) { sum += x[n]; count++; }
-            n = lapB[id];     if (n >= 0) { sum += x[n]; count++; }
-            n = lapT[id];     if (n >= 0) { sum += x[n]; count++; }
+            int n = lapL[id]; if (n >= 0) { sum += x[n]; }
+            n = lapR[id];     if (n >= 0) { sum += x[n]; }
+            n = lapB[id];     if (n >= 0) { sum += x[n]; }
+            n = lapT[id];     if (n >= 0) { sum += x[n]; }
 
-            if (openTopBC && j == ny - 1) {
-            // Dirichlet p_out = 0 at top boundary:
-            // counts as a neighbor in the stencil, but sum += 0 so nothing to add
-            count++;
-        }
+        //     if (openTopBC && j == ny - 1) {
+        //     // Dirichlet p_out = 0 at top boundary:
+        //     // counts as a neighbor in the stencil, but sum += 0 so nothing to add
+        //     count++;
+        // }
 
             Ax[id] = (count * x[id] - sum) * invDx2;
         }
@@ -922,7 +966,7 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
         double s = 0.0;
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
-                if (isSolid(i,j)) continue;
+                if (!isFluidCell(i,j)) continue;
                 int id = idxP(i,j);
                 s += (double)a[id] * (double)b[id];
             }
@@ -934,7 +978,7 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
         float m = 0.0f;
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
-                if (isSolid(i,j)) continue;
+                if (!isFluidCell(i,j)) continue;
                 float a = std::fabs(pcg_r[idxP(i,j)]);
                 if (a > m) m = a;
             }
@@ -946,7 +990,7 @@ void MACGridCore::solvePressurePCG(int maxIters, float tol) {
         float m = 0.0f;
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
-                if (isSolid(i,j)) continue;
+                if (!isFluidCell(i,j)) continue;
                 float a = std::fabs(rhs[idxP(i,j)]);
                 if (a > m) m = a;
             }
@@ -1065,7 +1109,7 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     auto maxAbsResidualFluid = [&]() -> float {
         float m = 0.0f;
         for (int id = 0; id < N; ++id) {
-            if (F.solid[id]) continue;
+            if (!F.fluid[id]) continue;
             float a = std::fabs(F.r[id]);
             if (!std::isfinite(a)) return std::numeric_limits<float>::infinity();
             m = std::max(m, a);
@@ -1076,7 +1120,7 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     auto maxAbsBFluid = [&]() -> float {
         float m = 0.0f;
         for (int id = 0; id < N; ++id) {
-            if (F.solid[id]) continue;
+            if (!F.fluid[id]) continue;
             float a = std::fabs(F.b[id]);
             if (!std::isfinite(a)) return std::numeric_limits<float>::infinity();
             m = std::max(m, a);
@@ -1089,14 +1133,14 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
         double sum = 0.0;
         int cnt = 0;
         for (int id = 0; id < N; ++id) {
-            if (F.solid[id]) continue;
+            if (!F.fluid[id]) continue;
             sum += (double)F.x[id];
             cnt++;
         }
         if (cnt == 0) return;
         float mean = (float)(sum / (double)cnt);
         for (int id = 0; id < N; ++id) {
-            if (F.solid[id]) continue;
+            if (!F.fluid[id]) continue;
             F.x[id] -= mean;
         }
     };
@@ -1159,12 +1203,15 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
 
     // final stop threshold in predDiv space (NEVER looser than abs tol)
     const float stopPredDiv = std::min(tol, relPredDiv);
+    // const float stopPredDiv = std::max(tol, relPredDiv);
 
     // (optional) for logging only
     const float relThrResidual = std::max(bInf * relTol, 1e-30f);
 
 
     int used = 0;
+
+    bool needFallbackPCG = false;
 
     for (int k = 0; k < maxVCycles; ++k) {
         used = k + 1;
@@ -1193,16 +1240,13 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
         if (rInf > prev * 1.2f) {
             stats.mgResidualIncrease = 1;
             stats.pressureStopReason = STOP_RESIDUAL_INCREASE;
-            std::printf("[MG ] WARNING: residual increased (%g -> %g). Resetting x and smoothing.\n", prev, rInf);
-            std::fill(F.x.begin(), F.x.end(), 0.0f);
-            mgSmoothRBGS(0, 20);
-            mgComputeResidual(0);
-            rInf = maxAbsResidualFluid();
+            needFallbackPCG = true;
             break;
         }
 
         if (!std::isfinite(rInf)) {
             stats.pressureStopReason = STOP_NONFINITE;
+            needFallbackPCG = true;
             break;
         }
 
@@ -1234,6 +1278,14 @@ void MACGridCore::solvePressureMG(int maxVCycles, float tol) {
     rInf = maxAbsResidualFluid();
     stats.predDivFinal = rInf * dt;
 
+    if (needFallbackPCG) {
+    // Warm start PCG from the current MG x
+    p = F.x;
+    stats.pressureSolver = SOLVER_PCG;
+    solvePressurePCG(80, tol);
+    return;
+}
+
     p = F.x;
 
     if (!openTopBC) removePressureMean();
@@ -1259,7 +1311,7 @@ bool MACGridCore::debugCheckMGvsPCGOperator(float eps, float* outMaxDiff) {
     float maxDiff = 0.0f;
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            if (isSolid(i,j)) continue;
+            if (!isFluidCell(i,j)) continue;
             int id = idxP(i,j);
             maxDiff = std::max(maxDiff, std::fabs(Ax_mg[id] - Ax_pcg[id]));
         }
@@ -1321,7 +1373,7 @@ void MACGridCore::project() {
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             int id = idxP(i, j);
-            if (isSolid(i,j)) rhs[id] = 0.0f;
+            if (!isFluidCell(i,j)) rhs[id] = 0.0f;
             else              rhs[id] = -div[id] / dt; // i swear to got if the sign change here breaks another thing
         }
     }
@@ -1330,7 +1382,7 @@ void MACGridCore::project() {
     float bInf = 0.0f;
     for (int j = 0; j < ny; ++j)
     for (int i = 0; i < nx; ++i) {
-        if (isSolid(i,j)) continue;
+        if (!isFluidCell(i,j)) continue;
         bInf = std::max(bInf, std::fabs(rhs[idxP(i,j)]));
     }
     stats.rhsMaxPredDiv = bInf * dt;
@@ -1341,7 +1393,7 @@ void MACGridCore::project() {
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             int id = idxP(i,j);
-            if (isSolid(i,j)) continue;
+            if (!isFluidCell(i,j)) continue;
             sum += rhs[id];
             cnt++;
         }
@@ -1351,7 +1403,7 @@ void MACGridCore::project() {
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
                 int id = idxP(i,j);
-                if (isSolid(i,j)) continue;
+                if (!isFluidCell(i,j)) continue;
                 rhs[id] -= mean;
             }
         }
@@ -1402,7 +1454,7 @@ void MACGridCore::project() {
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 1; i < nx; ++i) {
-            if (isSolid(i - 1, j) || isSolid(i, j)) { u[idxU(i, j)] = 0.0f; continue; }
+            if (!isFluidCell(i - 1, j) || !isFluidCell(i, j)) { u[idxU(i, j)] = 0.0f; continue; }
             float gradp = (p[idxP(i, j)] - p[idxP(i - 1, j)]) / dx;
             u[idxU(i, j)] -= dt * gradp;
         }
@@ -1410,7 +1462,7 @@ void MACGridCore::project() {
 
     for (int j = 1; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            if (isSolid(i, j - 1) || isSolid(i, j)) { v[idxV(i, j)] = 0.0f; continue; }
+            if (!isFluidCell(i, j - 1) || !isFluidCell(i, j)) { v[idxV(i, j)] = 0.0f; continue; }
             float gradp = (p[idxP(i, j)] - p[idxP(i, j - 1)]) / dx;
             v[idxV(i, j)] -= dt * gradp;
         }
@@ -1460,4 +1512,34 @@ void MACGridCore::project() {
     //             maxAbsDiv(), maxFaceSpeed(), stats.pressureIters);
     stats.maxDivAfter = maxAbsDiv();
     stats.maxFaceSpeedAfter = maxFaceSpeed();
+}
+
+void MACGridCore::setFluidMask(const std::vector<uint8_t>& mask)
+{
+    // Expect same layout as p (nx*ny)
+    if ((int)mask.size() != nx * ny)
+        return; // keep it simple for now; we can add an assert/log later
+
+    fluid = mask;
+
+    // Solids must never be fluid
+    for (int j = 0; j < ny; ++j)
+    for (int i = 0; i < nx; ++i)
+    {
+        if (solid[idxP(i,j)]) fluid[idxP(i,j)] = 0;
+    }
+    markPressureMatrixDirty();
+    mgDirty = true;
+}
+
+void MACGridCore::setFluidMaskAllNonSolid()
+{
+    fluid.assign(nx * ny, 1);
+    for (int j = 0; j < ny; ++j)
+    for (int i = 0; i < nx; ++i)
+    {
+        if (solid[idxP(i,j)]) fluid[idxP(i,j)] = 0;
+    }
+    markPressureMatrixDirty();
+    mgDirty = true;
 }
