@@ -34,7 +34,7 @@ struct MACWater : public MACGridCore {
 
     // --- UI controlled parameters ---
     float waterDissipation = 1.0f;  // 1 = no dissipation, <1 removes particles over time
-    float waterGravity     = 0.0f; // negative pulls down
+    float waterGravity     = -9.8f; // negative pulls down
     float velDamping       = 0.0f;  // exponential damping rate
     bool  openTop          = true;  // if true, top boundary is open (pressure ~ 0 to air)
 
