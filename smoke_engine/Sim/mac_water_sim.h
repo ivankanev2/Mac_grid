@@ -22,6 +22,9 @@ struct MACWater : public MACGridCore {
         float u = 0.0f;
         float v = 0.0f;
         float age = 0.0f;
+        // APIC affine velocity matrix (2x2)
+        float c00 = 0.0f, c01 = 0.0f;
+        float c10 = 0.0f, c11 = 0.0f;
     };
 
     // --- Public simulation state (used for rendering/debug) ---
@@ -31,21 +34,27 @@ struct MACWater : public MACGridCore {
 
     // --- UI controlled parameters ---
     float waterDissipation = 1.0f;  // 1 = no dissipation, <1 removes particles over time
-    float waterGravity     = -9.8f; // negative pulls down
-    float velDamping       = 4.0f;  // exponential damping rate
+    float waterGravity     = 0.0f; // negative pulls down
+    float velDamping       = 0.0f;  // exponential damping rate
     bool  openTop          = true;  // if true, top boundary is open (pressure ~ 0 to air)
+
+    // viscosity (implicit diffusion)
+    float viscosity    = 5e-4f;   // [m^2/s], 0 disables
+    int   diffuseIters = 20;     // 10–40 typical
+    float diffuseOmega = 0.8f;   // 0.6–0.9 typical (weighted Jacobi)
 
     // --- Simulation controls ---
     int   particlesPerCell   = 0;       // visualization/initial sampling density
     float flipBlend          = 0.1f;    // 0=PIC, 1=FLIP
+    bool  useAPIC            = true;   // enable APIC transfers (PIC w/ affine)
     int   borderThickness    = 2;       // solid border thickness (cells)
     int   maxParticles       = 0;  // safety cap
 
-    int   maskDilations      = 1;       // expand liquid mask by N 4-neighborhood dilations
+    int   maskDilations      = 0;       // # IT NEEDS REALLY GENTLE TOUCH expand liquid mask by N 4-neighborhood dilations
     int   extrapolationIters = 10;      // fill velocities into air for stable sampling
 
     int   pressureMaxIters   = 200;
-    float pressureTol        = 1e-6f;   // residual infinity-norm tolerance
+    float pressureTol        = 1e-10f;   // residual infinity-norm tolerance
 
     // Used only for UI debug display in this project.
     float targetMass         = 0.0f;
@@ -100,6 +109,8 @@ private:
     void advectParticles();
     void applyDissipation();
     void rasterizeWaterField();
+    void diffuseVelocityImplicit();
+
 };
 
 #include "Water/water_particles.h"

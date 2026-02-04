@@ -922,16 +922,22 @@ static void drawWaterViewAndInteract(MACWater& water,
         float u = (m.x - p0.x) / (p1.x - p0.x);
         float v = (m.y - p0.y) / (p1.y - p0.y);
 
-        float sx = u;
-        float sy = 1.0f - v;
+        const float domainX = water.nx * water.dx;
+        const float domainY = water.ny * water.dx;
+        const float scale   = std::min(domainX, domainY);
 
-        if (sx >= 0 && sx <= 1 && sy >= 0 && sy <= 1) {
+        float sx = u * domainX;
+        float sy = (1.0f - v) * domainY;
+        float radius  = ui.brushRadius * scale;
+        float rectHalf = ui.rectHalfSize * scale;
+
+        if (sx >= 0.0f && sx <= domainX && sy >= 0.0f && sy <= domainY) {
             if (ui.circleMode) {
-                water.addWaterSource(sx, sy, ui.brushRadius, ui.waterAmount);
+                water.addWaterSource(sx, sy, radius, ui.waterAmount);
             } else {
-                float hs = ui.rectHalfSize;
-                for (float yy = sy-hs; yy <= sy+hs; yy += water.dx) {
-                    for (float xx = sx-hs; xx <= sx+hs; xx += water.dx) {
+                float hs = rectHalf;
+                for (float yy = sy - hs; yy <= sy + hs; yy += water.dx) {
+                    for (float xx = sx - hs; xx <= sx + hs; xx += water.dx) {
                         water.addWaterSource(xx, yy, water.dx*0.75f, ui.waterAmount);
                     }
                 }
