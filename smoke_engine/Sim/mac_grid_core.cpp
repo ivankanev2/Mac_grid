@@ -437,6 +437,7 @@ void MACGridCore::advectScalarSemiLagrangian(std::vector<float>& phi,
     phi.swap(tmp);
 }
 
+
 void MACGridCore::ensurePCGBuffers() {
     const int N = nx * ny;
     if ((int)pcg_r.size()  != N) pcg_r.resize(N);
@@ -1417,9 +1418,16 @@ void MACGridCore::project() {
 
     float divTol = openTopBC ? 5e-4f : 1e-4f;
 
-    stats.pressureSolver = SOLVER_MG;
+    pressureSolver.configure(
+        nx, ny, dx,
+        openTopBC,
+        solid,
+        fluid,
+        /*removeMeanForGauge=*/!openTopBC
+    );
 
-    solvePressureMG(20, divTol);   // start with ~10–30 V-cycles
+    stats.pressureSolver = SOLVER_MG;
+    pressureSolver.solveMG(p, rhs, 20, divTol, dt);
 
 
     auto t1 = std::chrono::high_resolution_clock::now();

@@ -3,6 +3,7 @@
 #include <cmath>  // IMPORTANT: mac_grid_core.h uses std::isfinite but doesn't include <cmath>.
 
 #include "mac_grid_core.h"
+#include "pressure_solver.h"
 
 #include <cstdint>
 #include <vector>
@@ -89,9 +90,8 @@ private:
     // Extrapolation masks
     std::vector<uint8_t> validU, validV;
 
-    // PCG pressure solve buffers (cell-centered)
-    std::vector<float> diagInv;
-    std::vector<float> pcg_r, pcg_z, pcg_d, pcg_q, pcg_Ap;
+    // Unified pressure solver (shared implementation with Smoke later)
+    PressureSolver pressureSolver;
 
     int stepCounter = 0;
 

@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <algorithm>
 
+#include "pressure_solver.h"
+
 struct MACGridCore {
     int nx, ny;
     float dx, dt;
@@ -33,6 +35,8 @@ struct MACGridCore {
         STOP_NONFINITE,
         STOP_RESIDUAL_INCREASE
     };
+
+    PressureSolver pressureSolver;
 
     struct FrameStats {
         float dt = 0.0f;
