@@ -4,72 +4,6 @@
 
 #include <algorithm>
 
-// Apply A*x for the liquid-only pressure system.
-// A approximates -∇² with:
-//   - Neumann at solid boundaries (no contribution)
-//   - Dirichlet p=0 at air/open boundaries
-static inline void applyPressureA(
-    const MACWater* w,
-    const std::vector<float>& x,
-    std::vector<float>& Ax)
-{
-    const int nx = w->nx;
-    const int ny = w->ny;
-    const float invDx2 = 1.0f / (w->dx * w->dx);
-
-    auto isSolidCell = [&](int i, int j) -> bool {
-        // Out-of-range: treat top as AIR if openTop, otherwise SOLID.
-        if (i < 0 || i >= nx || j < 0 || j >= ny) {
-            if (w->openTop && j == ny) return false; // open boundary (air)
-            return true;
-        }
-        return w->solid[(size_t)w->idxP(i, j)] != 0;
-    };
-
-    auto isFluidCell = [&](int i, int j) -> bool {
-        if (i < 0 || i >= nx || j < 0 || j >= ny) return false;
-        const int id = w->idxP(i, j);
-        return (w->solid[(size_t)id] == 0) && (w->liquid[(size_t)id] != 0);
-    };
-
-    std::fill(Ax.begin(), Ax.end(), 0.0f);
-
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            const int id = w->idxP(i, j);
-            if (w->solid[(size_t)id] || !w->liquid[(size_t)id]) {
-                Ax[(size_t)id] = 0.0f;
-                continue;
-            }
-
-            float diag = 0.0f;
-            float sumN = 0.0f;
-
-            // Left
-            if (!isSolidCell(i - 1, j)) {
-                diag += invDx2;
-                if (isFluidCell(i - 1, j)) sumN += invDx2 * x[(size_t)w->idxP(i - 1, j)];
-            }
-            // Right
-            if (!isSolidCell(i + 1, j)) {
-                diag += invDx2;
-                if (isFluidCell(i + 1, j)) sumN += invDx2 * x[(size_t)w->idxP(i + 1, j)];
-            }
-            // Down
-            if (!isSolidCell(i, j - 1)) {
-                diag += invDx2;
-                if (isFluidCell(i, j - 1)) sumN += invDx2 * x[(size_t)w->idxP(i, j - 1)];
-            }
-            // Up
-            if (!isSolidCell(i, j + 1)) {
-                diag += invDx2;
-                if (isFluidCell(i, j + 1)) sumN += invDx2 * x[(size_t)w->idxP(i, j + 1)];
-            }
-
-            Ax[(size_t)id] = diag * x[(size_t)id] - sumN;
-        }
-    }
-}
 
 inline void MACWater::projectLiquid() {
     const int Nc = nx * ny;
@@ -86,27 +20,13 @@ inline void MACWater::projectLiquid() {
     if ((int)p.size() != Nc) p.assign((size_t)Nc, 0.0f);
     if ((int)rhs.size() != Nc) rhs.assign((size_t)Nc, 0.0f);
 
-    diagInv.assign((size_t)Nc, 0.0f);
-    pcg_r.assign((size_t)Nc, 0.0f);
-    pcg_z.assign((size_t)Nc, 0.0f);
-    pcg_d.assign((size_t)Nc, 0.0f);
-    pcg_q.assign((size_t)Nc, 0.0f);
-    pcg_Ap.assign((size_t)Nc, 0.0f);
+  
 
-    std::fill(p.begin(), p.end(), 0.0f);
-    std::fill(rhs.begin(), rhs.end(), 0.0f);
 
     const float invDx = 1.0f / dx;
-    const float invDx2 = invDx * invDx;
     const float invDt = 1.0f / std::max(1e-8f, dt);
 
-    auto isSolidCell = [&](int i, int j) -> bool {
-        if (i < 0 || i >= nx || j < 0 || j >= ny) {
-            if (openTop && j == ny) return false; // open boundary (air)
-            return true;
-        }
-        return solid[(size_t)idxP(i, j)] != 0;
-    };
+
 
     // Build rhs and Jacobi preconditioner diagonal.
     for (int j = 0; j < ny; ++j) {
@@ -114,7 +34,7 @@ inline void MACWater::projectLiquid() {
             const int id = idxP(i, j);
             if (solid[(size_t)id] || !liquid[(size_t)id]) {
                 rhs[(size_t)id] = 0.0f;
-                diagInv[(size_t)id] = 0.0f;
+                // diagInv[(size_t)id] = 0.0f;
                 continue;
             }
 
@@ -133,86 +53,29 @@ inline void MACWater::projectLiquid() {
             const float divCell = (uR - uL + vT - vB) * invDx;
             rhs[(size_t)id] = -divCell * invDt;
 
-            int nonSolid = 0;
-            if (!isSolidCell(i - 1, j)) ++nonSolid;
-            if (!isSolidCell(i + 1, j)) ++nonSolid;
-            if (!isSolidCell(i, j - 1)) ++nonSolid;
-            if (!isSolidCell(i, j + 1)) ++nonSolid;
-
-            const float diag = (float)nonSolid * invDx2;
-            diagInv[(size_t)id] = (diag > 1e-12f) ? (1.0f / diag) : 0.0f;
+            
         }
     }
 
-    // PCG solve
-    applyPressureA(this, p, pcg_Ap);
-    for (int id = 0; id < Nc; ++id) {
-        if (solid[(size_t)id] || !liquid[(size_t)id]) {
-            pcg_r[(size_t)id] = 0.0f;
-            pcg_z[(size_t)id] = 0.0f;
-            pcg_d[(size_t)id] = 0.0f;
-            continue;
-        }
-        const float r = rhs[(size_t)id] - pcg_Ap[(size_t)id];
-        pcg_r[(size_t)id] = r;
-        pcg_z[(size_t)id] = diagInv[(size_t)id] * r;
-        pcg_d[(size_t)id] = pcg_z[(size_t)id];
-    }
+    // --- Shared pressure solve (PCG) ---
+    pressureSolver.configure(
+        nx, ny, dx,
+        openTop,
+        solid,
+        liquid,
+        /*removeMeanForGauge=*/false   // IMPORTANT for free-surface water
+    );
 
-    auto dotLiquid = [&](const std::vector<float>& a, const std::vector<float>& b) -> double {
-        double s = 0.0;
-        for (int id = 0; id < Nc; ++id) {
-            if (solid[(size_t)id] || !liquid[(size_t)id]) continue;
-            s += (double)a[(size_t)id] * (double)b[(size_t)id];
-        }
-        return s;
-    };
+    // Warm start: do NOT zero p every frame
+    // (If you still want to reset sometimes, do it outside based on user action.)
+    const int maxIters = std::max(1, pressureMaxIters);
 
-    auto maxAbsLiquid = [&](const std::vector<float>& a) -> float {
-        float m = 0.0f;
-        for (int id = 0; id < Nc; ++id) {
-            if (solid[(size_t)id] || !liquid[(size_t)id]) continue;
-            m = std::max(m, std::fabs(a[(size_t)id]));
-        }
-        return m;
-    };
+    // Your current 'pressureTol' in Water is comparing against residual directly.
+    // In the shared solver we interpret tol in "predDiv space": |r|*dt <= tol.
+    // So we pass your existing value as-is and dt along.
+    const float tolPredDiv = std::max(0.0f, pressureTol);
 
-    double deltaNew = dotLiquid(pcg_r, pcg_z);
-    const float tol = std::max(0.0f, pressureTol);
-
-    int iters = std::max(1, pressureMaxIters);
-    for (int iter = 0; iter < iters; ++iter) {
-        applyPressureA(this, pcg_d, pcg_q);
-
-        const double denom = dotLiquid(pcg_d, pcg_q);
-        if (!(denom > 1e-30)) break;
-
-        const double alpha = deltaNew / denom;
-
-        for (int id = 0; id < Nc; ++id) {
-            if (solid[(size_t)id] || !liquid[(size_t)id]) continue;
-            p[(size_t)id] += (float)(alpha * (double)pcg_d[(size_t)id]);
-            pcg_r[(size_t)id] -= (float)(alpha * (double)pcg_q[(size_t)id]);
-        }
-
-        const float rInf = maxAbsLiquid(pcg_r);
-        if (rInf <= tol) break;
-
-        for (int id = 0; id < Nc; ++id) {
-            if (solid[(size_t)id] || !liquid[(size_t)id]) continue;
-            pcg_z[(size_t)id] = diagInv[(size_t)id] * pcg_r[(size_t)id];
-        }
-
-        const double deltaOld = deltaNew;
-        deltaNew = dotLiquid(pcg_r, pcg_z);
-        if (!(deltaNew > 0.0) || !(deltaOld > 0.0)) break;
-
-        const double beta = deltaNew / deltaOld;
-        for (int id = 0; id < Nc; ++id) {
-            if (solid[(size_t)id] || !liquid[(size_t)id]) continue;
-            pcg_d[(size_t)id] = pcg_z[(size_t)id] + (float)(beta * (double)pcg_d[(size_t)id]);
-        }
-    }
+    pressureSolver.solvePCG(p, rhs, maxIters, tolPredDiv, dt);
 
     // Subtract pressure gradient from velocities.
     const float scale = dt / dx;
