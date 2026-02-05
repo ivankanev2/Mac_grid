@@ -3,7 +3,7 @@
 #include <cmath>  // IMPORTANT: mac_grid_core.h uses std::isfinite but doesn't include <cmath>.
 
 #include "mac_grid_core.h"
-#include "pressure_solver.h"
+// pressure_solver.h is already included via mac_grid_core.h
 
 #include <cstdint>
 #include <vector>
@@ -90,8 +90,8 @@ private:
     // Extrapolation masks
     std::vector<uint8_t> validU, validV;
 
-    // Unified pressure solver (shared implementation with Smoke later)
-    PressureSolver pressureSolver;
+    // // Unified pressure solver (shared implementation with Smoke later)
+    // PressureSolver pressureSolver;
 
     int stepCounter = 0;
 

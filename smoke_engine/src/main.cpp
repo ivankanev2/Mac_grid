@@ -16,11 +16,14 @@
 
 #include "Sim/mac_smoke_sim.h"
 #include "Sim/mac_water_sim.h"
+#include "Sim/pressure_solver.h"
 #include "Renderer/smoke_renderer.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
+
+
 
 // window size and sim resolution
 static const int NX = 96;
@@ -76,8 +79,19 @@ int main()
     // Simulator
     float dx = 1.0f / NX;
     float dt_initial = 0.02f;
+
+
+    // One shared pressure solver instance used by BOTH smoke and water.
+    // The solver is reconfigured per-solve (nx/ny/BCs/masks), but it can reuse
+    // internal allocations across both sims.
+    PressureSolver sharedPressureSolver;
+
     MAC2D sim(NX, NY, dx, dt_initial);
     MACWater waterSim(NX, NY, dx, dt_initial);
+
+    // Make both sims use the same solver instance.
+    sim.setSharedPressureSolver(&sharedPressureSolver);
+    waterSim.setSharedPressureSolver(&sharedPressureSolver);
 
     // UI state
     UI::Settings ui;

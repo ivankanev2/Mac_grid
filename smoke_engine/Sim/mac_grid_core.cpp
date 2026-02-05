@@ -1418,7 +1418,7 @@ void MACGridCore::project() {
 
     float divTol = openTopBC ? 5e-4f : 1e-4f;
 
-    pressureSolver.configure(
+    ps().configure(
         nx, ny, dx,
         openTopBC,
         solid,
@@ -1427,7 +1427,7 @@ void MACGridCore::project() {
     );
 
     stats.pressureSolver = SOLVER_MG;
-    pressureSolver.solveMG(p, rhs, 20, divTol, dt);
+    ps().solveMG(p, rhs, 20, divTol, dt);
 
 
     auto t1 = std::chrono::high_resolution_clock::now();
