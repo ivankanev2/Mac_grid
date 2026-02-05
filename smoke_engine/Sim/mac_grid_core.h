@@ -36,7 +36,18 @@ struct MACGridCore {
         STOP_RESIDUAL_INCREASE
     };
 
+    // Pressure solver.
+    // Default: each grid owns its own instance (pressureSolver).
+    // Optional: smoke + water can share one solver instance by calling
+    // setSharedPressureSolver(&shared) on both sims.
     PressureSolver pressureSolver;
+
+    // If non-null, all pressure solves will use this shared solver instance instead.
+    void setSharedPressureSolver(PressureSolver* s) { sharedPressureSolver = s; }
+    PressureSolver& ps() { return sharedPressureSolver ? *sharedPressureSolver : pressureSolver; }
+    const PressureSolver& ps() const { return sharedPressureSolver ? *sharedPressureSolver : pressureSolver; }
+
+
 
     struct FrameStats {
         float dt = 0.0f;
@@ -165,6 +176,8 @@ private:
     void removePressureMean();
 
     bool openTopBC = false;
+
+    PressureSolver* sharedPressureSolver = nullptr;
 
     
 
