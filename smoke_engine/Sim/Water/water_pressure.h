@@ -60,7 +60,7 @@ inline void MACWater::projectLiquid() {
     // --- Shared pressure solve (PCG) ---
     ps().configure(
         nx, ny, dx,
-        openTop,
+        /*openTopBC=*/false,
         solid,
         liquid,
         /*removeMeanForGauge=*/false   // IMPORTANT for free-surface water
@@ -75,7 +75,9 @@ inline void MACWater::projectLiquid() {
     // So we pass your existing value as-is and dt along.
     const float tolPredDiv = std::max(0.0f, pressureTol);
 
-    ps().solvePCG(p, rhs, maxIters, tolPredDiv, dt);
+    // ps().solvePCG(p, rhs, maxIters, tolPredDiv, dt);
+
+    ps().solveMG(p, rhs, maxIters, pressureTol, dt);
 
     // Subtract pressure gradient from velocities.
     const float scale = dt / dx;
