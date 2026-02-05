@@ -333,22 +333,37 @@ void PressureSolver::ensureMultigrid()
                 int fi = 2*I, fj = 2*J;
 
                 bool allSolid = true;
+                bool allFluid = true;   // <- NEW: require full 2x2 to be fluid on coarse
                 bool anyFluid = false;
 
-                for (int dj = 0; dj < 2; ++dj)
-                for (int di = 0; di < 2; ++di) {
-                    int ii = fi + di;
-                    int jj = fj + dj;
-                    if (ii < F.nx && jj < F.ny) {
+                for (int dj = 0; dj < 2; ++dj) {
+                    for (int di = 0; di < 2; ++di) {
+                        int ii = fi + di;
+                        int jj = fj + dj;
+
+                        // Outside fine grid => treat as not-fluid (breaks allFluid)
+                        if (ii < 0 || jj < 0 || ii >= F.nx || jj >= F.ny) {
+                            allFluid = false;
+                            continue;
+                        }
+
                         const int fid = mgIdx(ii, jj, F.nx);
-                        if (!F.solid[(size_t)fid]) allSolid = false;
-                        if (F.fluid[(size_t)fid])  anyFluid = true;
+
+                        if (!F.solid[fid]) allSolid = false;
+
+                        if (F.fluid[fid]) {
+                            anyFluid = true;
+                        } else {
+                            allFluid = false;
+                        }
                     }
                 }
 
                 const int cid = mgIdx(I, J, cnx);
-                C.solid[(size_t)cid] = allSolid ? 1 : 0;
-                C.fluid[(size_t)cid] = (!allSolid && anyFluid) ? 1 : 0;
+                C.solid[cid] = allSolid ? 1 : 0;
+
+                // IMPORTANT: only keep fluid on coarse if it's fully fluid on fine
+                C.fluid[cid] = (!allSolid && allFluid) ? 1 : 0;
             }
         }
 
