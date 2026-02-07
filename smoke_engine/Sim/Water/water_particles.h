@@ -150,3 +150,197 @@ inline void MACWater::applyDissipation() {
     }
     particles.resize(write);
 }
+
+inline uint32_t water_hash_u32(uint32_t x) {
+    // simple integer hash (deterministic)
+    x ^= x >> 16;
+    x *= 0x7feb352d;
+    x ^= x >> 15;
+    x *= 0x846ca68b;
+    x ^= x >> 16;
+    return x;
+}
+
+inline float water_rand01(uint32_t& s) {
+    s = water_hash_u32(s);
+    // 24-bit mantissa -> [0,1)
+    return (float)(s & 0x00FFFFFFu) / (float)0x01000000u;
+}
+
+// Keep particle coverage stable: ensure each liquid cell has >= particlesPerCell particles.
+// This prevents the liquid mask from collapsing ("water shrinking") as particles clump.
+inline void MACWater::reseedParticles() {
+    if (particlesPerCell <= 0) return;
+
+    const int Nc = nx * ny;
+    if (Nc <= 0) return;
+
+    // Count particles per cell + mark occupied cells from particles ONLY.
+    std::vector<int> cnt((size_t)Nc, 0);
+    std::vector<uint8_t> occ((size_t)Nc, 0);
+
+    for (const auto& p : particles) {
+        int i = (int)std::floor(p.x / dx);
+        int j = (int)std::floor(p.y / dx);
+        i = water_internal::clampi(i, 0, nx - 1);
+        j = water_internal::clampi(j, 0, ny - 1);
+        const int id = idxP(i, j);
+        if (solid[(size_t)id]) continue;
+        cnt[(size_t)id]++;
+        occ[(size_t)id] = 1;
+    }
+
+    // Build a tight region: occupied cells + 1-ring neighbors (still tight, prevents nuking).
+    std::vector<uint8_t> region((size_t)Nc, 0);
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const int id = idxP(i, j);
+            if (solid[(size_t)id]) continue;
+
+            if (occ[(size_t)id]) { region[(size_t)id] = 1; continue; }
+
+            const bool near =
+                (i > 0     && occ[(size_t)idxP(i - 1, j)]) ||
+                (i < nx-1  && occ[(size_t)idxP(i + 1, j)]) ||
+                (j > 0     && occ[(size_t)idxP(i, j - 1)]) ||
+                (j < ny-1  && occ[(size_t)idxP(i, j + 1)]);
+
+            if (near) region[(size_t)id] = 1;
+        }
+    }
+
+    // Deterministic RNG helpers
+    auto hash_u32 = [](uint32_t x) {
+        x ^= x >> 16;
+        x *= 0x7feb352d;
+        x ^= x >> 15;
+        x *= 0x846ca68b;
+        x ^= x >> 16;
+        return x;
+    };
+    auto rand01 = [&](uint32_t& s) {
+        s = hash_u32(s);
+        return (float)(s & 0x00FFFFFFu) / (float)0x01000000u;
+    };
+
+    // Safety cap: never spawn insane amounts in one frame.
+    const int target = particlesPerCell;
+    const int maxNewPerFrame = std::max(2000, (nx * ny) / 2);
+
+    int spawned = 0;
+    std::vector<Particle> newParts;
+    newParts.reserve((size_t)std::min(maxNewPerFrame, nx * ny));
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const int id = idxP(i, j);
+            if (!region[(size_t)id]) continue;
+            if (solid[(size_t)id]) continue;
+
+            const int have = cnt[(size_t)id];
+            if (have >= target) continue;
+
+            int need = target - have;
+            while (need-- > 0) {
+                if (spawned >= maxNewPerFrame) break;
+
+                uint32_t seed = (uint32_t)(i + 73856093u * (uint32_t)j) ^ (uint32_t)(stepCounter * 19349663);
+
+                const float rx = rand01(seed);
+                const float ry = rand01(seed);
+
+                Particle pnew;
+                pnew.x = (i + rx) * dx;
+                pnew.y = (j + ry) * dx;
+
+                // sample grid vel so we don't inject energy
+                float uu = 0.0f, vv = 0.0f;
+                velAt(pnew.x, pnew.y, u, v, uu, vv);
+                pnew.u = uu;
+                pnew.v = vv;
+
+                pnew.c00 = pnew.c01 = pnew.c10 = pnew.c11 = 0.0f;
+                pnew.age = 0.0f;
+
+                newParts.push_back(pnew);
+                spawned++;
+            }
+            if (spawned >= maxNewPerFrame) break;
+        }
+        if (spawned >= maxNewPerFrame) break;
+    }
+
+    if (!newParts.empty()) {
+        particles.insert(particles.end(), newParts.begin(), newParts.end());
+    }
+}
+
+inline void MACWater::relaxParticles(int iters, float strength) {
+    if (particles.empty() || iters <= 0) return;
+
+    const float r = 0.35f * dx;     // interaction radius
+    const float r2 = r * r;
+
+    // simple grid hash: particles per cell index
+    std::vector<std::vector<int>> buckets((size_t)(nx * ny));
+    buckets.assign((size_t)(nx * ny), {});
+
+    auto cellId = [&](float x, float y) {
+        int i = (int)std::floor(x / dx);
+        int j = (int)std::floor(y / dx);
+        i = water_internal::clampi(i, 0, nx - 1);
+        j = water_internal::clampi(j, 0, ny - 1);
+        return idxP(i, j);
+    };
+
+    for (int it = 0; it < iters; ++it) {
+        for (auto& b : buckets) b.clear();
+        for (int k = 0; k < (int)particles.size(); ++k) {
+            int id = cellId(particles[k].x, particles[k].y);
+            if (!solid[(size_t)id]) buckets[(size_t)id].push_back(k);
+        }
+
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const int id = idxP(i, j);
+                if (solid[(size_t)id]) continue;
+
+                // check this cell + neighbors
+                for (int dj = -1; dj <= 1; ++dj) {
+                    for (int di = -1; di <= 1; ++di) {
+                        int ii = i + di, jj = j + dj;
+                        if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+                        const int nid = idxP(ii, jj);
+                        if (solid[(size_t)nid]) continue;
+
+                        const auto& A = buckets[(size_t)id];
+                        const auto& B = buckets[(size_t)nid];
+
+                        for (int a : A) for (int b : B) {
+                            if (a >= b) continue;
+
+                            float dxp = particles[b].x - particles[a].x;
+                            float dyp = particles[b].y - particles[a].y;
+                            float d2  = dxp*dxp + dyp*dyp;
+                            if (d2 >= r2 || d2 < 1e-12f) continue;
+
+                            float d = std::sqrt(d2);
+                            float push = (r - d) * strength;
+
+                            float nxp = dxp / d;
+                            float nyp = dyp / d;
+
+                            particles[a].x -= 0.5f * push * nxp;
+                            particles[a].y -= 0.5f * push * nyp;
+                            particles[b].x += 0.5f * push * nxp;
+                            particles[b].y += 0.5f * push * nyp;
+                        }
+                    }
+                }
+            }
+        }
+
+        enforceParticleBounds();
+        removeParticlesInSolids();
+    }
+}

@@ -148,6 +148,18 @@ void MACWater::step() {
     enforceParticleBounds();
     removeParticlesInSolids();
 
+        // IMPORTANT: liquid mask must match the *current* particle positions
+    {
+        const int savedDil = maskDilations;
+        maskDilations = 0;        // reseed should NOT use dilated mask
+        buildLiquidMask();
+        maskDilations = savedDil;
+    }
+
+    relaxParticles(2, 0.5f); // 2 iters, moderate strength
+
+    relaxParticles(2, 0.5f);
+
     // --- Optional dissipation (removes particles over time) ---
     applyDissipation();
 

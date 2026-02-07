@@ -302,11 +302,14 @@ struct WaterStats {
     int nearRight = 0;
     int nearBottom = 0;
     int nearTop = 0;
+    float particleMassProxy = 0.0f;
 };
 
 static void computeWaterStats(const MACWater& water, WaterStats& out) {
     out = WaterStats{};
     out.particles = water.particles.size();
+    out.particleMassProxy = (float)water.particles.size();
+    
 
     // Field totals.
     double sum = 0.0;
@@ -348,7 +351,11 @@ static void computeWaterStats(const MACWater& water, WaterStats& out) {
 
     // Divergence stats (water-only).
     auto isSolidCell = [&](int i, int j) {
-        if (i < 0 || i >= water.nx || j < 0 || j >= water.ny) return true;
+        if (i < 0 || i >= water.nx || j < 0) return true;
+
+        // For open-top water, outside above the top is AIR, not SOLID.
+        if (j >= water.ny) return water.openTop ? false : true;
+
         return water.solid[(size_t)water.idxP(i, j)] != 0;
     };
     auto isLiquidCell = [&](int i, int j) {
@@ -550,6 +557,7 @@ static void drawDebugTabs(MAC2D& sim, MACWater& water, Settings& ui, Probe& prob
             ImGui::Text("sum(water): %.6f   targetMass: %.6f", wst.sumWater, water.targetMass);
             ImGui::Text("max(water): %.6f", wst.maxWater);
             ImGui::Text("liquid cells: %d   interior: %d", wst.liquidCount, wst.interiorLiquidCount);
+            ImGui::Text("particle mass proxy: %.0f", wst.particleMassProxy);
             ImGui::Text("div (all) max/avg: %.3e / %.3e", wst.maxAbsDiv, wst.avgAbsDiv);
             ImGui::Text("div (int) max/avg: %.3e / %.3e", wst.maxAbsDivInterior, wst.avgAbsDivInterior);
             ImGui::Text("near borders L/R/B/T: %d / %d / %d / %d", wst.nearLeft, wst.nearRight, wst.nearBottom, wst.nearTop);

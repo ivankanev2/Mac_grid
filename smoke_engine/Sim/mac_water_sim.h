@@ -45,7 +45,7 @@ struct MACWater : public MACGridCore {
     float diffuseOmega = 0.8f;   // 0.6–0.9 typical (weighted Jacobi)
 
     // --- Simulation controls ---
-    int   particlesPerCell   = 0;       // visualization/initial sampling density
+    int   particlesPerCell   = 2;       // visualization/initial sampling density
     float flipBlend          = 0.1f;    // 0=PIC, 1=FLIP
     bool  useAPIC            = true;   // enable APIC transfers (PIC w/ affine)
     int   borderThickness    = 2;       // solid border thickness (cells)
@@ -59,6 +59,13 @@ struct MACWater : public MACGridCore {
 
     // Used only for UI debug display in this project.
     float targetMass         = 0.0f;
+
+    // --- Volume preservation (free-surface drift fix) ---
+    // When true, we remove the mean of the pressure RHS over LIQUID cells.
+    // This biases the projection so the net divergence in the liquid region is ~0,
+    // which reduces slow volume gain/loss for open free-surface liquid.
+    bool  volumePreserveRhsMean  = true;
+    float volumePreserveStrength = 0.05f; // 0..1 (1 = full mean removal)
 
     MACWater(int NX, int NY, float DX, float DT);
 
@@ -110,6 +117,10 @@ private:
     void applyDissipation();
     void rasterizeWaterField();
     void diffuseVelocityImplicit();
+
+    void reseedParticles();
+
+    void relaxParticles(int iters, float strength);
 
 };
 
