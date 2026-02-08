@@ -156,7 +156,7 @@ void MACWater::step() {
         maskDilations = savedDil;
     }
 
-    relaxParticles(2, 0.5f); // 2 iters, moderate strength
+    reseedParticles();
 
     relaxParticles(2, 0.5f);
 
