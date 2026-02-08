@@ -81,5 +81,7 @@ void MAC2D::rebuildSolidsFromPipe(bool clearInterior) {
         }
     }
 
+    syncSolidsToFluidAndFaces();
+
     invalidatePressureMatrix();
 }

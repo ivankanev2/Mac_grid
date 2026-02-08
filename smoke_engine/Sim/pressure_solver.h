@@ -17,10 +17,12 @@ public:
     PressureSolver() = default;
 
     void configure(int nx, int ny, float dx,
-               bool openTopBC,
-               const std::vector<uint8_t>& solidMask,
-               const std::vector<uint8_t>& fluidMask,
-               bool removeMeanForGauge);
+           bool openTopBC,
+           const std::vector<uint8_t>& solidMask,
+           const std::vector<uint8_t>& fluidMask,
+           bool removeMeanForGauge,
+           const std::vector<float>* faceOpenU = nullptr,   // (nx+1)*ny
+           const std::vector<float>* faceOpenV = nullptr);  // nx*(ny+1)
 
     // Solve A*p = rhs. p is warm-started (uses current p values).
     // Returns iterations used (0 if early-out).
@@ -60,14 +62,17 @@ private:
     std::vector<uint8_t> m_solid;
     std::vector<uint8_t> m_fluid;
 
-    // Per-face openness (0..1). Default 1.0 = fully open.
-    std::vector<float> faceOpenU; // size (nx+1) * ny  — u faces (vertical faces)
-    std::vector<float> faceOpenV; // size nx * (ny+1)  — v faces (horizontal faces)
+    // Face openness (0..1). If not provided, derived from solidMask as binary 0/1.
+    // U faces: (nx+1)*ny , V faces: nx*(ny+1)
+    std::vector<float> m_faceOpenU;
+    std::vector<float> m_faceOpenV;
 
-    // Operator cache
-    std::vector<int>     m_L, m_R, m_B, m_T;
-    std::vector<uint8_t> m_count;
-    std::vector<float>   m_diagInv;
+
+    // Operator cache (multiface-ready)
+    std::vector<int>   m_L, m_R, m_B, m_T;     // fluid neighbor indices (-1 = none)
+    std::vector<float> m_wL, m_wR, m_wB, m_wT; // weights for fluid neighbors only (0..1)
+    std::vector<float> m_diagW;                // diagonal weight sum (includes air faces)
+    std::vector<float> m_diagInv;              // 1 / (diagW * invDx2)
 
     // PCG buffers
     std::vector<float> m_r, m_z, m_d, m_q, m_Ap;
@@ -83,9 +88,10 @@ private:
         std::vector<uint8_t> solid;   // 1 = solid
         std::vector<uint8_t> fluid;   // 1 = in pressure domain
 
-        std::vector<int> L, R, B, T;  // neighbor indices (-1 = none)
-        std::vector<uint8_t> diagCount;
-        std::vector<float> diagInv;
+        std::vector<int>   L, R, B, T;      // neighbor indices (-1 = none)
+        std::vector<float> wL, wR, wB, wT;  // weights to fluid neighbors (0..1)
+        std::vector<float> diagW;           // diagonal weight sum (includes air faces)
+        std::vector<float> diagInv;         // 1 / (diagW * invDx2)
 
         std::vector<float> x, b, Ax, r;
     };

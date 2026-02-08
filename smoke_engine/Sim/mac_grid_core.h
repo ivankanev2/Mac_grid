@@ -22,6 +22,10 @@ struct MACGridCore {
     std::vector<uint8_t> solid;
     std::vector<uint8_t> fluid;
 
+    // Multiface vectors
+    std::vector<float> faceOpenU; // (nx+1)*ny
+    std::vector<float> faceOpenV; // nx*(ny+1)
+
     enum PressureSolverKind : int {
         SOLVER_PCG = 0,
         SOLVER_MG  = 1
@@ -156,6 +160,15 @@ struct MACGridCore {
 
     void invalidatePressureMatrix() { markPressureMatrixDirty(); mgDirty = true; }
     const FrameStats& getStats() const { return stats; }
+
+    void setPostBCStats(float maxDivAfterBC, float maxFaceAfterBC) {
+    stats.maxDivAfter = maxDivAfterBC;
+    stats.maxFaceSpeedAfter = maxFaceAfterBC;
+}
+
+    void rebuildFaceOpennessBinaryFromSolids();
+
+    void syncSolidsToFluidAndFaces();
 
     
 
