@@ -32,11 +32,11 @@ void MAC2D::applyBoundary() {
         if (!(valveOpen && inValve(i))) v[idxV(i, 0)] = 0.0f;
 
         // top: closed unless openTop (zero-gradient outflow)
-        if (!getOpenTop()) {
-            v[idxV(i, ny)] = 0.0f;
+        // top: open => zero normal gradient on v  (outflow style)
+        if (getOpenTop()) {
+            v[idxV(i, ny)] = v[idxV(i, ny - 1)];
         } else {
-            // OPEN TOP: leave v(i,ny) alone.
-            // Do NOT clamp/copy here or you will break the divergence projection.
+            v[idxV(i, ny)] = 0.0f;
         }
     }
 
@@ -96,47 +96,6 @@ void MAC2D::addValveScalars() {
     }
 }
 
-// void MAC2D::applyValveBC() {
-//     if (!valveOpen) return;
-
-//     // 1) impose upward inflow through bottom boundary faces
-//     for (int i = valveI0; i <= valveI1; ++i) {
-//         v[idxV(i, 0)] = inletSpeed; // +up into domain
-//     }
-
-//     // 2) Kill tangential velocity along the opening to prevent sideways "leak"
-//     //
-//     // u lives on vertical faces: i in [0..nx], so the valve opening affects faces
-//     // from i=valveI0 .. valveI1+1 (inclusive).
-//     //
-//     // Clamp into valid u-face index range.
-//     int u0 = std::max(0, valveI0);
-//     int u1 = std::min(nx, valveI1 + 1);
-
-//     for (int i = u0; i <= u1; ++i) {
-//         u[idxU(i, 0)] = 0.0f;
-//     }
-
-//     // Optional but often helps a LOT:
-//     // also kill tangential velocity one cell above the inlet lip (prevents "jet attaching")
-//     // Comment this out if you dislike how "engineered" it feels.
-//     for (int i = u0; i <= u1; ++i) {
-//         if (ny > 1) u[idxU(i, 1)] = 0.0f;
-//     }
-
-//     // 3) Inject smoke/temp into first fluid row above the boundary (j=1)
-//     int j = 1;
-//     if (j < ny) {
-//         for (int i = valveI0; i <= valveI1; ++i) {
-//             if (!isSolid(i, j)) {
-//                 smoke[idxP(i, j)] = inletSmoke;
-//                 temp[idxP(i, j)]  = inletTemp;
-//                 age[idxP(i, j)]   = 0.0f;   // important: otherwise age can “teleport old smoke” into new inflow
-//             }
-//         }
-//     }
-// }
-
 void MAC2D::applyValveSink() {
     if (!valveOpen) return;
 
@@ -153,27 +112,51 @@ void MAC2D::applyValveSink() {
         }
     }
 }
+
 void MAC2D::setOpenTop(bool on)
 {
     printf("[setOpenTop] requested=%d current=%d\n", (int)on, (int)getOpenTop());
-
     if (getOpenTop() == on) return;
 
     setOpenTopBC(on);
 
-    printf("[setOpenTop] applied. now=%d\n", (int)getOpenTop());
+    const int jTop = ny - 1;
 
-    
-    // for (int i = 1; i < nx - 1; ++i)
-    //     solid[idxP(i, ny - 1)] = on ? 0 : 1;
+    if (on) {
+        // OPEN: clear the top wall cells (keep corners optional)
+        for (int i = 1; i < nx - 1; ++i) {
+            solid[idxP(i, jTop)] = 0;
+        }
+    } else {
+        // CLOSED: restore the top wall cells
+        for (int i = 1; i < nx - 1; ++i) {
+            solid[idxP(i, jTop)] = 1;
+        }
+    }
 
-    if (!on) {
+    // Make fluid consistent + rebuild face openness + invalidate operators
+    syncSolidsToFluidAndFaces();   // this calls rebuildFaceOpenness + invalidatePressureMatrix()
+
+    int solidTop = 0;
+    for (int i = 0; i < nx; ++i) solidTop += (solid[idxP(i, ny-1)] != 0);
+    printf("[setOpenTop] solidTop=%d / %d\n", solidTop, nx);
+
+    // IMPORTANT: make sure the projection domain + operator reflect the new BC immediately
+    setFluidMaskAllNonSolid();      // smoke sim should treat all non-solid as fluid
+    invalidatePressureMatrix();     // rebuild Laplacian + MG if needed
+
+    // Optional but makes it visually “snap” open right away:
+    if (on) {
+        for (int i = 0; i < nx; ++i)
+            v[idxV(i, ny)] = v[idxV(i, ny - 1)];
+    } else {
         for (int i = 0; i < nx; ++i)
             v[idxV(i, ny)] = 0.0f;
     }
 
-    // invalidatePressureMatrix();
     enforceBoundaries();
+
+    printf("[setOpenTop] applied. now=%d\n", (int)getOpenTop());
 }
 
 void MAC2D::enforceBoundaries() {

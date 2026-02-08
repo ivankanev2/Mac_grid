@@ -7,7 +7,9 @@ void PressureSolver::configure(int nx, int ny, float dx,
                                bool openTopBC,
                                const std::vector<uint8_t>& solidMask,
                                const std::vector<uint8_t>& fluidMask,
-                               bool removeMeanForGauge)
+                               bool removeMeanForGauge,
+                               const std::vector<float>* faceOpenU,
+                               const std::vector<float>* faceOpenV)
 {
     m_nx = nx; m_ny = ny;
     m_dx = dx;
@@ -22,6 +24,42 @@ void PressureSolver::configure(int nx, int ny, float dx,
 
     for (int k = 0; k < N; ++k)
         if (m_solid[k]) m_fluid[k] = 0;
+
+    // ----- Face openness (multiface) -----
+    // If caller didn't provide openness, derive binary 0/1 openness from solidMask.
+    m_faceOpenU.assign((size_t)(nx + 1) * (size_t)ny, 1.0f);
+    m_faceOpenV.assign((size_t)nx * (size_t)(ny + 1), 1.0f);
+
+    auto uIdx = [&](int i, int j) { return (size_t)j * (size_t)(nx + 1) + (size_t)i; }; // i in [0..nx], j in [0..ny-1]
+    auto vIdx = [&](int i, int j) { return (size_t)j * (size_t)nx + (size_t)i; };       // i in [0..nx-1], j in [0..ny]
+
+    if (faceOpenU && faceOpenU->size() == m_faceOpenU.size()) {
+        m_faceOpenU = *faceOpenU;
+    } else {
+        // binary fallback from solids
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                bool blocked = false;
+                if (i - 1 >= 0) blocked = blocked || (m_solid[(size_t)idx(i - 1, j, nx)] != 0);
+                if (i < nx)     blocked = blocked || (m_solid[(size_t)idx(i,     j, nx)] != 0);
+                m_faceOpenU[uIdx(i, j)] = blocked ? 0.0f : 1.0f;
+            }
+        }
+    }
+
+    if (faceOpenV && faceOpenV->size() == m_faceOpenV.size()) {
+        m_faceOpenV = *faceOpenV;
+    } else {
+        // binary fallback from solids
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                bool blocked = false;
+                if (j - 1 >= 0) blocked = blocked || (m_solid[(size_t)idx(i, j - 1, nx)] != 0);
+                if (j < ny)     blocked = blocked || (m_solid[(size_t)idx(i, j,     nx)] != 0);
+                m_faceOpenV[vIdx(i, j)] = blocked ? 0.0f : 1.0f;
+            }
+        }
+    }
 
     m_dirty = true;
     mgDirty = true;
@@ -42,40 +80,78 @@ void PressureSolver::rebuildOperator()
     const int nx = m_nx, ny = m_ny;
     const int N  = nx * ny;
 
-    m_L.assign(N, -1); m_R.assign(N, -1);
-    m_B.assign(N, -1); m_T.assign(N, -1);
-    m_count.assign(N, 0);
-    m_diagInv.assign(N, 0.0f);
+    m_L.assign((size_t)N, -1); m_R.assign((size_t)N, -1);
+    m_B.assign((size_t)N, -1); m_T.assign((size_t)N, -1);
 
-    auto isSolid = [&](int i, int j) { return m_solid[idx(i,j,nx)] != 0; };
-    auto isFluid = [&](int i, int j) { return m_fluid[idx(i,j,nx)] != 0; };
+    m_wL.assign((size_t)N, 0.0f); m_wR.assign((size_t)N, 0.0f);
+    m_wB.assign((size_t)N, 0.0f); m_wT.assign((size_t)N, 0.0f);
+
+    m_diagW.assign((size_t)N, 0.0f);
+    m_diagInv.assign((size_t)N, 0.0f);
+
+    auto uIdx = [&](int i, int j) { return (size_t)j * (size_t)(nx + 1) + (size_t)i; };
+    auto vIdx = [&](int i, int j) { return (size_t)j * (size_t)nx + (size_t)i; };
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            const int id = idx(i,j,nx);
-            if (!isFluid(i,j)) continue;
+            const int id = idx(i, j, nx);
+            if (!m_fluid[(size_t)id]) continue;
 
-            int count = 0;
+            float diagW = 0.0f;
 
-            auto addNbr = [&](int ni, int nj, int& slot) {
-                const int nid = idx(ni,nj,nx);
-                if (m_fluid[nid]) { slot = nid; count++; }
-                else if (!m_solid[nid]) { count++; } // air Dirichlet (p=0)
+            auto addFace = [&](int ni, int nj, float wFace,
+                               int& slotNbr, float& wNbr)
+            {
+                if (wFace <= 0.0f) return;
+
+                // neighbor inside domain?
+                if (ni >= 0 && nj >= 0 && ni < nx && nj < ny) {
+                    const int nid = idx(ni, nj, nx);
+
+                    if (m_solid[(size_t)nid]) {
+                        // Neumann (solid) -> no contribution
+                        return;
+                    }
+
+                    if (m_fluid[(size_t)nid]) {
+                        // fluid neighbor -> offdiag + diag
+                        slotNbr = nid;
+                        wNbr = wFace;
+                        diagW += wFace;
+                    } else {
+                        // air Dirichlet p=0 -> diag only
+                        diagW += wFace;
+                        return;
+                    }
+                } else {
+                    // outside domain: treat as air Dirichlet ONLY if that face is open
+                    // (wFace already encodes openness)
+                    return;
+                }
             };
 
-            if (i > 0)      addNbr(i-1, j, m_L[id]);
-            if (i+1 < nx)   addNbr(i+1, j, m_R[id]);
-            if (j > 0)      addNbr(i, j-1, m_B[id]);
-            if (j+1 < ny)   addNbr(i, j+1, m_T[id]);
+            // left/right use U faces
+            addFace(i - 1, j, m_faceOpenU[uIdx(i,     j)], m_L[(size_t)id], m_wL[(size_t)id]);
+            addFace(i + 1, j, m_faceOpenU[uIdx(i + 1, j)], m_R[(size_t)id], m_wR[(size_t)id]);
 
-            if (m_openTopBC && j == ny-1) {
-                // neighbor above top row acts like air (Dirichlet)
-                count++;
+            // bottom/top use V faces
+            addFace(i, j - 1, m_faceOpenV[vIdx(i, j)],     m_B[(size_t)id], m_wB[(size_t)id]);
+
+            // top neighbor: if inside domain, regular. If outside and openTopBC, allow Dirichlet.
+            if (j + 1 < ny) {
+                addFace(i, j + 1, m_faceOpenV[vIdx(i, j + 1)], m_T[(size_t)id], m_wT[(size_t)id]);
+            } else {
+                // outside above top row
+                if (m_openTopBC) {
+                    addFace(i, j + 1, m_faceOpenV[vIdx(i, ny)], m_T[(size_t)id], m_wT[(size_t)id]);
+                } else {
+                    // closed boundary -> Neumann (no contribution)
+                }
             }
 
-            m_count[id] = (uint8_t)count;
-            const float diag = (float)count * m_invDx2;
-            m_diagInv[id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
+            m_diagW[(size_t)id] = diagW;
+            const float diag = diagW * m_invDx2;
+            m_diagInv[(size_t)id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
         }
     }
 
@@ -88,16 +164,17 @@ void PressureSolver::applyA(const std::vector<float>& x, std::vector<float>& Ax)
     if ((int)Ax.size() != N) Ax.resize(N);
 
     for (int id = 0; id < N; ++id) {
-        if (!m_fluid[id]) { Ax[id] = 0.0f; continue; }
+        if (!m_fluid[(size_t)id]) { Ax[(size_t)id] = 0.0f; continue; }
 
         float sum = 0.0f;
-        int n = m_L[id]; if (n >= 0) sum += x[n];
-            n = m_R[id]; if (n >= 0) sum += x[n];
-            n = m_B[id]; if (n >= 0) sum += x[n];
-            n = m_T[id]; if (n >= 0) sum += x[n];
 
-        const int count = (int)m_count[id];
-        Ax[id] = (count * x[id] - sum) * m_invDx2;
+        int n = m_L[(size_t)id]; if (n >= 0) sum += m_wL[(size_t)id] * x[(size_t)n];
+        n = m_R[(size_t)id];     if (n >= 0) sum += m_wR[(size_t)id] * x[(size_t)n];
+        n = m_B[(size_t)id];     if (n >= 0) sum += m_wB[(size_t)id] * x[(size_t)n];
+        n = m_T[(size_t)id];     if (n >= 0) sum += m_wT[(size_t)id] * x[(size_t)n];
+
+        const float diagW = m_diagW[(size_t)id];
+        Ax[(size_t)id] = (diagW * x[(size_t)id] - sum) * m_invDx2;
     }
 }
 
@@ -161,7 +238,7 @@ int PressureSolver::solvePCG(std::vector<float>& p,
 
     // Early out: RHS tiny in predDiv units
     const float bInf = maxAbsFluid(rhs);
-    if (!std::isfinite(bInf) || bInf * dtForPredDiv <= tolPredDiv) {
+    if (!std::isfinite(bInf) || bInf <= tolPredDiv) {
         m_lastIters = 0;
         removeMean(p);
         return 0;
@@ -206,8 +283,8 @@ int PressureSolver::solvePCG(std::vector<float>& p,
         const float rInf = maxAbsFluid(m_r);
         if (!std::isfinite(rInf)) break;
 
-        // Stop in "predDiv" space
-        if (rInf * dtForPredDiv <= tolPredDiv) break;
+        // Stop in RHS units
+        if (rInf <= tolPredDiv) break;
 
         // Also stop relative to initial residual (cheap + robust)
         if (rInf <= relTol * rInf0) break;
@@ -217,6 +294,9 @@ int PressureSolver::solvePCG(std::vector<float>& p,
 
         const float deltaOld = deltaNew;
         deltaNew = dotFluid(m_r, m_z);
+
+        printf("[PCG] deltaNew=%.6g\n", deltaNew);
+
         if (!std::isfinite(deltaNew) || deltaNew <= 1e-30f) break;
 
         const float beta = deltaNew / (deltaOld + 1e-30f);
@@ -264,7 +344,11 @@ void PressureSolver::ensureMultigrid()
 
         L0.L.assign((size_t)N, -1); L0.R.assign((size_t)N, -1);
         L0.B.assign((size_t)N, -1); L0.T.assign((size_t)N, -1);
-        L0.diagCount.assign((size_t)N, 0);
+
+        L0.wL.assign((size_t)N, 0.0f); L0.wR.assign((size_t)N, 0.0f);
+        L0.wB.assign((size_t)N, 0.0f); L0.wT.assign((size_t)N, 0.0f);
+
+        L0.diagW.assign((size_t)N, 0.0f);
         L0.diagInv.assign((size_t)N, 0.0f);
 
         L0.x.assign((size_t)N, 0.0f);
@@ -275,25 +359,56 @@ void PressureSolver::ensureMultigrid()
         for (int j = 0; j < m_ny; ++j) {
             for (int i = 0; i < m_nx; ++i) {
                 const int id  = idx(i, j, m_nx);
-                if (!L0.fluid[(size_t)id]) continue;
+                if (!L0.fluid[(size_t)id]) {
+                    L0.diagW[(size_t)id] = 0.0f;
+                    L0.diagInv[(size_t)id] = 0.0f;
+                    continue;
+                }
+                float diagW = 0.0f;
 
-                int count = 0;
+                auto uIdx0 = [&](int i, int j) { return (size_t)j * (size_t)(m_nx + 1) + (size_t)i; };
+                auto vIdx0 = [&](int i, int j) { return (size_t)j * (size_t)m_nx + (size_t)i; };
 
-                auto addNbr = [&](int ni, int nj, int& slot) {
-                    const int nid = idx(ni, nj, m_nx);
-                    if (L0.fluid[(size_t)nid]) { slot = nid; count++; }
-                    else if (!L0.solid[(size_t)nid]) { count++; } // air Dirichlet
+                auto addFace0 = [&](int ni, int nj, float wFace,
+                                    int& slotNbr, float& wNbr)
+                {
+                    if (wFace <= 0.0f) return;
+
+                    if (ni >= 0 && nj >= 0 && ni < m_nx && nj < m_ny) {
+                        const int nid = idx(ni, nj, m_nx);
+                        if (L0.solid[(size_t)nid]) return;
+
+                        if (L0.fluid[(size_t)nid]) {
+                            slotNbr = nid;
+                            wNbr = wFace;
+                            diagW += wFace;
+                        } else {
+                            diagW += wFace; // air Dirichlet
+                        }
+                    } else {
+                        // outside domain treated as air if open
+                        return;
+                    }
                 };
 
-                if (i > 0)        addNbr(i - 1, j, L0.L[(size_t)id]);
-                if (i + 1 < m_nx) addNbr(i + 1, j, L0.R[(size_t)id]);
-                if (j > 0)        addNbr(i, j - 1, L0.B[(size_t)id]);
-                if (j + 1 < m_ny) addNbr(i, j + 1, L0.T[(size_t)id]);
+                // left/right
+                addFace0(i - 1, j, m_faceOpenU[uIdx0(i,     j)], L0.L[(size_t)id], L0.wL[(size_t)id]);
+                addFace0(i + 1, j, m_faceOpenU[uIdx0(i + 1, j)], L0.R[(size_t)id], L0.wR[(size_t)id]);
 
-                if (m_openTopBC && j == m_ny - 1) count++;
+                // bottom
+                addFace0(i, j - 1, m_faceOpenV[vIdx0(i, j)],     L0.B[(size_t)id], L0.wB[(size_t)id]);
 
-                L0.diagCount[(size_t)id] = (uint8_t)count;
-                const float diag = (float)count * L0.invDx2;
+                // top
+                if (j + 1 < m_ny) {
+                    addFace0(i, j + 1, m_faceOpenV[vIdx0(i, j + 1)], L0.T[(size_t)id], L0.wT[(size_t)id]);
+                } else {
+                    if (m_openTopBC) {
+                        addFace0(i, j + 1, m_faceOpenV[vIdx0(i, m_ny)], L0.T[(size_t)id], L0.wT[(size_t)id]);
+                    }
+                }
+
+                L0.diagW[(size_t)id] = diagW;
+                const float diag = diagW * L0.invDx2;
                 L0.diagInv[(size_t)id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
             }
         }
@@ -319,7 +434,11 @@ void PressureSolver::ensureMultigrid()
         C.fluid.assign((size_t)CN, 0);
         C.L.assign((size_t)CN, -1); C.R.assign((size_t)CN, -1);
         C.B.assign((size_t)CN, -1); C.T.assign((size_t)CN, -1);
-        C.diagCount.assign((size_t)CN, 0);
+        
+        C.wL.assign((size_t)CN, 0.0f); C.wR.assign((size_t)CN, 0.0f);
+        C.wB.assign((size_t)CN, 0.0f); C.wT.assign((size_t)CN, 0.0f);
+
+        C.diagW.assign((size_t)CN, 0.0f);
         C.diagInv.assign((size_t)CN, 0.0f);
 
         C.x.assign((size_t)CN, 0.0f);
@@ -370,26 +489,41 @@ void PressureSolver::ensureMultigrid()
         // Stencil
         for (int J = 0; J < cny; ++J) {
             for (int I = 0; I < cnx; ++I) {
-                const int id = mgIdx(I,J,cnx);
-                if (!C.fluid[(size_t)id]) continue;
+                const int cid = mgIdx(I, J, cnx);
+                if (!C.fluid[(size_t)cid]) {
+                    C.diagW[(size_t)cid] = 0.0f;
+                    C.diagInv[(size_t)cid] = 0.0f;
+                    continue;
+                }
 
-                int count = 0;
-                auto addNbrC = [&](int NI, int NJ, int& slot) {
-                    const int nid = mgIdx(NI, NJ, cnx);
-                    if (C.fluid[(size_t)nid]) { slot = nid; count++; }
-                    else if (!C.solid[(size_t)nid]) { count++; }
+                float diagW = 0.0f;
+
+                auto addNbr = [&](int ni, int nj, int& slot, float& wSlot) {
+                    const int nid = mgIdx(ni, nj, cnx);
+                    if (C.solid[(size_t)nid]) return;
+
+                    if (C.fluid[(size_t)nid]) {
+                        slot = nid;
+                        wSlot = 1.0f;
+                        diagW += 1.0f;
+                    } else {
+                        diagW += 1.0f; // air Dirichlet
+                    }
                 };
 
-                if (I > 0)       addNbrC(I - 1, J, C.L[(size_t)id]);
-                if (I + 1 < cnx) addNbrC(I + 1, J, C.R[(size_t)id]);
-                if (J > 0)       addNbrC(I, J - 1, C.B[(size_t)id]);
-                if (J + 1 < cny) addNbrC(I, J + 1, C.T[(size_t)id]);
+                if (I > 0)        addNbr(I - 1, J, C.L[(size_t)cid], C.wL[(size_t)cid]);
+                if (I + 1 < cnx)  addNbr(I + 1, J, C.R[(size_t)cid], C.wR[(size_t)cid]);
+                if (J > 0)        addNbr(I, J - 1, C.B[(size_t)cid], C.wB[(size_t)cid]);
+                if (J + 1 < cny)  addNbr(I, J + 1, C.T[(size_t)cid], C.wT[(size_t)cid]);
 
-                if (m_openTopBC && J == cny - 1) count++;
+                if (m_openTopBC && J == cny - 1) {
+                    // top outside treated as air Dirichlet
+                    diagW += 1.0f;
+                }
 
-                C.diagCount[(size_t)id] = (uint8_t)count;
-                const float diag = (float)count * C.invDx2;
-                C.diagInv[(size_t)id] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
+                C.diagW[(size_t)cid] = diagW;
+                const float diag = diagW * C.invDx2;
+                C.diagInv[(size_t)cid] = (diag > 0.0f) ? (1.0f / diag) : 0.0f;
             }
         }
 
@@ -407,13 +541,13 @@ void PressureSolver::mgApplyA(int lev, const std::vector<float>& x, std::vector<
         if (!L.fluid[(size_t)id]) { Ax[(size_t)id] = 0.0f; continue; }
 
         float sum = 0.0f;
-        int n = L.L[(size_t)id]; if (n >= 0) sum += x[(size_t)n];
-        n = L.R[(size_t)id];     if (n >= 0) sum += x[(size_t)n];
-        n = L.B[(size_t)id];     if (n >= 0) sum += x[(size_t)n];
-        n = L.T[(size_t)id];     if (n >= 0) sum += x[(size_t)n];
+        int n = L.L[(size_t)id]; if (n >= 0) sum += L.wL[(size_t)id] * x[(size_t)n];
+        n = L.R[(size_t)id];     if (n >= 0) sum += L.wR[(size_t)id] * x[(size_t)n];
+        n = L.B[(size_t)id];     if (n >= 0) sum += L.wB[(size_t)id] * x[(size_t)n];
+        n = L.T[(size_t)id];     if (n >= 0) sum += L.wT[(size_t)id] * x[(size_t)n];
 
-        const int count = (int)L.diagCount[(size_t)id];
-        Ax[(size_t)id] = (count * x[(size_t)id] - sum) * L.invDx2;
+        const float diagW = L.diagW[(size_t)id];
+        Ax[(size_t)id] = (diagW * x[(size_t)id] - sum) * L.invDx2;
     }
 }
 
@@ -434,15 +568,15 @@ void PressureSolver::mgSmoothRBGS(int lev, int iters)
                     if (!L.fluid[(size_t)id]) continue;
 
                     float sum = 0.0f;
-                    int n = L.L[(size_t)id]; if (n >= 0) sum += L.x[(size_t)n];
-                    n = L.R[(size_t)id];     if (n >= 0) sum += L.x[(size_t)n];
-                    n = L.B[(size_t)id];     if (n >= 0) sum += L.x[(size_t)n];
-                    n = L.T[(size_t)id];     if (n >= 0) sum += L.x[(size_t)n];
+                    int n = L.L[(size_t)id]; if (n >= 0) sum += L.wL[(size_t)id] * L.x[(size_t)n];
+                    n = L.R[(size_t)id];     if (n >= 0) sum += L.wR[(size_t)id] * L.x[(size_t)n];
+                    n = L.B[(size_t)id];     if (n >= 0) sum += L.wB[(size_t)id] * L.x[(size_t)n];
+                    n = L.T[(size_t)id];     if (n >= 0) sum += L.wT[(size_t)id] * L.x[(size_t)n];
 
-                    const int count = (int)L.diagCount[(size_t)id];
-                    if (count == 0) continue;
+                    const float diagW = L.diagW[(size_t)id];
+                    if (diagW <= 0.0f) continue;
 
-                    const float x_gs = (sum + L.b[(size_t)id] / L.invDx2) / (float)count;
+                    const float x_gs = (sum + L.b[(size_t)id] / L.invDx2) / diagW;
                     L.x[(size_t)id] = (1.0f - omega) * L.x[(size_t)id] + omega * x_gs;
                 }
             }
@@ -609,7 +743,20 @@ void PressureSolver::solveMG(std::vector<float>& p,
 
     // early-out if RHS tiny in predDiv space
     const float bInf = maxAbsB();
-    if (!(bInf > 0.0f) || bInf * dt <= tolPredDiv) {
+
+    int fluidCnt = 0;
+    float diagMin = 1e30f, diagMax = 0.0f;
+    for (int id = 0; id < N; ++id) {
+        if (!F.fluid[(size_t)id]) continue;
+        fluidCnt++;
+        float d = F.diagW[(size_t)id];
+        diagMin = std::min(diagMin, d);
+        diagMax = std::max(diagMax, d);
+    }
+    printf("[MG] fluidCnt=%d bInf=%.6g tol=%.6g diagW[min,max]=[%.6g, %.6g]\n",
+        fluidCnt, bInf, tolPredDiv, diagMin, diagMax);
+
+    if (!(bInf > 0.0f) || bInf <= tolPredDiv) {
         p = F.x;
         if (m_removeMean && !m_openTopBC) removeMean(p);
         return;
@@ -617,7 +764,7 @@ void PressureSolver::solveMG(std::vector<float>& p,
 
     mgComputeResidual(0);
     float rInf = maxAbsR();
-    if (!(rInf > 0.0f) || rInf * dt <= tolPredDiv) {
+    if (!(rInf > 0.0f) || rInf <= tolPredDiv) {
         p = F.x;
         if (m_removeMean && !m_openTopBC) removeMean(p);
         return;
@@ -639,7 +786,7 @@ void PressureSolver::solveMG(std::vector<float>& p,
         if (!std::isfinite(rInf)) { fallbackPCG = true; break; }
         if (rInf > prev * 1.2f)   { fallbackPCG = true; break; }
 
-        if (rInf * dt <= tolPredDiv) break;
+        if (rInf <= tolPredDiv) break;
     }
 
     p = F.x;

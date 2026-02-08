@@ -76,6 +76,8 @@ void MAC2D::reset() {
         }
     }
 
+    syncSolidsToFluidAndFaces();
+
 
     invalidatePressureMatrix();
 }
@@ -145,10 +147,18 @@ void MAC2D::step(float vortEps) {
     applyBoundary();
 
     computeDivergence();
+
+    const float maxDivAfterBC  = maxAbsDiv();
+    const float maxFaceAfterBC = maxFaceSpeed();
+
+    setPostBCStats(maxDivAfterBC, maxFaceAfterBC);
+
     std::printf("[POST-BC2 ] maxDiv=%g\n", maxAbsDiv());
 
     computeDivergence();
     printf("[POST-BC] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
+
+
 
     // Scalars
     advectScalar(temp,  temp0,  tempDissipation);
