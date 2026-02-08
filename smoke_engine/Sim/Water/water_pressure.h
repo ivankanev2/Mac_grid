@@ -107,19 +107,57 @@ if (volumePreserveRhsMean) {
                 if (isSurfaceLiquid(i, j)) surfCnt++;
 
         if (surfCnt > 0 && divTarget != 0.0f) {
-            // We want div ≈ divTarget on the surface cells.
-            // Our RHS is currently: rhs = -(div)/dt
-            // To target divTarget: rhs = -(div - divTarget)/dt = -(div)/dt + (divTarget)/dt
-            const float rhsAdd = divTarget * invDt;
+        // Apply correction *per exposed face* between liquid and air.
+        // For each liquid cell, for each neighbor that is air (or out-of-bounds -> air),
+        // add the per-face RHS correction. This yields smoother, physically-meaningful
+        // corrections (cells with more exposed faces receive proportionally more correction).
+        const float rhsAddFace = divTarget * invDt;
 
-            for (int j = 0; j < ny; ++j) {
-                for (int i = 0; i < nx; ++i) {
-                    if (!isSurfaceLiquid(i, j)) continue;
-                    const int id = idxP(i, j);
-                    rhs[(size_t)id] += rhsAdd;
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                // skip non-liquid and solid cells
+                const int id = idxP(i, j);
+                if (solid[(size_t)id] || !liquid[(size_t)id]) continue;
+
+                // count exposed faces and add per-face correction
+                // neighbor offsets: left, right, down, up
+                // treat out-of-bounds as air (open to atmosphere)
+                int exposedFaces = 0;
+
+                // left neighbor (i-1, j)
+                if (i - 1 < 0) exposedFaces++;
+                else {
+                    const int nid = idxP(i - 1, j);
+                    if (!solid[(size_t)nid] && !liquid[(size_t)nid]) exposedFaces++;
+                }
+
+                // right neighbor (i+1, j)
+                if (i + 1 >= nx) exposedFaces++;
+                else {
+                    const int nid = idxP(i + 1, j);
+                    if (!solid[(size_t)nid] && !liquid[(size_t)nid]) exposedFaces++;
+                }
+
+                // down neighbor (i, j-1)
+                if (j - 1 < 0) exposedFaces++;
+                else {
+                    const int nid = idxP(i, j - 1);
+                    if (!solid[(size_t)nid] && !liquid[(size_t)nid]) exposedFaces++;
+                }
+
+                // up neighbor (i, j+1)
+                if (j + 1 >= ny) exposedFaces++;
+                else {
+                    const int nid = idxP(i, j + 1);
+                    if (!solid[(size_t)nid] && !liquid[(size_t)nid]) exposedFaces++;
+                }
+
+                if (exposedFaces > 0) {
+                    rhs[(size_t)id] += rhsAddFace * (float)exposedFaces;
                 }
             }
         }
+    }
     }
 }
 
@@ -136,7 +174,6 @@ if (volumePreserveRhsMean) {
     // (If you still want to reset sometimes, do it outside based on user action.)
     const int maxIters = std::max(1, pressureMaxIters);
 
-    // Your current 'pressureTol' in Water is comparing against residual directly.
     // In the shared solver we interpret tol in "predDiv space": |r|*dt <= tol.
     // So we pass your existing value as-is and dt along.
     const float tolPredDiv = std::max(0.0f, pressureTol);
