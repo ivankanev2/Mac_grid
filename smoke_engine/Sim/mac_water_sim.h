@@ -45,7 +45,7 @@ struct MACWater : public MACGridCore {
     float diffuseOmega = 0.8f;   // 0.6–0.9 typical (weighted Jacobi)
 
     // --- Simulation controls ---
-    int   particlesPerCell   = 2;       // visualization/initial sampling density
+    int   particlesPerCell   = 0;       // visualization/initial sampling density
     float flipBlend          = 0.1f;    // 0=PIC, 1=FLIP
     bool  useAPIC            = true;   // enable APIC transfers (PIC w/ affine)
     int   borderThickness    = 2;       // solid border thickness (cells)

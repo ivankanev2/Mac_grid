@@ -6,18 +6,21 @@
 
 inline void MACWater::rasterizeWaterField() {
     const int Nc = nx * ny;
+    if (Nc <= 0) return;
+
     if ((int)water.size() != Nc) water.assign((size_t)Nc, 0.0f);
 
-    std::fill(water.begin(), water.end(), 0.0f);
+    // This buffer is the *conserved* splat (no clamp).
+    // If you want to avoid allocation every frame, make it a member.
+    std::vector<float> mass((size_t)Nc, 0.0f);
 
     if (particles.empty()) {
+        std::fill(water.begin(), water.end(), 0.0f);
         targetMass = 0.0f;
         return;
     }
 
-    const float invPpc = 1.0f / (float)std::max(1, particlesPerCell);
-
-    // Deposit particle count to cell centers using bilinear weights.
+    // 1 particle = 1 "mass unit"
     for (const Particle& p : particles) {
         const float fx = p.x / dx - 0.5f;
         const float fy = p.y / dx - 0.5f;
@@ -31,20 +34,20 @@ inline void MACWater::rasterizeWaterField() {
         const int i1 = std::min(i0 + 1, nx - 1);
         const int j1 = std::min(j0 + 1, ny - 1);
 
-        const float tx = water_internal::clampf(fx - (float)i0, 0.0f, 1.0f);
-        const float ty = water_internal::clampf(fy - (float)j0, 0.0f, 1.0f);
+        float tx = water_internal::clampf(fx - (float)i0, 0.0f, 1.0f);
+        float ty = water_internal::clampf(fy - (float)j0, 0.0f, 1.0f);
 
         float w00 = (1.0f - tx) * (1.0f - ty);
         float w10 = tx * (1.0f - ty);
         float w01 = (1.0f - tx) * ty;
         float w11 = tx * ty;
 
-        // If some of the target cells are solid, renormalize the remaining weights.
         const int id00 = idxP(i0, j0);
         const int id10 = idxP(i1, j0);
         const int id01 = idxP(i0, j1);
         const int id11 = idxP(i1, j1);
 
+        // If some target cells are solid, renormalize remaining weights (keeps mass conserved).
         float wSum = 0.0f;
         if (!solid[(size_t)id00]) wSum += w00; else w00 = 0.0f;
         if (!solid[(size_t)id10]) wSum += w10; else w10 = 0.0f;
@@ -55,25 +58,33 @@ inline void MACWater::rasterizeWaterField() {
         const float inv = 1.0f / wSum;
         w00 *= inv; w10 *= inv; w01 *= inv; w11 *= inv;
 
-        water[(size_t)id00] += w00;
-        water[(size_t)id10] += w10;
-        water[(size_t)id01] += w01;
-        water[(size_t)id11] += w11;
+        mass[(size_t)id00] += w00;
+        mass[(size_t)id10] += w10;
+        mass[(size_t)id01] += w01;
+        mass[(size_t)id11] += w11;
     }
 
-    double sum = 0.0;
+    // Convert conserved mass -> pretty render field.
+    // This is where you can clamp for display, but DO NOT use it to compute "mass".
+    const float invPpc = 1.0f / (float)std::max(1, particlesPerCell);
+
+    double sumMass = 0.0;
     for (int id = 0; id < Nc; ++id) {
         if (solid[(size_t)id]) {
             water[(size_t)id] = 0.0f;
             continue;
         }
 
-        // Convert to an approximate fill fraction for rendering.
-        water[(size_t)id] = water_internal::clamp01(water[(size_t)id] * invPpc);
-        sum += (double)water[(size_t)id];
+        const float m = mass[(size_t)id];
+        sumMass += (double)m;
+
+        // Render density (0..1) — clamped ONLY for visualization
+        water[(size_t)id] = water_internal::clamp01(m * invPpc);
     }
 
-    targetMass = (float)sum;
+    // IMPORTANT: targetMass should track conserved mass, not the clamped render field.
+    // With 1 particle = 1 mass unit, this should be ~particles.size().
+    targetMass = (float)sumMass;
 }
 
 inline void MACWater::addWaterSource(float cx, float cy, float radius, float amount) {
