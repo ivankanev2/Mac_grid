@@ -85,6 +85,11 @@ inline void MACWater::rasterizeWaterField() {
     // IMPORTANT: targetMass should track conserved mass, not the clamped render field.
     // With 1 particle = 1 mass unit, this should be ~particles.size().
     targetMass = (float)sumMass;
+
+    // Initialize desired volume the first time we have a valid conserved mass.
+    if (desiredMass < 0.0f && targetMass > 0.0f) {
+        desiredMass = targetMass;
+    }
 }
 
 inline void MACWater::addWaterSource(float cx, float cy, float radius, float amount) {

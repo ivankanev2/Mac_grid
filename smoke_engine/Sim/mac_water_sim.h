@@ -58,7 +58,12 @@ struct MACWater : public MACGridCore {
     float pressureTol        = 1e-10f;   // residual infinity-norm tolerance
 
     // Used only for UI debug display in this project.
-    float targetMass         = 0.0f;
+    // This is the *current* conserved particle splat mass (≈ particles.size()).
+    float targetMass = 0.0f;
+
+    // Desired conserved mass for volume preservation (set once, then adjusted only
+    // when you explicitly add/remove particles, e.g. sources/dissipation).
+    float desiredMass = -1.0f;
 
     // --- Volume preservation (free-surface drift fix) ---
     // When true, we remove the mean of the pressure RHS over LIQUID cells.

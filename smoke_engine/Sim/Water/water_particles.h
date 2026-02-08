@@ -138,6 +138,8 @@ inline void MACWater::applyDissipation() {
     const float diss = water_internal::clamp01(waterDissipation);
     if (diss >= 0.999999f) return;
 
+    const size_t before = particles.size();
+
     // Interpret dissipation similarly to smoke scalar dissipation: exponential in time.
     const float dtRef = 0.02f; // match default UI dtMax
     const float keepProb = std::pow(diss, dt / std::max(1e-6f, dtRef));
@@ -149,6 +151,13 @@ inline void MACWater::applyDissipation() {
         }
     }
     particles.resize(write);
+
+    // If we intentionally removed particles, update the target volume too.
+    if (desiredMass >= 0.0f) {
+        const size_t after = particles.size();
+        const size_t removed = (before > after) ? (before - after) : 0;
+        desiredMass = std::max(0.0f, desiredMass - (float)removed);
+    }
 }
 
 inline uint32_t water_hash_u32(uint32_t x) {
