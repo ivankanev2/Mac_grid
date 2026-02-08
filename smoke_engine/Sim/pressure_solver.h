@@ -60,6 +60,10 @@ private:
     std::vector<uint8_t> m_solid;
     std::vector<uint8_t> m_fluid;
 
+    // Per-face openness (0..1). Default 1.0 = fully open.
+    std::vector<float> faceOpenU; // size (nx+1) * ny  — u faces (vertical faces)
+    std::vector<float> faceOpenV; // size nx * (ny+1)  — v faces (horizontal faces)
+
     // Operator cache
     std::vector<int>     m_L, m_R, m_B, m_T;
     std::vector<uint8_t> m_count;
