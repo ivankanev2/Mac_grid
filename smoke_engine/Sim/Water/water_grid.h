@@ -163,15 +163,7 @@ inline void MACWater::buildLiquidMask() {
         liquid.swap(next);
     }
 
-    // --- Volume reference (for drift diagnostics / preservation) ---
-    // targetMass is used as a simple "target liquid cell count" reference.
-    // We initialize it once (first time we have a mask) so later we can compare drift.
-    if (targetMass <= 0.0f) {
-        int cnt = 0;
-        for (int id = 0; id < nx * ny; ++id)
-            if (liquid[(size_t)id]) cnt++;
-        targetMass = (float)cnt;
-    }
+    
 }
 
 inline void MACWater::extrapolateVelocity() {
