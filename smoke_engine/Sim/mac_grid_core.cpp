@@ -57,9 +57,17 @@ void MACGridCore::rebuildFaceOpennessBinaryFromSolids()
     // U faces: blocked if either adjacent cell is solid
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i <= nx; ++i) {
+
+            // domain walls: always closed on left/right
+            if (i == 0 || i == nx) {
+                faceOpenU[uIdx(i,j)] = 0.0f;
+                continue;
+            }
+
             bool blocked = false;
-            if (i - 1 >= 0) blocked |= isSolid(i - 1, j);
-            if (i < nx)     blocked |= isSolid(i,     j);
+            blocked |= isSolid(i - 1, j);
+            blocked |= isSolid(i,     j);
+
             faceOpenU[uIdx(i,j)] = blocked ? 0.0f : 1.0f;
         }
     }
@@ -306,9 +314,9 @@ void MACGridCore::advectVelocity() {
 
             u[idxU(i, j)] = sampleU(u0, x0, y0);
 
-            bool leftSolid  = (i - 1 >= 0) ? isSolid(i - 1, j) : true;
-            bool rightSolid = (i < nx)     ? isSolid(i, j)     : true;
-            if (leftSolid || rightSolid) u[idxU(i, j)] = 0.0f;
+            // multiface: just mask by openness (includes walls + solids)
+            const float w = faceOpenU[(size_t)j * (size_t)(nx + 1) + (size_t)i];
+            u[idxU(i, j)] *= w;
         }
     }
 
@@ -325,16 +333,8 @@ void MACGridCore::advectVelocity() {
 
             v[idxV(i, j)] = sampleV(v0, x0, y0);
 
-            bool botSolid = (j - 1 >= 0) ? isSolid(i, j - 1) : true;
-            bool topBlocked;
-            if (j == ny && openTopBC) {
-                // open boundary: don't treat outside as solid
-                topBlocked = false;
-            } else {
-                topBlocked = (j < ny) ? isSolid(i, j) : true;
-            }
-
-            if (botSolid || topBlocked) v[idxV(i, j)] = 0.0f;
+            const float w = faceOpenV[(size_t)j * (size_t)nx + (size_t)i];
+            v[idxV(i, j)] *= w;
         }
     }
 }
@@ -1431,7 +1431,8 @@ void MACGridCore::project() {
     std::printf("[BEFORE] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
 
     stats.dt = dt;
-    stats.maxDivBefore = maxAbsDiv();
+    // stats.maxDivBefore = maxAbsDiv();
+    stats.maxDivBefore = divLInfFluid();
     stats.maxFaceSpeedBefore = maxFaceSpeed();
 
     stats.openTopBC = openTopBC ? 1 : 0;
@@ -1544,11 +1545,17 @@ void MACGridCore::project() {
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 1; i < nx; ++i) {
-            if (!isFluidCell(i - 1, j) || !isFluidCell(i, j)) { u[idxU(i, j)] = 0.0f; continue; }
 
             float w = uW(i, j);
+
+            // if either side isn’t in pressure domain, treat this face as closed for projection
+            if (!isFluidCell(i - 1, j) || !isFluidCell(i, j)) w = 0.0f;
+
             float gradp = (p[idxP(i, j)] - p[idxP(i - 1, j)]) / dx;
             u[idxU(i, j)] -= dt * w * gradp;
+
+            // always enforce openness (kills leftovers cleanly)
+            u[idxU(i, j)] *= w;
         }
     }
 
@@ -1556,11 +1563,15 @@ void MACGridCore::project() {
 
     for (int j = 1; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-            if (!isFluidCell(i, j - 1) || !isFluidCell(i, j)) { v[idxV(i, j)] = 0.0f; continue; }
 
             float w = vW(i, j);
+            
+            if (!isFluidCell(i, j - 1) || !isFluidCell(i, j)) w = 0.0f;
+
             float gradp = (p[idxP(i, j)] - p[idxP(i, j - 1)]) / dx;
             v[idxV(i, j)] -= dt * w * gradp;
+
+            v[idxV(i, j)] *= w;
         }
     }
 
@@ -1571,19 +1582,16 @@ void MACGridCore::project() {
     auto vW = [&](int i, int j) { return faceOpenV[(size_t)j * (size_t)nx + (size_t)i]; };
 
     for (int i = 0; i < nx; ++i) {
-        // If the top cell is solid, don't allow flow through
-        if (isSolid(i, jCell)) { 
-            v[idxV(i, jFace)] = 0.0f; 
-            continue; 
-        }
+        float w = vW(i, jFace);
+        if (isSolid(i, jCell)) w = 0.0f;
 
-        float w = vW(i, jFace);           // this is the top boundary face openness
         const float p_inside  = p[idxP(i, jCell)];
-        const float p_outside = 0.0f;            // Dirichlet pressure outside
+        const float p_outside = 0.0f;
 
-        // gradp = (p_out - p_in)/dx
         const float gradp = (p_outside - p_inside) / dx;
         v[idxV(i, jFace)] -= dt * w * gradp;
+
+        v[idxV(i, jFace)] *= w;
     }
     if (openTopBC) {
         float vTopMax2 = 0.0f;
@@ -1613,7 +1621,8 @@ void MACGridCore::project() {
 
     // std::printf("[AFTER ] maxDiv=%g maxFace=%g (iters=%d)\n",
     //             maxAbsDiv(), maxFaceSpeed(), stats.pressureIters);
-    stats.maxDivAfter = maxAbsDiv();
+    // stats.maxDivAfter = maxAbsDiv();
+    stats.maxDivAfter  = divLInfFluid();
     stats.maxFaceSpeedAfter = maxFaceSpeed();
 }
 
