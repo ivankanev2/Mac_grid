@@ -73,6 +73,10 @@ struct Settings {
 
     // Smoke view display
     float viewScale = 5.0f;
+
+    // bool  showCombinedView = true;
+    // float combinedWaterAlpha = 0.5f;   // water overlay strength
+    // bool  combinedShowParticles = true;
 };
 
 struct Probe {
