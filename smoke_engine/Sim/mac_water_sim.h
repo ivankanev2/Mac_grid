@@ -87,7 +87,7 @@ struct MACWater : public MACGridCore {
 
     float maxParticleSpeed() const;
 
-private:
+protected:
     // External solids (from user painting in the smoke sim). We rebuild `solid`
     // each step as: solid = solidUser OR borderSolids.
     std::vector<uint8_t> solidUser;

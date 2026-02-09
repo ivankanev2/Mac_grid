@@ -29,6 +29,8 @@ struct OverlaySettings {
     float vortAlpha = 0.75f;
 };
 
+struct MACCoupledSim;
+
 class SmokeRenderer {
 public:
     SmokeRenderer(int w, int h);
@@ -41,6 +43,13 @@ public:
                        const OverlaySettings& ov);
 
     void updateWaterFromSim(const MACWater& sim,
+                            const WaterRenderSettings& water);
+    
+    void updateFromSim(const MACCoupledSim& sim,
+                       const SmokeRenderSettings& smoke,
+                       const OverlaySettings& ov);
+
+    void updateWaterFromSim(const MACCoupledSim& sim,
                             const WaterRenderSettings& water);
 
     unsigned int smokeTex() const { return m_smokeTex; }
