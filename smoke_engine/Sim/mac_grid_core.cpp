@@ -36,15 +36,20 @@ void MACGridCore::setSolidCell(int i, int j, bool s) {
     pressureMatrixDirty = true;
 }
 
+
 void MACGridCore::rebuildFaceOpennessBinaryFromSolids()
 {
-    faceOpenU.assign((size_t)(nx + 1) * (size_t)ny, 1.0f);
-    faceOpenV.assign((size_t)nx * (size_t)(ny + 1), 1.0f);
+    // Ensure valve arrays exist and are sized
+    valveU.assign((size_t)(nx + 1) * (size_t)ny, 1.0f);
+    valveV.assign((size_t)nx * (size_t)(ny + 1), 1.0f);
+
+    faceOpenU.assign((size_t)(nx + 1) * (size_t)ny, 0.0f);
+    faceOpenV.assign((size_t)nx * (size_t)(ny + 1), 0.0f);
 
     auto uIdx = [&](int i, int j) { return (size_t)j * (size_t)(nx + 1) + (size_t)i; }; // i:0..nx, j:0..ny-1
     auto vIdx = [&](int i, int j) { return (size_t)j * (size_t)nx + (size_t)i; };       // i:0..nx-1, j:0..ny
 
-    // U faces: blocked if either adjacent cell is solid
+    // U faces: blocked if either adjacent cell is solid; domain walls always closed (0)
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i <= nx; ++i) {
 
@@ -58,7 +63,12 @@ void MACGridCore::rebuildFaceOpennessBinaryFromSolids()
             blocked |= isSolid(i - 1, j);
             blocked |= isSolid(i,     j);
 
-            faceOpenU[uIdx(i,j)] = blocked ? 0.0f : 1.0f;
+            if (blocked) {
+                faceOpenU[uIdx(i,j)] = 0.0f;
+            } else {
+                // not blocked => openness is the valve value (clamped)
+                faceOpenU[uIdx(i,j)] = clampf01(valveU[uIdx(i,j)]);
+            }
         }
     }
 
@@ -85,9 +95,39 @@ void MACGridCore::rebuildFaceOpennessBinaryFromSolids()
                 }
             }
 
-            faceOpenV[vIdx(i,j)] = blocked ? 0.0f : 1.0f;
+            if (blocked) {
+                faceOpenV[vIdx(i,j)] = 0.0f;
+            } else {
+                // allow valve to control openness (top boundary respects openTopBC above)
+                faceOpenV[vIdx(i,j)] = clampf01(valveV[vIdx(i,j)]);
+            }
         }
     }
+}
+
+void MACGridCore::setFaceValveU(int i, int j, float value) {
+    if (i < 0 || i > nx || j < 0 || j >= ny) return;
+    size_t id = (size_t)j * (size_t)(nx + 1) + (size_t)i;
+    if ((int)valveU.size() != (nx + 1) * ny) valveU.assign((size_t)(nx + 1) * (size_t)ny, 1.0f);
+    valveU[id] = clampf01(value);
+    // rebuild effective openness immediately (cheap)
+    // but preserve blocking rules from solids/domain walls
+    rebuildFaceOpennessBinaryFromSolids();
+}
+
+void MACGridCore::setFaceValveV(int i, int j, float value) {
+    if (i < 0 || i >= nx || j < 0 || j > ny) return;
+    size_t id = (size_t)j * (size_t)nx + (size_t)i;
+    if ((int)valveV.size() != nx * (ny + 1)) valveV.assign((size_t)nx * (size_t)(ny + 1), 1.0f);
+    valveV[id] = clampf01(value);
+    rebuildFaceOpennessBinaryFromSolids();
+}
+
+void MACGridCore::setGlobalValve(float value) {
+    float v = clampf01(value);
+    valveU.assign((size_t)(nx + 1) * (size_t)ny, v);
+    valveV.assign((size_t)nx * (size_t)(ny + 1), v);
+    rebuildFaceOpennessBinaryFromSolids();
 }
 
 void MACGridCore::syncSolidsToFluidAndFaces()
@@ -137,6 +177,9 @@ void MACGridCore::resetCore() {
 
 
     rebuildFaceOpennessBinaryFromSolids();
+
+    valveU.assign((size_t)(nx + 1) * (size_t)ny, 1.0f);
+    valveV.assign((size_t)nx * (size_t)(ny + 1), 1.0f);
 
     markPressureMatrixDirty();
 

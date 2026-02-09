@@ -30,8 +30,6 @@ struct MAC2D : public MACGridCore {
 
     bool useMacCormack = true;
 
-    // bool openTop = false;
-
     void setOpenTop(bool on);
 
     float smokeDissipation = 0.999f;

@@ -26,6 +26,10 @@ struct MACGridCore {
     std::vector<float> faceOpenU; // (nx+1)*ny
     std::vector<float> faceOpenV; // nx*(ny+1)
 
+    std::vector<float> valveU;    // same size as faceOpenU
+    std::vector<float> valveV;    // same size as faceOpenV
+
+
     enum PressureSolverKind : int {
         SOLVER_PCG = 0,
         SOLVER_MG  = 1
@@ -87,7 +91,10 @@ struct MACGridCore {
     bool getOpenTop() const { return openTopBC; }
 
 
-    
+    inline float clampf01(float v) const { if (!std::isfinite(v)) return 0.0f; return (v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v)); }
+    void setFaceValveU(int i, int j, float value);
+    void setFaceValveV(int i, int j, float value);
+    void setGlobalValve(float value); // sets all valveU/valveV to `value
 
     float maxAbsDiv() const;
     float maxFaceSpeed() const;
