@@ -115,6 +115,15 @@ int main()
         waterSim.velDamping       = ui.waterVelDamping;
         waterSim.openTop          = ui.waterOpenTop;
 
+        coupled.waterDissipation = ui.waterDissipation;
+        coupled.waterGravity     = ui.waterGravity;
+        coupled.velDamping       = ui.waterVelDamping;
+        coupled.setOpenTop(ui.waterOpenTop);  // IMPORTANT: use setter so BC updates
+
+        coupled.smokeDissipation = ui.smokeDissipation;
+        coupled.tempDissipation  = ui.tempDissipation;
+        coupled.useMacCormack    = sim.useMacCormack; // or ui toggle if you expose one
+
         double now = glfwGetTime();
         double frameDt = now - lastTime;
         lastTime = now;

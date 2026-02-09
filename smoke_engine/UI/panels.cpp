@@ -728,6 +728,7 @@ static void drawDebugTabs(MAC2D& sim, MACWater& water, Settings& ui, Probe& prob
 }
 
 static void drawSmokeViewAndInteract(MAC2D& sim,
+                                     MACCoupledSim& coupled,
                                      SmokeRenderer& renderer,
                                      Settings& ui,
                                      Probe& probe,
@@ -827,6 +828,11 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
             sim.pipe.y.push_back(sy);
             sim.rebuildSolidsFromPipe(false);
             sim.enforceBoundaries();
+
+            // propagate pipe/solids to coupled sim
+            coupled.rebuildSolidsFromPipe(false);
+            coupled.enforceBoundaries();
+            coupled.invalidatePressureMatrix();
         }
     }
 
@@ -873,6 +879,11 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
                     }
                     sim.invalidatePressureMatrix();
                     sim.enforceBoundaries();
+
+                    // keep coupled sim solids & pressure config in sync
+                    coupled.syncSolidsFrom(sim);
+                    coupled.invalidatePressureMatrix();
+                    coupled.enforceBoundaries();
                 }
             }
         }
@@ -882,6 +893,7 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
 }
 
 static void drawWaterViewAndInteract(MACWater& water,
+                                     MACCoupledSim& coupled,
                                      SmokeRenderer& renderer,
                                      Settings& ui,
                                      int NX, int NY)
@@ -948,11 +960,13 @@ static void drawWaterViewAndInteract(MACWater& water,
         if (sx >= 0.0f && sx <= domainX && sy >= 0.0f && sy <= domainY) {
             if (ui.circleMode) {
                 water.addWaterSource(sx, sy, radius, ui.waterAmount);
+                coupled.addWaterSource(sx, sy, radius, ui.waterAmount); // propagate to coupled
             } else {
                 float hs = rectHalf;
                 for (float yy = sy - hs; yy <= sy + hs; yy += water.dx) {
                     for (float xx = sx - hs; xx <= sx + hs; xx += water.dx) {
                         water.addWaterSource(xx, yy, water.dx*0.75f, ui.waterAmount);
+                        coupled.addWaterSource(xx, yy, water.dx*0.75f, ui.waterAmount); // propagate
                     }
                 }
             }
@@ -1060,12 +1074,21 @@ Actions DrawAll(MAC2D& sim,
 
     Actions a = drawControls(sim, water, ui);
     drawDebugTabs(sim, water, ui, probe);
-    drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
-    drawWaterViewAndInteract(water, renderer, ui, NX, NY);
+    drawSmokeViewAndInteract(sim, coupled, renderer, ui, probe, NX, NY);
+    drawWaterViewAndInteract(water, coupled, renderer, ui, NX, NY);
     drawCombinedView(coupled, coupledRenderer, dock_id, ui, NX, NY);
 
     // keep solids consistent between smoke and water sims
     water.syncSolidsFrom(sim);
+
+    // make sure the coupled sim sees the same valve / open-top choices
+    coupled.setValveOpen(sim.isValveOpen());
+    
+    coupled.setOpenTop(sim.getOpenTop());
+    // propagate solids too (in case controls changed pipe)
+    coupled.syncSolidsFrom(sim);
+    coupled.invalidatePressureMatrix();
+    coupled.enforceBoundaries();
     return a;
 }
 
