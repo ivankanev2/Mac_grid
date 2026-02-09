@@ -134,10 +134,6 @@ struct MACGridCore {
     void advectVelocity();
     void computeDivergence();
 
-    void solvePressurePCG(int maxIters = 200, float tol = 1e-6f);
-    void solvePressureMG(int vcycles = 20, float tol = 1e-6f);
-    bool debugCheckMGvsPCGOperator(float eps = 1e-4f, float* outMaxDiff = nullptr);
-
     float divLInfFluid() const;
     float divL2Fluid() const;
 
@@ -158,7 +154,9 @@ struct MACGridCore {
                                 std::vector<float>& phi0,
                                 float dissipation);
 
-    void invalidatePressureMatrix() { markPressureMatrixDirty(); mgDirty = true; }
+    void invalidatePressureMatrix() {
+    markPressureMatrixDirty();
+}
     const FrameStats& getStats() const { return stats; }
 
     void setPostBCStats(float maxDivAfterBC, float maxFaceAfterBC) {
@@ -191,59 +189,6 @@ private:
     bool openTopBC = false;
 
     PressureSolver* sharedPressureSolver = nullptr;
-
-    
-
-    // ---- Multigrid Preconditioner ----
-    struct MGLevel {
-        int nx = 0, ny = 0;
-        float invDx2 = 0.0f;
-        std::vector<uint8_t> solid;
-        std::vector<uint8_t> fluid; // 1 = fluid cell, 0 = not-fluid (e.g. air); solids will be forced to 0
-        std::vector<int> L, R, B, T;
-        std::vector<uint8_t> diagCount; // diagonal stencil count (includes Dirichlet neighbors)
-        std::vector<float> diagInv;
-        std::vector<float> x;
-        std::vector<float> b;
-        std::vector<float> Ax;
-        std::vector<float> r;
-    };
-
-    bool useMGPrecond = false;
-    int  mgMaxLevels = 6;
-    int  mgPreSmooth = 2;
-    int  mgPostSmooth = 2;
-    // float mgOmega = 1.4f; // DO NOT TOUCH THIS PLEASE
-    float mgJacobiOmega = 0.67f;   // only used by Jacobi (if you keep it)
-    float mgSORomega    = 1.4f;    // used by RBGS as SOR ω (default safe)
-    bool  mgUseSOR       = true;  // default OFF: RBGS uses plain GS (ω=1)
-    int  mgCoarseSmooth = 120;
-    int  mgVcyclesPerApply = 1;
-    bool mgBuiltOpenTopBC = false;
-    int  mgBuiltNx = 0;
-    int  mgBuiltNy = 0;
-    bool mgBuiltValid = false;
-
-    std::vector<MGLevel> mgLevels;
-    bool mgDirty = true;
-    bool mgInitialized = false;
-
-    int mgCoarseIters = 80;
-
-    void markMGDirty() { mgDirty = true; }
-    void ensureMultigrid();
-
-    void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
-
-    // the smoothers 
-    void mgSmoothJacobi(int lev, int iters);
-    void mgSmoothRBGS(int lev, int iters);
-
-    void mgComputeResidual(int lev);
-    void mgRestrictResidual(int fineLev);
-    void mgProlongateAndAdd(int coarseLev);
-    void mgVCycle(int lev);
-    void applyMGPrecond(const std::vector<float>& r, std::vector<float>& z);
 
     FrameStats stats;
 };
