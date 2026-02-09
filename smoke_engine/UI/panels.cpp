@@ -11,6 +11,7 @@
 #include "../Sim/mac_smoke_sim.h"
 #include "../Sim/mac_water_sim.h"
 #include "../Renderer/smoke_renderer.h"
+#include "../Sim/mac_coupled_sim.h"
 
 namespace UI {
 
@@ -220,6 +221,7 @@ static void BeginDockspaceRoot()
             ImGui::DockBuilderDockWindow("Controls",       dock_left_top);
             ImGui::DockBuilderDockWindow("Data / Debug",   dock_left_bottom);
             ImGui::DockBuilderDockWindow("Smoke View",     dock_right);
+            ImGui::DockBuilderDockWindow("Combined View",  dock_right);
 
             ImGui::DockBuilderFinish(dock_id);
         }
@@ -489,6 +491,10 @@ static Actions drawControls(MAC2D& sim, MACWater& water, Settings& ui) {
     ImGui::Checkbox("Show water view", &ui.showWaterView);
     ImGui::Checkbox("Show water particles", &ui.showWaterParticles);
     ImGui::SliderFloat("Water alpha", &ui.waterAlpha, 0.0f, 1.0f);
+
+    ImGui::Checkbox("Combined View", &ui.showCombinedView);
+    ImGui::SliderFloat("Combined Water Alpha", &ui.combinedWaterAlpha, 0.0f, 1.0f);
+    ImGui::Checkbox("Combined Particles", &ui.combinedShowParticles);
 
     ImGui::Separator();
     ImGui::Checkbox("Pipe mode", &g_pipeMode);
@@ -956,9 +962,74 @@ static void drawWaterViewAndInteract(MACWater& water,
     ImGui::End();
 }
 
+// Combined view now shows the real coupled sim (smoke + water)
+static void drawCombinedView(const MACCoupledSim& coupled,
+                             SmokeRenderer& coupledRenderer,
+                             ImGuiID dock_id,
+                             Settings& ui,
+                             int NX, int NY)
+{
+    if (!ui.showCombinedView) return;
+
+    ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
+    ImGui::Begin("Combined View");
+
+    float scale = ui.viewScale;
+    ImVec2 size(NX * scale, NY * scale);
+
+    // Draw smoke from coupled sim
+    ImGui::Image((ImTextureID)(intptr_t)coupledRenderer.smokeTex(), size);
+
+    // Remember rect for overlays
+    ImVec2 p0 = ImGui::GetItemRectMin();
+    ImVec2 p1 = ImGui::GetItemRectMax();
+
+    // Overlay water from coupled sim with alpha
+    ImGui::SetCursorScreenPos(p0);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImU32 tint = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, ui.combinedWaterAlpha));
+    dl->AddImage((ImTextureID)(intptr_t)coupledRenderer.waterTex(),
+                p0, p1,
+                ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                tint);
+
+    // Optional overlay of particles from coupled sim:
+    if (ui.combinedShowParticles && !coupled.particles.empty()) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float w = p1.x - p0.x;
+        const float h = p1.y - p0.y;
+        const float domainX = std::max(1e-6f, coupled.nx * coupled.dx);
+        const float domainY = std::max(1e-6f, coupled.ny * coupled.dx);
+
+        const size_t maxDraw = 20000;
+        const size_t n = coupled.particles.size();
+        const size_t stride = std::max<size_t>(1, n / maxDraw);
+
+        const float radiusPx = std::max(2.0f, 0.35f * ui.viewScale);
+        const ImU32 col = IM_COL32(255, 245, 120, 230);
+
+        dl->PushClipRect(p0, p1, true);
+        for (size_t k = 0; k < n; k += stride) {
+            const auto& p = coupled.particles[k];
+            const float px = p.x / domainX;
+            const float py = p.y / domainY;
+            if (px < 0.0f || px > 1.0f || py < 0.0f || py > 1.0f) continue;
+
+            const float sx = p0.x + px * w;
+            const float sy = p1.y - py * h;
+            dl->AddCircleFilled(ImVec2(sx, sy), radiusPx, col, 8);
+        }
+        dl->PopClipRect();
+    }
+
+    ImGui::End();
+}
+
 Actions DrawAll(MAC2D& sim,
                 MACWater& water,
+                MACCoupledSim& coupled,
                 SmokeRenderer& renderer,
+                SmokeRenderer& coupledRenderer,
                 Settings& ui,
                 Probe& probe,
                 int NX, int NY)
@@ -991,6 +1062,7 @@ Actions DrawAll(MAC2D& sim,
     drawDebugTabs(sim, water, ui, probe);
     drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
     drawWaterViewAndInteract(water, renderer, ui, NX, NY);
+    drawCombinedView(coupled, coupledRenderer, dock_id, ui, NX, NY);
 
     // keep solids consistent between smoke and water sims
     water.syncSolidsFrom(sim);

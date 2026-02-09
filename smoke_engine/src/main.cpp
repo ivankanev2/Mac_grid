@@ -23,6 +23,8 @@
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
 
+#include "Sim/mac_coupled_sim.h"
+
 
 
 // window size and sim resolution
@@ -75,6 +77,7 @@ int main()
 
     // Renderer
     SmokeRenderer renderer(NX, NY);
+    SmokeRenderer coupledRenderer(NX, NY);
 
     // Simulator
     float dx = 1.0f / NX;
@@ -88,10 +91,12 @@ int main()
 
     MAC2D sim(NX, NY, dx, dt_initial);
     MACWater waterSim(NX, NY, dx, dt_initial);
+    MACCoupledSim coupled(NX, NY, dx, dt_initial);
 
     // Make both sims use the same solver instance.
     sim.setSharedPressureSolver(&sharedPressureSolver);
     waterSim.setSharedPressureSolver(&sharedPressureSolver);
+    coupled.setSharedPressureSolver(&sharedPressureSolver);
 
     // UI state
     UI::Settings ui;
@@ -141,6 +146,9 @@ int main()
                 sim.step(ui.vortEps);
                 waterSim.step();
 
+                coupled.setDt(dt);
+                coupled.stepCoupled(ui.vortEps);
+
                 accumulator -= dt;
                 steps++;
             }
@@ -149,14 +157,20 @@ int main()
             if (steps == maxStepsPerFrame) accumulator = 0.0;
         }
 
-        // upload textures
+        // upload textures (do this each frame before NewFrame so ImGui uses latest)
         SmokeRenderSettings rs;
         OverlaySettings ov;
         UI::BuildRenderSettings(ui, rs, ov);
-        renderer.updateFromSim(sim, rs, ov);
         WaterRenderSettings wr;
         UI::BuildWaterRenderSettings(ui, wr);
+
+        // update textures for original smoke/water sims (used by Smoke View + Water View)
+        renderer.updateFromSim(sim, rs, ov);
         renderer.updateWaterFromSim(waterSim, wr);
+
+        // update textures for the coupled sim (used by Combined View)
+        coupledRenderer.updateFromSim(coupled, rs, ov);
+        coupledRenderer.updateWaterFromSim(coupled, wr);
 
         // start imgui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -164,7 +178,7 @@ int main()
         ImGui::NewFrame();
 
         // draw UI
-        UI::Actions actions = UI::DrawAll(sim, waterSim, renderer, ui, probe, NX, NY);
+        UI::Actions actions = UI::DrawAll(sim, waterSim, coupled, renderer, coupledRenderer, ui, probe, NX, NY);
         if (UI::ConsumeResetLayoutRequest()) {
         // nothing needed here if panels.cpp already deleted ini and rebuilt docks
         // but it's fine to keep for future, you better not delete this >:)

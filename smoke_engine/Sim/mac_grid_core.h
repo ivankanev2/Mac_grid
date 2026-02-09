@@ -102,6 +102,8 @@ struct MACGridCore {
 
     const std::vector<uint8_t>& solidMask() const { return solid; }
 
+    const std::vector<float>& divergence() const { return div; }
+
     inline int idxP(int i,int j) const { return i + nx*j; }
     inline int idxU(int i,int j) const { return i + (nx+1)*j; }
     inline int idxV(int i,int j) const { return i + nx*j; }

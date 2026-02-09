@@ -1,6 +1,7 @@
 #include "smoke_renderer.h"
 #include "Sim/mac_smoke_sim.h"
 #include "Sim/mac_water_sim.h"
+#include "Sim/mac_coupled_sim.h"
 #include <algorithm>
 #include <cmath>
 
@@ -278,6 +279,29 @@ void SmokeRenderer::updateFromSim(const MAC2D& sim,
 }
 
 void SmokeRenderer::updateWaterFromSim(const MACWater& sim,
+                                       const WaterRenderSettings& water)
+{
+    uploadWaterRGBA(sim.waterField(), sim.solidMask(), water);
+}
+
+void SmokeRenderer::updateFromSim(const MACCoupledSim& sim,
+                                  const SmokeRenderSettings& smoke,
+                                  const OverlaySettings& ov)
+{
+    uploadSmokeRGBA(sim.density(), sim.temperature(), sim.ageField(), sim.solidMask(), smoke);
+
+    if (ov.showDiv) {
+        uploadDivOverlay(sim.divergence(), sim.solidMask(), ov.divScale, ov.divAlpha);
+    }
+
+    if (ov.showVort) {
+        // simplest: don’t show vort yet, or compute it later
+        std::vector<float> vort(sim.nx * sim.ny, 0.0f);
+        uploadVortOverlay(vort, sim.solidMask(), ov.vortScale, ov.vortAlpha);
+    }
+}
+
+void SmokeRenderer::updateWaterFromSim(const MACCoupledSim& sim,
                                        const WaterRenderSettings& water)
 {
     uploadWaterRGBA(sim.waterField(), sim.solidMask(), water);

@@ -4,6 +4,7 @@
 struct MAC2D;
 struct MACWater;
 class SmokeRenderer;
+struct MACCoupledSim;
 
 struct SmokeRenderSettings;
 struct WaterRenderSettings;
@@ -74,9 +75,9 @@ struct Settings {
     // Smoke view display
     float viewScale = 5.0f;
 
-    // bool  showCombinedView = true;
-    // float combinedWaterAlpha = 0.5f;   // water overlay strength
-    // bool  combinedShowParticles = true;
+    bool  showCombinedView = true;
+    float combinedWaterAlpha = 0.5f;   // water overlay strength
+    bool  combinedShowParticles = true;
 };
 
 struct Probe {
@@ -100,9 +101,11 @@ void BuildRenderSettings(const Settings& ui,
 void BuildWaterRenderSettings(const Settings& ui,
                               WaterRenderSettings& outWater);
 
-Actions DrawAll(MAC2D& smokeSim,
-                MACWater& waterSim,
+Actions DrawAll(MAC2D& sim,
+                MACWater& water,
+                MACCoupledSim& coupled,
                 SmokeRenderer& renderer,
+                SmokeRenderer& coupledRenderer,
                 Settings& ui,
                 Probe& probe,
                 int NX, int NY);

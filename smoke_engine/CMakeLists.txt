@@ -65,6 +65,7 @@ add_executable(SmokeEngine
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_grid_core.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/pressure_solver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_water_sim.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_coupled_sim.cpp
 
   ${CMAKE_CURRENT_SOURCE_DIR}/Renderer/smoke_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/UI/panels.cpp
