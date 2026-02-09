@@ -40,11 +40,14 @@ void MACGridCore::setSolidCell(int i, int j, bool s) {
 void MACGridCore::rebuildFaceOpennessBinaryFromSolids()
 {
     // Ensure valve arrays exist and are sized
-    valveU.assign((size_t)(nx + 1) * (size_t)ny, 1.0f);
-    valveV.assign((size_t)nx * (size_t)(ny + 1), 1.0f);
+    const size_t Nu = (size_t)(nx + 1) * (size_t)ny;
+    const size_t Nv = (size_t)nx * (size_t)(ny + 1);
 
-    faceOpenU.assign((size_t)(nx + 1) * (size_t)ny, 0.0f);
-    faceOpenV.assign((size_t)nx * (size_t)(ny + 1), 0.0f);
+    if (valveU.size() != Nu) valveU.assign(Nu, 1.0f);
+    if (valveV.size() != Nv) valveV.assign(Nv, 1.0f);
+
+    faceOpenU.assign(Nu, 0.0f);
+    faceOpenV.assign(Nv, 0.0f);
 
     auto uIdx = [&](int i, int j) { return (size_t)j * (size_t)(nx + 1) + (size_t)i; }; // i:0..nx, j:0..ny-1
     auto vIdx = [&](int i, int j) { return (size_t)j * (size_t)nx + (size_t)i; };       // i:0..nx-1, j:0..ny
@@ -176,10 +179,11 @@ void MACGridCore::resetCore() {
     }
 
 
-    rebuildFaceOpennessBinaryFromSolids();
 
     valveU.assign((size_t)(nx + 1) * (size_t)ny, 1.0f);
     valveV.assign((size_t)nx * (size_t)(ny + 1), 1.0f);
+
+    rebuildFaceOpennessBinaryFromSolids();
 
     markPressureMatrixDirty();
 
