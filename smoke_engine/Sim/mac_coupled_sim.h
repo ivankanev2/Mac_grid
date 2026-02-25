@@ -25,6 +25,12 @@ struct MACCoupledSim : public MACWater
     float smokeDissipation = 0.995f;
     float tempDissipation  = 0.995f;
 
+    // --- Multiphase coupling knobs ---
+    // Used by the coupled pressure projection as cell densities.
+    // (rhoWater >> rhoAir gives much nicer smoke/water interaction.)
+    float rhoAir   = 1.0f;
+    float rhoWater = 1000.0f;
+
     // ----- Pipe editing (match MAC2D UI) -----
     struct Pipe {
         float radius = 0.08f; // inner radius
@@ -49,6 +55,13 @@ struct MACCoupledSim : public MACWater
     void enforceBoundaries();               // wraps MACWater boundary + valve/scalars
     void invalidatePressureMatrix();        // wrap core function for UI
 
+    void applyBoundary() override;
+
+    void reset();
+
+    void addSolidCircle(float cx, float cy, float r);
+    void eraseSolidCircle(float cx, float cy, float r);
+
     void syncSolidsFrom(const MAC2D& smokeSim);
 
     // main coupled step (called by main.cpp as stepCoupled(ui.vortEps))
@@ -64,9 +77,25 @@ struct MACCoupledSim : public MACWater
     const std::vector<uint8_t>& solidMask() const { return solid; }
 
 private:
+
+     // --- Top-vent valve geometry (like smoke sim has a fixed vent band) ---
+    int valve_i0 = 0;   // inclusive
+    int valve_i1 = 0;   // exclusive
+
+    void recomputeValveIndices();
+    int  borderBt() const;          // match MACWater border thickness clamp
+    bool inValveBand(int i) const { return (i >= valve_i0 && i < valve_i1); }
+
+    void carveTopVentSolids();      // NEW: keep a permanent opening through the border solids
+    int  valveSourceJ() const;      // NEW: where to inject scalars (just under border)
+
     void resizeSmokeFields();
     void applyValveScalars();
     void applyValveVelocityBC();
+
+    void carveTopValveOpening();
+
+    void buildInvRhoFaceWeights();
 
     // pipe distance helper
     static float distPtSegSq(float px, float py, float ax, float ay, float bx, float by);
