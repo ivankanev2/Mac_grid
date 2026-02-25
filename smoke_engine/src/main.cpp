@@ -118,7 +118,7 @@ int main()
         coupled.waterDissipation = ui.waterDissipation;
         coupled.waterGravity     = ui.waterGravity;
         coupled.velDamping       = ui.waterVelDamping;
-        coupled.setOpenTop(ui.waterOpenTop);  // IMPORTANT: use setter so BC updates
+        coupled.setOpenTop(false);  // Combined view: closed top for now
 
         coupled.smokeDissipation = ui.smokeDissipation;
         coupled.tempDissipation  = ui.tempDissipation;
@@ -197,6 +197,7 @@ int main()
         if (actions.resetRequested) {
             sim.reset();
             waterSim.reset();
+            coupled.reset();
         }
 
         // render GL

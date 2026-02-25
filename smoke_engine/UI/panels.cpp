@@ -439,8 +439,7 @@ void BuildWaterRenderSettings(const Settings& ui,
 {
     outWater.alpha = ui.waterAlpha;
 }
-
-static Actions drawControls(MAC2D& sim, MACWater& water, Settings& ui) {
+static Actions drawControls(MAC2D& sim, MACWater& water, MACCoupledSim& coupled, Settings& ui) {
     Actions a;
 
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
@@ -510,6 +509,42 @@ static Actions drawControls(MAC2D& sim, MACWater& water, Settings& ui) {
     if (ImGui::Button("Rebuild solids")) {
         sim.rebuildSolidsFromPipe(false);
         sim.enforceBoundaries();
+    }
+
+    // ---------------- Coupled (Combined View) controls ----------------
+    ImGui::Separator();
+    ImGui::TextUnformatted("Combined View (Coupled Sim)");
+
+    // bool cot = coupled.getOpenTop();
+    // if (ImGui::Checkbox("Coupled open top (outflow)", &cot)) coupled.setOpenTop(cot);
+
+    ImGui::TextDisabled("Coupled open top (outflow): forced OFF for now");
+
+    bool copen = coupled.isValveOpen();
+    if (ImGui::Checkbox("Coupled valve open", &copen)) coupled.setValveOpen(copen);
+    ImGui::SameLine();
+    ImGui::Text("Valve: %s", coupled.isValveOpen() ? "OPEN" : "CLOSED");
+
+    ImGui::SliderFloat("Coupled inlet speed", &coupled.inletSpeed, -3.0f, 3.0f);
+    ImGui::SliderFloat("Coupled inlet smoke", &coupled.inletSmoke, 0.0f, 1.0f);
+    ImGui::SliderFloat("Coupled inlet temp",  &coupled.inletTemp,  0.0f, 1.0f);
+
+    // If you prefer, you can remove this checkbox and keep only the global one.
+    // Leaving it here is fine because it just toggles the same global g_pipeMode.
+    ImGui::Checkbox("Coupled pipe mode", &g_pipeMode);
+
+    ImGui::SliderFloat("Coupled pipe radius", &coupled.pipe.radius, 0.01f, 0.25f);
+    ImGui::SliderFloat("Coupled wall thickness", &coupled.pipe.wall, 0.005f, 0.10f);
+
+    if (ImGui::Button("Coupled clear pipe")) {
+        coupled.clearPipe();
+        coupled.rebuildSolidsFromPipe(false);
+        coupled.enforceBoundaries();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Coupled rebuild solids")) {
+        coupled.rebuildSolidsFromPipe(false);
+        coupled.enforceBoundaries();
     }
 
     ImGui::End();
@@ -728,7 +763,6 @@ static void drawDebugTabs(MAC2D& sim, MACWater& water, Settings& ui, Probe& prob
 }
 
 static void drawSmokeViewAndInteract(MAC2D& sim,
-                                     MACCoupledSim& coupled,
                                      SmokeRenderer& renderer,
                                      Settings& ui,
                                      Probe& probe,
@@ -829,10 +863,10 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
             sim.rebuildSolidsFromPipe(false);
             sim.enforceBoundaries();
 
-            // propagate pipe/solids to coupled sim
-            coupled.rebuildSolidsFromPipe(false);
-            coupled.enforceBoundaries();
-            coupled.invalidatePressureMatrix();
+            // // propagate pipe/solids to coupled sim
+            // coupled.rebuildSolidsFromPipe(false);
+            // coupled.enforceBoundaries();
+            // coupled.invalidatePressureMatrix();
         }
     }
 
@@ -880,10 +914,10 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
                     sim.invalidatePressureMatrix();
                     sim.enforceBoundaries();
 
-                    // keep coupled sim solids & pressure config in sync
-                    coupled.syncSolidsFrom(sim);
-                    coupled.invalidatePressureMatrix();
-                    coupled.enforceBoundaries();
+                    // // keep coupled sim solids & pressure config in sync
+                    // coupled.syncSolidsFrom(sim);
+                    // coupled.invalidatePressureMatrix();
+                    // coupled.enforceBoundaries();
                 }
             }
         }
@@ -893,7 +927,6 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
 }
 
 static void drawWaterViewAndInteract(MACWater& water,
-                                     MACCoupledSim& coupled,
                                      SmokeRenderer& renderer,
                                      Settings& ui,
                                      int NX, int NY)
@@ -960,13 +993,11 @@ static void drawWaterViewAndInteract(MACWater& water,
         if (sx >= 0.0f && sx <= domainX && sy >= 0.0f && sy <= domainY) {
             if (ui.circleMode) {
                 water.addWaterSource(sx, sy, radius, ui.waterAmount);
-                coupled.addWaterSource(sx, sy, radius, ui.waterAmount); // propagate to coupled
             } else {
                 float hs = rectHalf;
                 for (float yy = sy - hs; yy <= sy + hs; yy += water.dx) {
                     for (float xx = sx - hs; xx <= sx + hs; xx += water.dx) {
                         water.addWaterSource(xx, yy, water.dx*0.75f, ui.waterAmount);
-                        coupled.addWaterSource(xx, yy, water.dx*0.75f, ui.waterAmount); // propagate
                     }
                 }
             }
@@ -977,7 +1008,7 @@ static void drawWaterViewAndInteract(MACWater& water,
 }
 
 // Combined view now shows the real coupled sim (smoke + water)
-static void drawCombinedView(const MACCoupledSim& coupled,
+static void drawCombinedView(MACCoupledSim& coupled,
                              SmokeRenderer& coupledRenderer,
                              ImGuiID dock_id,
                              Settings& ui,
@@ -1036,6 +1067,112 @@ static void drawCombinedView(const MACCoupledSim& coupled,
         dl->PopClipRect();
     }
 
+    bool hovered = ImGui::IsItemHovered();
+
+    // Pipe polyline overlay
+    if (coupled.pipe.x.size() >= 2) {
+        for (size_t k = 0; k + 1 < coupled.pipe.x.size(); ++k) {
+            ImVec2 a(p0.x + coupled.pipe.x[k]   * (p1.x - p0.x),
+                    p0.y + (1.0f - coupled.pipe.y[k])   * (p1.y - p0.y));
+            ImVec2 b(p0.x + coupled.pipe.x[k+1] * (p1.x - p0.x),
+                    p0.y + (1.0f - coupled.pipe.y[k+1]) * (p1.y - p0.y));
+            dl->AddLine(a, b, IM_COL32(0, 150, 255, 220), 2.0f);
+        }
+    }
+
+    // PIPE EDIT
+    if (hovered && g_pipeMode && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        ImVec2 m = ImGui::GetMousePos();
+        float u = (m.x - p0.x) / (p1.x - p0.x);
+        float v = (m.y - p0.y) / (p1.y - p0.y);
+        float sx = u;
+        float sy = 1.0f - v;
+        if (sx >= 0 && sx <= 1 && sy >= 0 && sy <= 1) {
+            coupled.pipe.x.push_back(sx);
+            coupled.pipe.y.push_back(sy);
+            coupled.rebuildSolidsFromPipe(false);
+            coupled.invalidatePressureMatrix();
+            coupled.enforceBoundaries();
+        }
+    }
+
+    // SOLID PAINT/ERASE (Combined)
+    if (!g_pipeMode) {
+        if (hovered && ui.paintSolid && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            ImVec2 m = ImGui::GetMousePos();
+            float u = (m.x - p0.x) / (p1.x - p0.x);
+            float v = (m.y - p0.y) / (p1.y - p0.y);
+            float sx = u;
+            float sy = 1.0f - v;
+
+            if (sx >= 0 && sx <= 1 && sy >= 0 && sy <= 1) {
+                if (!ui.eraseSolid) {
+                    if (ui.circleMode) {
+                        coupled.addSolidCircle(sx, sy, ui.brushRadius);
+                    } else {
+                        float hs = ui.rectHalfSize;
+                        for (float yy = sy-hs; yy <= sy+hs; yy += coupled.dx) {
+                            for (float xx = sx-hs; xx <= sx+hs; xx += coupled.dx) {
+                                coupled.addSolidCircle(xx, yy, coupled.dx*0.75f);
+                            }
+                        }
+                    }
+                } else {
+                    coupled.eraseSolidCircle(sx, sy, ui.brushRadius);
+
+                    // also clear coupled scalars in the erased region
+                    int ci = (int)(sx * coupled.nx);
+                    int cj = (int)(sy * coupled.ny);
+                    int rad = std::max(1, (int)(ui.brushRadius / coupled.dx));
+                    for (int y = cj-rad; y <= cj+rad; ++y) {
+                        for (int x = ci-rad; x <= ci+rad; ++x) {
+                            if (x < 0 || x >= coupled.nx || y < 0 || y >= coupled.ny) continue;
+                            float dx = (x + 0.5f) / coupled.nx - sx;
+                            float dy = (y + 0.5f) / coupled.ny - sy;
+                            if (dx*dx + dy*dy <= ui.brushRadius*ui.brushRadius) {
+                                const int id = coupled.idxP(x,y);
+                                coupled.smoke[(size_t)id] = 0.0f;
+                                coupled.temp [(size_t)id] = 0.0f;
+                                coupled.age  [(size_t)id] = 0.0f;
+                            }
+                        }
+                    }
+                }
+
+                coupled.enforceBoundaries();
+            }
+        }
+    }
+
+    // WATER PAINT (Combined)
+    if (hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        ImVec2 m = ImGui::GetMousePos();
+        float u = (m.x - p0.x) / (p1.x - p0.x);
+        float v = (m.y - p0.y) / (p1.y - p0.y);
+
+        const float domainX = coupled.nx * coupled.dx;
+        const float domainY = coupled.ny * coupled.dx;
+        const float scaleW  = std::min(domainX, domainY);
+
+        float sx = u * domainX;
+        float sy = (1.0f - v) * domainY;
+        float radius  = ui.brushRadius * scaleW;
+        float rectHalf = ui.rectHalfSize * scaleW;
+
+        if (sx >= 0.0f && sx <= domainX && sy >= 0.0f && sy <= domainY) {
+            if (ui.circleMode) {
+                coupled.addWaterSource(sx, sy, radius, ui.waterAmount);
+            } else {
+                float hs = rectHalf;
+                for (float yy = sy - hs; yy <= sy + hs; yy += coupled.dx) {
+                    for (float xx = sx - hs; xx <= sx + hs; xx += coupled.dx) {
+                        coupled.addWaterSource(xx, yy, coupled.dx*0.75f, ui.waterAmount);
+                    }
+                }
+            }
+        }
+    }
+
     ImGui::End();
 }
 
@@ -1072,23 +1209,15 @@ Actions DrawAll(MAC2D& sim,
         g_hist[STAT_PRESSURE_SOLVER].push((float)st.pressureSolver);
     }
 
-    Actions a = drawControls(sim, water, ui);
+    Actions a = drawControls(sim, water, coupled, ui);
     drawDebugTabs(sim, water, ui, probe);
-    drawSmokeViewAndInteract(sim, coupled, renderer, ui, probe, NX, NY);
-    drawWaterViewAndInteract(water, coupled, renderer, ui, NX, NY);
+    drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
+    drawWaterViewAndInteract(water, renderer, ui, NX, NY);
     drawCombinedView(coupled, coupledRenderer, dock_id, ui, NX, NY);
 
     // keep solids consistent between smoke and water sims
     water.syncSolidsFrom(sim);
 
-    // make sure the coupled sim sees the same valve / open-top choices
-    coupled.setValveOpen(sim.isValveOpen());
-    
-    coupled.setOpenTop(sim.getOpenTop());
-    // propagate solids too (in case controls changed pipe)
-    coupled.syncSolidsFrom(sim);
-    coupled.invalidatePressureMatrix();
-    coupled.enforceBoundaries();
     return a;
 }
 

@@ -78,7 +78,7 @@ struct MACWater : public MACGridCore {
     void step();
 
     void addWaterSource(float cx, float cy, float radius, float amount);
-    void applyBoundary();
+    virtual void applyBoundary();
 
     // Copy solid cells from another sim (smoke), then re-apply water borders.
     void syncSolidsFrom(const MACGridCore& src);
