@@ -1,6 +1,7 @@
 #include "pressure_solver.h"
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 
 void PressureSolver::configure(int nx, int ny, float dx,
