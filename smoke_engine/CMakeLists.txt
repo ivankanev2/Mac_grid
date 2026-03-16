@@ -4,6 +4,16 @@ project(SmokeEngine CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(SMOKE_ENABLE_CUDA "Enable experimental CUDA build plumbing for the 3D water path" OFF)
+
+if(SMOKE_ENABLE_CUDA)
+  enable_language(CUDA)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89 CACHE STRING "CUDA architectures to build for")
+  endif()
+  find_package(CUDAToolkit REQUIRED)
+endif()
+
 include(FetchContent)
 
 # --------------------
@@ -65,10 +75,21 @@ add_executable(SmokeEngine
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_grid_core.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/pressure_solver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_water_sim.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_water3d.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_coupled_sim.cpp
 
   ${CMAKE_CURRENT_SOURCE_DIR}/Renderer/smoke_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/UI/panels.cpp
+)
+
+if(SMOKE_ENABLE_CUDA)
+  target_sources(SmokeEngine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Sim/Water3D/water3d_cuda_backend.cu
+  )
+endif()
+
+target_compile_definitions(SmokeEngine PRIVATE
+  SMOKE_ENABLE_CUDA=$<BOOL:${SMOKE_ENABLE_CUDA}>
 )
 
 target_include_directories(SmokeEngine PRIVATE
@@ -79,6 +100,16 @@ target_include_directories(SmokeEngine PRIVATE
 )
 
 target_link_libraries(SmokeEngine PRIVATE imgui_lib glfw OpenGL::GL)
+
+if(SMOKE_ENABLE_CUDA)
+  target_link_libraries(SmokeEngine PRIVATE CUDA::cudart)
+  set_target_properties(SmokeEngine PROPERTIES
+    CUDA_STANDARD 17
+    CUDA_STANDARD_REQUIRED ON
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+  )
+endif()
 
 # macOS: silence OpenGL deprecation warning
 if(APPLE)
