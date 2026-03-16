@@ -130,4 +130,6 @@ protected:
 };
 
 #include "Water/water_particles.h"
+#include "Water/water_solids.h"
+#include "Water/water_grid.h"
 #include "Water/water_rasterize.h"

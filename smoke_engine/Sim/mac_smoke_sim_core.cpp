@@ -1,6 +1,7 @@
 #include "mac_smoke_sim.h"
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
 
 void MAC2D::applyScalarOutflowTop(std::vector<float>& phi, float outsideValue, int layers)
 {

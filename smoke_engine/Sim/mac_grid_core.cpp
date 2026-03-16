@@ -1,5 +1,6 @@
 #include "mac_grid_core.h"
 #include <cmath>
+#include <cstdio>
 #include <chrono>
 #include <limits>
 

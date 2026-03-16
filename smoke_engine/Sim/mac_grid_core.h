@@ -2,6 +2,7 @@
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 
 #include "pressure_solver.h"
 
