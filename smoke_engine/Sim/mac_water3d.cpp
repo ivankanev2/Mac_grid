@@ -108,6 +108,10 @@ void MACWater3D::setParams(const Params& newParams) {
     updateStats(0.0f);
 }
 
+void MACWater3D::refreshStats(float stepMs) {
+    updateStats(stepMs);
+}
+
 void MACWater3D::step() {
     if (cudaBackend != nullptr) {
         water3dCudaStep(cudaBackend, *this);
@@ -164,6 +168,9 @@ void MACWater3D::step() {
 
     buildLiquidMask(false);
     reseedParticles();
+    if (params.reseedRelaxIters > 0 && params.reseedRelaxStrength > 0.0f) {
+        relaxParticles(params.reseedRelaxIters, params.reseedRelaxStrength);
+    }
     applyDissipation();
 
     buildLiquidMask();
@@ -227,7 +234,14 @@ void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Ve
                     p.u = velocity.x;
                     p.v = velocity.y;
                     p.w = velocity.z;
+                    p.c00 = p.c01 = p.c02 = 0.0f;
+                    p.c10 = p.c11 = p.c12 = 0.0f;
+                    p.c20 = p.c21 = p.c22 = 0.0f;
                     particles.push_back(p);
+
+                    if (desiredMass >= 0.0f) {
+                        desiredMass += 1.0f;
+                    }
 
                     if (params.maxParticles > 0 && (int)particles.size() >= params.maxParticles) {
                         break;

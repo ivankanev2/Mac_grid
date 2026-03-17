@@ -132,6 +132,8 @@ inline void MACWater3D::updateStats(float stepMs) {
     lastStats.maxDivergence = 0.0f;
     lastStats.dt = dt;
     lastStats.lastStepMs = stepMs;
+    lastStats.targetMass = targetMass;
+    lastStats.desiredMass = desiredMass;
     lastStats.backendName = "CPU MAC 3D";
     lastStats.bytesAllocated =
         u.size() * sizeof(float) +

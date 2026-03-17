@@ -4,6 +4,7 @@
 #include "Sim/mac_coupled_sim.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -17,6 +18,179 @@
 
 #include <vector>
 #include <cstdint>
+
+namespace {
+
+struct Vec3f {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
+
+struct WaterViewBox {
+    float hx = 0.5f;
+    float hy = 0.5f;
+    float hz = 0.5f;
+    float camDist = 1.85f;
+    float fovScale = 0.95f;
+    float imageAspect = 1.0f;
+};
+
+static Vec3f operator+(Vec3f a, Vec3f b) { return Vec3f{a.x + b.x, a.y + b.y, a.z + b.z}; }
+static Vec3f operator-(Vec3f a, Vec3f b) { return Vec3f{a.x - b.x, a.y - b.y, a.z - b.z}; }
+static Vec3f operator*(Vec3f a, float s) { return Vec3f{a.x * s, a.y * s, a.z * s}; }
+static Vec3f operator*(float s, Vec3f a) { return a * s; }
+
+static float dot3(Vec3f a, Vec3f b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static float length3(Vec3f v) {
+    return std::sqrt(dot3(v, v));
+}
+
+static Vec3f normalize3(Vec3f v) {
+    const float len2 = dot3(v, v);
+    if (len2 <= 1e-20f) return Vec3f{0.0f, 0.0f, 1.0f};
+    const float inv = 1.0f / std::sqrt(len2);
+    return Vec3f{v.x * inv, v.y * inv, v.z * inv};
+}
+
+static Vec3f rotateYawPitch(Vec3f v, float yawRad, float pitchRad) {
+    const float cy = std::cos(yawRad);
+    const float sy = std::sin(yawRad);
+    const float cp = std::cos(pitchRad);
+    const float sp = std::sin(pitchRad);
+    return Vec3f{
+        cy * v.x + sy * v.z,
+        cp * v.y - sp * (-sy * v.x + cy * v.z),
+        sp * v.y + cp * (-sy * v.x + cy * v.z)
+    };
+}
+
+static Vec3f rotateInvYawPitch(Vec3f v, float yawRad, float pitchRad) {
+    const float cy = std::cos(yawRad);
+    const float sy = std::sin(yawRad);
+    const float cp = std::cos(pitchRad);
+    const float sp = std::sin(pitchRad);
+    return Vec3f{
+        cy * v.x + sy * sp * v.y - sy * cp * v.z,
+        cp * v.y + sp * v.z,
+        sy * v.x - cy * sp * v.y + cy * cp * v.z
+    };
+}
+
+static WaterViewBox makeWaterViewBox(int nx, int ny, int nz, float imageAspect) {
+    const int maxDim = std::max({nx, ny, nz, 1});
+    WaterViewBox box;
+    box.hx = 0.5f * (float)nx / (float)maxDim;
+    box.hy = 0.5f * (float)ny / (float)maxDim;
+    box.hz = 0.5f * (float)nz / (float)maxDim;
+    box.imageAspect = std::max(1e-6f, imageAspect);
+    return box;
+}
+
+static bool intersectBox(const Vec3f& o, const Vec3f& d, const WaterViewBox& box, float& tminOut, float& tmaxOut) {
+    float tmin = 0.0f;
+    float tmax = std::numeric_limits<float>::infinity();
+
+    auto updateAxis = [&](float oAxis, float dAxis, float halfExtent) -> bool {
+        const float lo = -halfExtent;
+        const float hi = halfExtent;
+        if (std::fabs(dAxis) < 1e-8f) {
+            return (oAxis >= lo && oAxis <= hi);
+        }
+        float t0 = (lo - oAxis) / dAxis;
+        float t1 = (hi - oAxis) / dAxis;
+        if (t0 > t1) std::swap(t0, t1);
+        tmin = std::max(tmin, t0);
+        tmax = std::min(tmax, t1);
+        return tmax >= tmin;
+    };
+
+    if (!updateAxis(o.x, d.x, box.hx)) return false;
+    if (!updateAxis(o.y, d.y, box.hy)) return false;
+    if (!updateAxis(o.z, d.z, box.hz)) return false;
+
+    tminOut = tmin;
+    tmaxOut = tmax;
+    return tmaxOut > tminOut;
+}
+
+static Vec3f localToUnit(const Vec3f& p, const WaterViewBox& box) {
+    return Vec3f{
+        (p.x + box.hx) / std::max(1e-6f, 2.0f * box.hx),
+        (p.y + box.hy) / std::max(1e-6f, 2.0f * box.hy),
+        (p.z + box.hz) / std::max(1e-6f, 2.0f * box.hz)
+    };
+}
+
+static float sampleTrilinear(const std::vector<float>& volume, int nx, int ny, int nz, float x, float y, float z) {
+    if (volume.empty() || nx <= 0 || ny <= 0 || nz <= 0) return 0.0f;
+
+    x = std::clamp(x, 0.0f, 1.0f);
+    y = std::clamp(y, 0.0f, 1.0f);
+    z = std::clamp(z, 0.0f, 1.0f);
+
+    const float fx = x * (float)(nx - 1);
+    const float fy = y * (float)(ny - 1);
+    const float fz = z * (float)(nz - 1);
+
+    const int i0 = std::clamp((int)std::floor(fx), 0, nx - 1);
+    const int j0 = std::clamp((int)std::floor(fy), 0, ny - 1);
+    const int k0 = std::clamp((int)std::floor(fz), 0, nz - 1);
+    const int i1 = std::min(i0 + 1, nx - 1);
+    const int j1 = std::min(j0 + 1, ny - 1);
+    const int k1 = std::min(k0 + 1, nz - 1);
+
+    const float tx = std::clamp(fx - (float)i0, 0.0f, 1.0f);
+    const float ty = std::clamp(fy - (float)j0, 0.0f, 1.0f);
+    const float tz = std::clamp(fz - (float)k0, 0.0f, 1.0f);
+
+    auto at = [&](int i, int j, int k) -> float {
+        return volume[(std::size_t)i + (std::size_t)nx * ((std::size_t)j + (std::size_t)ny * (std::size_t)k)];
+    };
+
+    const float c000 = at(i0, j0, k0);
+    const float c100 = at(i1, j0, k0);
+    const float c010 = at(i0, j1, k0);
+    const float c110 = at(i1, j1, k0);
+    const float c001 = at(i0, j0, k1);
+    const float c101 = at(i1, j0, k1);
+    const float c011 = at(i0, j1, k1);
+    const float c111 = at(i1, j1, k1);
+
+    const float c00 = c000 * (1.0f - tx) + c100 * tx;
+    const float c10 = c010 * (1.0f - tx) + c110 * tx;
+    const float c01 = c001 * (1.0f - tx) + c101 * tx;
+    const float c11 = c011 * (1.0f - tx) + c111 * tx;
+    const float c0 = c00 * (1.0f - ty) + c10 * ty;
+    const float c1 = c01 * (1.0f - ty) + c11 * ty;
+    return c0 * (1.0f - tz) + c1 * tz;
+}
+
+static uint8_t sampleSolidNearest(const std::vector<uint8_t>& solid, int nx, int ny, int nz, float x, float y, float z) {
+    if (solid.empty() || nx <= 0 || ny <= 0 || nz <= 0) return (uint8_t)0;
+    const int i = std::clamp((int)std::round(std::clamp(x, 0.0f, 1.0f) * (float)(nx - 1)), 0, nx - 1);
+    const int j = std::clamp((int)std::round(std::clamp(y, 0.0f, 1.0f) * (float)(ny - 1)), 0, ny - 1);
+    const int k = std::clamp((int)std::round(std::clamp(z, 0.0f, 1.0f) * (float)(nz - 1)), 0, nz - 1);
+    return solid[(std::size_t)i + (std::size_t)nx * ((std::size_t)j + (std::size_t)ny * (std::size_t)k)];
+}
+
+static Vec3f sampleGradient(const std::vector<float>& volume, int nx, int ny, int nz, Vec3f q) {
+    const float epsX = 1.0f / (float)std::max(2, nx - 1);
+    const float epsY = 1.0f / (float)std::max(2, ny - 1);
+    const float epsZ = 1.0f / (float)std::max(2, nz - 1);
+    const float gx = sampleTrilinear(volume, nx, ny, nz, q.x + epsX, q.y, q.z)
+                   - sampleTrilinear(volume, nx, ny, nz, q.x - epsX, q.y, q.z);
+    const float gy = sampleTrilinear(volume, nx, ny, nz, q.x, q.y + epsY, q.z)
+                   - sampleTrilinear(volume, nx, ny, nz, q.x, q.y - epsY, q.z);
+    const float gz = sampleTrilinear(volume, nx, ny, nz, q.x, q.y, q.z + epsZ)
+                   - sampleTrilinear(volume, nx, ny, nz, q.x, q.y, q.z - epsZ);
+    return Vec3f{gx, gy, gz};
+}
+
+}
 
 unsigned int SmokeRenderer::makeTexture(int w, int h) {
     GLuint tex = 0;
@@ -305,4 +479,202 @@ void SmokeRenderer::updateWaterFromSim(const MACCoupledSim& sim,
                                        const WaterRenderSettings& water)
 {
     uploadWaterRGBA(sim.waterField(), sim.solidMask(), water);
+}
+
+void SmokeRenderer::updateWaterFromSlice(const std::vector<float>& values,
+                                         const std::vector<uint8_t>& solid,
+                                         int width,
+                                         int height,
+                                         const WaterRenderSettings& water)
+{
+    if (width <= 0 || height <= 0) return;
+    const std::size_t cellCount = (std::size_t)width * (std::size_t)height;
+    if (values.size() != cellCount || solid.size() != cellCount) return;
+
+    if (width != m_w || height != m_h) {
+        resize(width, height);
+    }
+
+    uploadWaterRGBA(values, solid, water);
+}
+
+void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
+                                          const std::vector<uint8_t>& solid,
+                                          int nx,
+                                          int ny,
+                                          int nz,
+                                          int viewMode,
+                                          float yawDeg,
+                                          float pitchDeg,
+                                          float zoom,
+                                          float densityScale,
+                                          float surfaceThreshold,
+                                          const WaterRenderSettings& water) {
+    if (nx <= 1 || ny <= 1 || nz <= 1) return;
+    const std::size_t cellCount = (std::size_t)nx * (std::size_t)ny * (std::size_t)nz;
+    if (values.size() != cellCount || solid.size() != cellCount) return;
+    if (m_w <= 0 || m_h <= 0) return;
+
+    const int mode = std::clamp(viewMode, 0, 2);
+    const bool surfaceMode = (mode == 2);
+    const float yaw = yawDeg * 3.14159265358979323846f / 180.0f;
+    const float pitch = pitchDeg * 3.14159265358979323846f / 180.0f;
+    const float zoomClamped = std::clamp(zoom, 0.35f, 3.5f);
+    const float sigmaScale = std::max(0.05f, densityScale);
+    const float iso = std::max(0.01f, surfaceThreshold);
+    const int maxDim = std::max({nx, ny, nz, 1});
+    const WaterViewBox box = makeWaterViewBox(nx, ny, nz, (float)m_w / (float)std::max(1, m_h));
+    const float step = 0.55f / (float)std::max(24, maxDim);
+    const Vec3f lightDir = normalize3(Vec3f{-0.45f, 0.72f, 0.53f});
+    const Vec3f viewLight = normalize3(Vec3f{0.0f, 0.0f, 1.0f});
+    const Vec3f bgA{0.045f, 0.055f, 0.070f};
+    const Vec3f bgB{0.080f, 0.095f, 0.120f};
+
+    std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
+
+    for (int j = 0; j < m_h; ++j) {
+        const float py = 1.0f - 2.0f * ((j + 0.5f) / (float)m_h);
+        for (int i = 0; i < m_w; ++i) {
+            const float px = (2.0f * ((i + 0.5f) / (float)m_w) - 1.0f) * box.imageAspect;
+
+            Vec3f rayOriginWorld{0.0f, 0.0f, -box.camDist / zoomClamped};
+            Vec3f rayDirWorld = normalize3(Vec3f{px * box.fovScale, py * box.fovScale, box.camDist});
+            const Vec3f o = rotateInvYawPitch(rayOriginWorld, yaw, pitch);
+            const Vec3f d = normalize3(rotateInvYawPitch(rayDirWorld, yaw, pitch));
+
+            const float tBg = (float)j / (float)std::max(1, m_h - 1);
+            Vec3f color{
+                bgA.x * (1.0f - tBg) + bgB.x * tBg,
+                bgA.y * (1.0f - tBg) + bgB.y * tBg,
+                bgA.z * (1.0f - tBg) + bgB.z * tBg
+            };
+
+            float tmin = 0.0f;
+            float tmax = 0.0f;
+            if (intersectBox(o, d, box, tmin, tmax)) {
+                float t = std::max(0.0f, tmin);
+                if (surfaceMode) {
+                    float prevT = t;
+                    bool prevValid = false;
+                    bool hit = false;
+                    Vec3f hitQ{};
+
+                    while (t < tmax) {
+                        const Vec3f q = localToUnit(o + d * t, box);
+                        const float raw = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, q.x, q.y, q.z));
+                        const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
+                        if (!solidCell && raw >= iso && prevValid) {
+                            float a = prevT;
+                            float b = t;
+                            for (int refine = 0; refine < 5; ++refine) {
+                                const float mid = 0.5f * (a + b);
+                                const Vec3f qm = localToUnit(o + d * mid, box);
+                                const float vm = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, qm.x, qm.y, qm.z));
+                                if (vm >= iso) {
+                                    b = mid;
+                                } else {
+                                    a = mid;
+                                }
+                            }
+                            hitQ = localToUnit(o + d * b, box);
+                            hit = true;
+                            break;
+                        }
+                        prevT = t;
+                        prevValid = !solidCell;
+                        t += step;
+                    }
+
+                    if (hit) {
+                        Vec3f grad = sampleGradient(values, nx, ny, nz, hitQ);
+                        grad.x /= std::max(1e-6f, box.hx * 2.0f);
+                        grad.y /= std::max(1e-6f, box.hy * 2.0f);
+                        grad.z /= std::max(1e-6f, box.hz * 2.0f);
+                        Vec3f normal = normalize3(grad);
+                        if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
+
+                        const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
+                        const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
+                        const float spec = std::pow(std::clamp(dot3(normal, viewLight), 0.0f, 1.0f), 18.0f);
+
+                        color.x = 0.08f + 0.16f * ndl + 0.12f * rim + 0.22f * spec;
+                        color.y = 0.26f + 0.32f * ndl + 0.12f * rim + 0.18f * spec;
+                        color.z = 0.52f + 0.36f * ndl + 0.14f * rim + 0.20f * spec;
+                    }
+                } else {
+                    float accumR = 0.0f;
+                    float accumG = 0.0f;
+                    float accumB = 0.0f;
+                    float accumA = 0.0f;
+                    float firstSurfaceT = -1.0f;
+
+                    while (t < tmax && accumA < 0.995f) {
+                        const Vec3f q = localToUnit(o + d * t, box);
+                        const float raw = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, q.x, q.y, q.z));
+                        const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
+                        if (!solidCell && raw > 1e-4f) {
+                            if (firstSurfaceT < 0.0f && raw >= iso) {
+                                firstSurfaceT = t;
+                            }
+                            const float sigma = raw * sigmaScale * 3.2f;
+                            const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * water.alpha;
+
+                            Vec3f grad = sampleGradient(values, nx, ny, nz, q);
+                            grad.x /= std::max(1e-6f, box.hx * 2.0f);
+                            grad.y /= std::max(1e-6f, box.hy * 2.0f);
+                            grad.z /= std::max(1e-6f, box.hz * 2.0f);
+                            Vec3f normal = normalize3(grad);
+                            if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
+                            const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
+                            const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
+                            const float shade = 0.35f + 0.55f * ndl + 0.25f * rim;
+
+                            const float depthFade = 0.85f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
+                            const float cr = (0.05f + 0.10f * raw) * depthFade * shade;
+                            const float cg = (0.18f + 0.28f * raw) * depthFade * shade;
+                            const float cb = (0.48f + 0.38f * raw) * depthFade * (0.85f + 0.25f * shade);
+
+                            const float oneMinusA = 1.0f - accumA;
+                            accumR += oneMinusA * aStep * cr;
+                            accumG += oneMinusA * aStep * cg;
+                            accumB += oneMinusA * aStep * cb;
+                            accumA += oneMinusA * aStep;
+                        }
+                        t += step;
+                    }
+
+                    if (accumA > 0.0f) {
+                        color.x = color.x * (1.0f - accumA) + accumR;
+                        color.y = color.y * (1.0f - accumA) + accumG;
+                        color.z = color.z * (1.0f - accumA) + accumB;
+                    }
+
+                    if (firstSurfaceT >= 0.0f) {
+                        const Vec3f q = localToUnit(o + d * firstSurfaceT, box);
+                        Vec3f grad = sampleGradient(values, nx, ny, nz, q);
+                        grad.x /= std::max(1e-6f, box.hx * 2.0f);
+                        grad.y /= std::max(1e-6f, box.hy * 2.0f);
+                        grad.z /= std::max(1e-6f, box.hz * 2.0f);
+                        Vec3f normal = normalize3(grad);
+                        if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
+                        const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
+                        const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 3.0f);
+                        color.x += 0.05f * ndl + 0.04f * rim;
+                        color.y += 0.07f * ndl + 0.05f * rim;
+                        color.z += 0.10f * ndl + 0.06f * rim;
+                    }
+                }
+            }
+
+            const int dst = ((m_h - 1 - j) * m_w + i) * 4;
+            img[(std::size_t)dst + 0] = (uint8_t)std::lround(std::clamp(color.x, 0.0f, 1.0f) * 255.0f);
+            img[(std::size_t)dst + 1] = (uint8_t)std::lround(std::clamp(color.y, 0.0f, 1.0f) * 255.0f);
+            img[(std::size_t)dst + 2] = (uint8_t)std::lround(std::clamp(color.z, 0.0f, 1.0f) * 255.0f);
+            img[(std::size_t)dst + 3] = 255;
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_2D, m_waterTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_w, m_h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
 }

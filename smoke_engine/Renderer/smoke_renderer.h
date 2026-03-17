@@ -52,10 +52,31 @@ public:
     void updateWaterFromSim(const MACCoupledSim& sim,
                             const WaterRenderSettings& water);
 
+    void updateWaterFromSlice(const std::vector<float>& values,
+                              const std::vector<uint8_t>& solid,
+                              int width,
+                              int height,
+                              const WaterRenderSettings& water);
+
+    void updateWaterFromVolume(const std::vector<float>& values,
+                               const std::vector<uint8_t>& solid,
+                               int nx,
+                               int ny,
+                               int nz,
+                               int viewMode,
+                               float yawDeg,
+                               float pitchDeg,
+                               float zoom,
+                               float densityScale,
+                               float surfaceThreshold,
+                               const WaterRenderSettings& water);
+
     unsigned int smokeTex() const { return m_smokeTex; }
     unsigned int divTex()   const { return m_divTex; }
     unsigned int vortTex()  const { return m_vortTex; }
     unsigned int waterTex() const { return m_waterTex; }
+    int width() const { return m_w; }
+    int height() const { return m_h; }
 
 private:
     int m_w = 0, m_h = 0;

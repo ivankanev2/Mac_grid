@@ -36,10 +36,20 @@ FetchContent_MakeAvailable(glfw)
 find_package(OpenGL REQUIRED)
 
 # --------------------
-# ImGui (DOCKING branch via submodule)
-# Make sure: external/imgui is checked out to branch "docking"
+# ImGui (prefer local docking branch checkout, otherwise fetch it)
 # --------------------
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
+if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+  message(STATUS "external/imgui not found; fetching ImGui docking branch")
+  FetchContent_Declare(
+    imgui_ext
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG docking
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(imgui_ext)
+  set(IMGUI_DIR ${imgui_ext_SOURCE_DIR})
+endif()
 
 add_library(imgui_lib
   ${IMGUI_DIR}/imgui.cpp
@@ -106,8 +116,9 @@ if(SMOKE_ENABLE_CUDA)
   set_target_properties(SmokeEngine PROPERTIES
     CUDA_STANDARD 17
     CUDA_STANDARD_REQUIRED ON
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_RUNTIME_LIBRARY Shared
+    CUDA_SEPARABLE_COMPILATION OFF
+    CUDA_RESOLVE_DEVICE_SYMBOLS OFF
   )
 endif()
 
