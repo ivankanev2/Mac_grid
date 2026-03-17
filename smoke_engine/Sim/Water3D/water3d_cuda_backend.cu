@@ -15,6 +15,61 @@
 #include <thrust/execution_policy.h>
 #include <thrust/remove.h>
 
+struct MACWater3DCudaBackend {
+    int nx = 0;
+    int ny = 0;
+    int nz = 0;
+    float dx = 1.0f;
+    float dt = 0.02f;
+    MACWater3D::Params params;
+
+    int cellCount = 0;
+    int uCount = 0;
+    int vCount = 0;
+    int wCount = 0;
+    int particleCapacity = 0;
+
+    float* d_u = nullptr;
+    float* d_v = nullptr;
+    float* d_w = nullptr;
+    float* d_uWeight = nullptr;
+    float* d_vWeight = nullptr;
+    float* d_wWeight = nullptr;
+    float* d_uPrev = nullptr;
+    float* d_vPrev = nullptr;
+    float* d_wPrev = nullptr;
+    float* d_uDelta = nullptr;
+    float* d_vDelta = nullptr;
+    float* d_wDelta = nullptr;
+    float* d_uTmp = nullptr;
+    float* d_vTmp = nullptr;
+    float* d_wTmp = nullptr;
+    float* d_pressure = nullptr;
+    float* d_pressureTmp = nullptr;
+    float* d_rhs = nullptr;
+    float* d_water = nullptr;
+    float* d_divergence = nullptr;
+    float* d_speed = nullptr;
+    float* d_mass = nullptr;
+
+    uint8_t* d_liquid = nullptr;
+    uint8_t* d_liquidTmp = nullptr;
+    uint8_t* d_solid = nullptr;
+    uint8_t* d_solidUser = nullptr;
+    uint8_t* d_validU = nullptr;
+    uint8_t* d_validV = nullptr;
+    uint8_t* d_validW = nullptr;
+    uint8_t* d_validUTmp = nullptr;
+    uint8_t* d_validVTmp = nullptr;
+    uint8_t* d_validWTmp = nullptr;
+    uint8_t* d_occ = nullptr;
+    uint8_t* d_region = nullptr;
+
+    int* d_cellCounts = nullptr;
+    int* d_particleCount = nullptr;
+    MACWater3D::Particle* d_particles = nullptr;
+};
+
 namespace {
 
 #define CUDA_CHECK(expr)                                                         \
@@ -230,61 +285,6 @@ __device__ void velAtDevice(float x, float y, float z,
     outW = sampleWDevice(w, x, y, z, nx, ny, nz, dx);
 }
 
-struct MACWater3DCudaBackend {
-    int nx = 0;
-    int ny = 0;
-    int nz = 0;
-    float dx = 1.0f;
-    float dt = 0.02f;
-    MACWater3D::Params params;
-
-    int cellCount = 0;
-    int uCount = 0;
-    int vCount = 0;
-    int wCount = 0;
-    int particleCapacity = 0;
-
-    float* d_u = nullptr;
-    float* d_v = nullptr;
-    float* d_w = nullptr;
-    float* d_uWeight = nullptr;
-    float* d_vWeight = nullptr;
-    float* d_wWeight = nullptr;
-    float* d_uPrev = nullptr;
-    float* d_vPrev = nullptr;
-    float* d_wPrev = nullptr;
-    float* d_uDelta = nullptr;
-    float* d_vDelta = nullptr;
-    float* d_wDelta = nullptr;
-    float* d_uTmp = nullptr;
-    float* d_vTmp = nullptr;
-    float* d_wTmp = nullptr;
-    float* d_pressure = nullptr;
-    float* d_pressureTmp = nullptr;
-    float* d_rhs = nullptr;
-    float* d_water = nullptr;
-    float* d_divergence = nullptr;
-    float* d_speed = nullptr;
-    float* d_mass = nullptr;
-
-    uint8_t* d_liquid = nullptr;
-    uint8_t* d_liquidTmp = nullptr;
-    uint8_t* d_solid = nullptr;
-    uint8_t* d_solidUser = nullptr;
-    uint8_t* d_validU = nullptr;
-    uint8_t* d_validV = nullptr;
-    uint8_t* d_validW = nullptr;
-    uint8_t* d_validUTmp = nullptr;
-    uint8_t* d_validVTmp = nullptr;
-    uint8_t* d_validWTmp = nullptr;
-    uint8_t* d_occ = nullptr;
-    uint8_t* d_region = nullptr;
-
-    int* d_cellCounts = nullptr;
-    int* d_particleCount = nullptr;
-    MACWater3D::Particle* d_particles = nullptr;
-};
-
 template <typename T>
 void allocArray(T*& ptr, int count) {
     if (count <= 0) {
@@ -368,6 +368,13 @@ void applyCudaStats(MACWater3DCudaBackend* backend, MACWater3D& sim, float stepM
     sim.lastStats.bytesAllocated = backendBytesAllocated(backend);
 }
 
+void applyCudaBridgeStats(MACWater3DCudaBackend* backend, MACWater3D& sim) {
+    sim.lastStats.cudaEnabled = true;
+    sim.lastStats.backendReady = true;
+    sim.lastStats.backendName = "CUDA bridge (CPU parity)";
+    sim.lastStats.bytesAllocated = backendBytesAllocated(backend);
+}
+
 void ensureParticleCapacity(MACWater3DCudaBackend* b, int requested) {
     if (requested <= b->particleCapacity) return;
 
@@ -379,10 +386,12 @@ void ensureParticleCapacity(MACWater3DCudaBackend* b, int requested) {
     if (b->d_particleCount != nullptr) {
         CUDA_CHECK(cudaMemcpy(&particleCount, b->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
     }
-    if (b->d_particles != nullptr && particleCount > 0) {
-        CUDA_CHECK(cudaMemcpy(d_newParticles, b->d_particles,
-                              (std::size_t)particleCount * sizeof(MACWater3D::Particle),
-                              cudaMemcpyDeviceToDevice));
+    if (b->d_particles != nullptr) {
+        if (particleCount > 0) {
+            CUDA_CHECK(cudaMemcpy(d_newParticles, b->d_particles,
+                                  (std::size_t)particleCount * sizeof(MACWater3D::Particle),
+                                  cudaMemcpyDeviceToDevice));
+        }
         CUDA_CHECK(cudaFree(b->d_particles));
     }
 
@@ -620,7 +629,7 @@ __global__ void dilateLiquidKernel(const uint8_t* solid, const uint8_t* liquid, 
 }
 
 __global__ void applyGravityDampingKernel(float* v, int nx, int ny, int nz, float dt, float gravity,
-                                          float damp, const uint8_t* liquid) {
+                                          float damp) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int count = nx * (ny + 1) * nz;
     if (idx >= count) return;
@@ -630,11 +639,7 @@ __global__ void applyGravityDampingKernel(float* v, int nx, int ny, int nz, floa
     const int j = rem / nx;
     const int i = rem - j * nx;
 
-    const bool botLiquid = (j - 1 >= 0) ? (liquid[idxCell3D(i, j - 1, k, nx, ny)] != 0) : false;
-    const bool topLiquid = (j < ny) ? (liquid[idxCell3D(i, j, k, nx, ny)] != 0) : false;
-    if (botLiquid || topLiquid) {
-        v[idx] += dt * gravity;
-    }
+    v[idx] += dt * gravity;
     v[idx] *= damp;
 }
 
@@ -1287,7 +1292,8 @@ __global__ void spawnReseedParticlesKernel(MACWater3D::Particle* particles, int*
                                            int particleCapacity,
                                            const uint8_t* region, const uint8_t* solid, const int* cellCounts,
                                            const float* u, const float* v, const float* w,
-                                           int nx, int ny, int nz, float dx, int ppc, int stepCounter) {
+                                           int nx, int ny, int nz, float dx, int ppc, int stepCounter,
+                                           int maxParticleCount) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int cellCount = nx * ny * nz;
     if (idx >= cellCount) return;
@@ -1303,7 +1309,7 @@ __global__ void spawnReseedParticlesKernel(MACWater3D::Particle* particles, int*
 
     for (int n = have; n < ppc; ++n) {
         const int slot = atomicAdd(particleCount, 1);
-        if (slot >= particleCapacity) {
+        if (slot >= particleCapacity || slot >= maxParticleCount) {
             atomicSub(particleCount, 1);
             break;
         }
@@ -1322,6 +1328,7 @@ __global__ void spawnReseedParticlesKernel(MACWater3D::Particle* particles, int*
 
 __global__ void addWaterSourceSphereKernel(MACWater3D::Particle* particles, int* particleCount,
                                            int particleCapacity,
+                                           int maxParticleCount,
                                            uint8_t* liquid, const uint8_t* solid,
                                            int nx, int ny, int nz, float dx, int particlesPerCell,
                                            float cx, float cy, float cz, float radius,
@@ -1347,7 +1354,7 @@ __global__ void addWaterSourceSphereKernel(MACWater3D::Particle* particles, int*
 
     for (int n = 0; n < particlesPerCell; ++n) {
         const int slot = atomicAdd(particleCount, 1);
-        if (slot >= particleCapacity) {
+        if (slot >= particleCapacity || slot >= maxParticleCount) {
             atomicSub(particleCount, 1);
             break;
         }
@@ -1684,7 +1691,7 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
 
     const float damp = (b->params.velDamping > 0.0f) ? expf(-b->params.velDamping * b->dt) : 1.0f;
     applyGravityDampingKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_v, b->nx, b->ny, b->nz, b->dt, b->params.gravity, damp, b->d_liquid);
+        b->d_v, b->nx, b->ny, b->nz, b->dt, b->params.gravity, damp);
     applyDampingKernel<<<(b->uCount + kThreads - 1) / kThreads, kThreads>>>(b->d_u, b->uCount, damp);
     applyDampingKernel<<<(b->wCount + kThreads - 1) / kThreads, kThreads>>>(b->d_w, b->wCount, damp);
     launchApplyBoundary(b);
@@ -1787,14 +1794,20 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
     countParticlesPerCellKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
         b->d_particles, particleCount, b->d_solid, b->d_cellCounts, b->d_occ,
         b->nx, b->ny, b->nz, b->dx);
-    buildReseedRegionKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_solid, b->d_occ, b->d_region, b->nx, b->ny, b->nz);
-    ensureParticleCapacity(b, std::max(b->particleCapacity, particleCount + b->cellCount * std::max(1, b->params.particlesPerCell)));
+
+    const int maxNewPerStep = std::max(4096, b->cellCount / 8);
+    int maxParticleCount = particleCount + maxNewPerStep;
+    if (b->params.maxParticles > 0) {
+        maxParticleCount = std::min(maxParticleCount, b->params.maxParticles);
+    }
+    maxParticleCount = std::max(maxParticleCount, particleCount);
+    ensureParticleCapacity(b, maxParticleCount);
+
     spawnReseedParticlesKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
         b->d_particles, b->d_particleCount, b->particleCapacity,
-        b->d_region, b->d_solid, b->d_cellCounts,
+        b->d_liquid, b->d_solid, b->d_cellCounts,
         b->d_u, b->d_v, b->d_w,
-        b->nx, b->ny, b->nz, b->dx, b->params.particlesPerCell, sim.stepCounter);
+        b->nx, b->ny, b->nz, b->dx, b->params.particlesPerCell, sim.stepCounter, maxParticleCount);
 
     if (b->params.waterDissipation < 0.999999f) {
         particleCount = 0;
@@ -1877,24 +1890,54 @@ void water3dCudaAddWaterSourceSphere(MACWater3DCudaBackend* backend, MACWater3D&
     backend->dt = sim.dt;
     backend->dx = sim.dx;
     backend->params = sim.params;
-    ensureParticleCapacity(backend, backend->particleCapacity + backend->cellCount * std::max(1, backend->params.particlesPerCell));
+    int particleCountBefore = 0;
+    CUDA_CHECK(cudaMemcpy(&particleCountBefore, backend->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
+
+    const int ppc = std::max(1, backend->params.particlesPerCell);
+    const float dxSafe = std::max(1e-6f, backend->dx);
+    const float rCells = std::max(0.0f, radius / dxSafe);
+    const float sphereCellEstimate = (4.0f / 3.0f) * 3.14159265358979323846f * rCells * rCells * rCells;
+    int estimatedSpawn = (int)std::ceil(std::max(1.0f, sphereCellEstimate) * (float)ppc);
+    estimatedSpawn = std::min(estimatedSpawn, backend->cellCount * ppc);
+
+    int maxParticleCount = backend->params.maxParticles > 0 ? backend->params.maxParticles : (particleCountBefore + estimatedSpawn);
+    if (backend->params.maxParticles <= 0) {
+        maxParticleCount = particleCountBefore + estimatedSpawn;
+    }
+    maxParticleCount = std::max(maxParticleCount, particleCountBefore);
+
+    int requestedCapacity = particleCountBefore + estimatedSpawn;
+    requestedCapacity = std::max(requestedCapacity, particleCountBefore + ppc);
+    if (backend->params.maxParticles > 0) {
+        requestedCapacity = std::min(requestedCapacity, backend->params.maxParticles);
+    }
+    requestedCapacity = std::max(requestedCapacity, particleCountBefore);
+    ensureParticleCapacity(backend, requestedCapacity);
+
     addWaterSourceSphereKernel<<<(backend->cellCount + kThreads - 1) / kThreads, kThreads>>>(
-        backend->d_particles, backend->d_particleCount, backend->particleCapacity,
+        backend->d_particles, backend->d_particleCount, backend->particleCapacity, maxParticleCount,
         backend->d_liquid, backend->d_solid, backend->nx, backend->ny, backend->nz,
-        backend->dx, std::max(1, backend->params.particlesPerCell),
+        backend->dx, ppc,
         center.x, center.y, center.z, radius,
         velocity.x, velocity.y, velocity.z, sim.stepCounter);
-    int particleCount = 0;
-    CUDA_CHECK(cudaMemcpy(&particleCount, backend->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
-    if (particleCount > 0) {
-        enforceParticleBoundsKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
-            backend->d_particles, particleCount, backend->nx, backend->ny, backend->nz, backend->dx,
+
+    int particleCountAfter = 0;
+    CUDA_CHECK(cudaMemcpy(&particleCountAfter, backend->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
+    if (particleCountAfter > 0) {
+        enforceParticleBoundsKernel<<<(particleCountAfter + kThreads - 1) / kThreads, kThreads>>>(
+            backend->d_particles, particleCountAfter, backend->nx, backend->ny, backend->nz, backend->dx,
             clampi3D(backend->params.borderThickness, 1, std::max(1, std::min({backend->nx, backend->ny, backend->nz}) / 2 - 1)),
             backend->params.openTop);
-        markParticlesInSolidsKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
-            backend->d_particles, particleCount, backend->d_solid, backend->nx, backend->ny, backend->nz, backend->dx);
+        markParticlesInSolidsKernel<<<(particleCountAfter + kThreads - 1) / kThreads, kThreads>>>(
+            backend->d_particles, particleCountAfter, backend->d_solid, backend->nx, backend->ny, backend->nz, backend->dx);
         compactParticles(backend);
+        CUDA_CHECK(cudaMemcpy(&particleCountAfter, backend->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
     }
+
+    if (sim.desiredMass >= 0.0f && particleCountAfter > particleCountBefore) {
+        sim.desiredMass += (float)(particleCountAfter - particleCountBefore);
+    }
+
     launchBuildLiquid(backend, true);
     launchRasterize(backend);
     CUDA_CHECK(cudaDeviceSynchronize());

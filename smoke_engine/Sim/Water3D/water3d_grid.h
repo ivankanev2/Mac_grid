@@ -172,16 +172,21 @@ inline void MACWater3D::particleToGrid() {
     std::fill(vWeight.begin(), vWeight.end(), 0.0f);
     std::fill(wWeight.begin(), wWeight.end(), 0.0f);
 
-    auto scatter = [&](float px, float py, float pz,
-                       float ox, float oy, float oz,
-                       int sx, int sy, int sz,
-                       auto idxFn,
-                       std::vector<float>& dst,
-                       std::vector<float>& weight,
-                       float value) {
-        const float fx = px / dx - ox;
-        const float fy = py / dx - oy;
-        const float fz = pz / dx - oz;
+    const bool apic = params.useAPIC;
+
+    auto scatterFace = [&](const Particle& p,
+                           float ox, float oy, float oz,
+                           int sx, int sy, int sz,
+                           auto idxFn,
+                           std::vector<float>& dst,
+                           std::vector<float>& weight,
+                           float base,
+                           float c0,
+                           float c1,
+                           float c2) {
+        const float fx = p.x / dx - ox;
+        const float fy = p.y / dx - oy;
+        const float fz = p.z / dx - oz;
 
         int i0 = water3d_internal::clampi((int)std::floor(fx), 0, sx - 1);
         int j0 = water3d_internal::clampi((int)std::floor(fy), 0, sy - 1);
@@ -198,14 +203,23 @@ inline void MACWater3D::particleToGrid() {
         for (int dk = 0; dk < 2; ++dk) {
             const int kk = (dk == 0) ? k0 : k1;
             const float wz = (dk == 0) ? (1.0f - tz) : tz;
+            const float pzFace = (kk + oz) * dx;
             for (int dj = 0; dj < 2; ++dj) {
                 const int jj = (dj == 0) ? j0 : j1;
                 const float wy = (dj == 0) ? (1.0f - ty) : ty;
+                const float pyFace = (jj + oy) * dx;
                 for (int di = 0; di < 2; ++di) {
                     const int ii = (di == 0) ? i0 : i1;
                     const float wx = (di == 0) ? (1.0f - tx) : tx;
+                    const float pxFace = (ii + ox) * dx;
                     const float wght = wx * wy * wz;
                     const int id = idxFn(ii, jj, kk);
+
+                    float value = base;
+                    if (apic) {
+                        value += c0 * (pxFace - p.x) + c1 * (pyFace - p.y) + c2 * (pzFace - p.z);
+                    }
+
                     dst[(std::size_t)id] += wght * value;
                     weight[(std::size_t)id] += wght;
                 }
@@ -214,12 +228,15 @@ inline void MACWater3D::particleToGrid() {
     };
 
     for (const Particle& p : particles) {
-        scatter(p.x, p.y, p.z, 0.0f, 0.5f, 0.5f, nx + 1, ny, nz,
-                [&](int i, int j, int k) { return idxU(i, j, k); }, u, uWeight, p.u);
-        scatter(p.x, p.y, p.z, 0.5f, 0.0f, 0.5f, nx, ny + 1, nz,
-                [&](int i, int j, int k) { return idxV(i, j, k); }, v, vWeight, p.v);
-        scatter(p.x, p.y, p.z, 0.5f, 0.5f, 0.0f, nx, ny, nz + 1,
-                [&](int i, int j, int k) { return idxW(i, j, k); }, w, wWeight, p.w);
+        scatterFace(p, 0.0f, 0.5f, 0.5f, nx + 1, ny, nz,
+                    [&](int i, int j, int k) { return idxU(i, j, k); },
+                    u, uWeight, p.u, p.c00, p.c01, p.c02);
+        scatterFace(p, 0.5f, 0.0f, 0.5f, nx, ny + 1, nz,
+                    [&](int i, int j, int k) { return idxV(i, j, k); },
+                    v, vWeight, p.v, p.c10, p.c11, p.c12);
+        scatterFace(p, 0.5f, 0.5f, 0.0f, nx, ny, nz + 1,
+                    [&](int i, int j, int k) { return idxW(i, j, k); },
+                    w, wWeight, p.w, p.c20, p.c21, p.c22);
     }
 
     for (std::size_t i = 0; i < u.size(); ++i) {
@@ -545,18 +562,74 @@ inline void MACWater3D::extrapolateVelocity() {
 }
 
 inline void MACWater3D::gridToParticles() {
-    const float blend = water3d_internal::clamp01(params.flipBlend);
+    const bool apic = params.useAPIC;
+    const float blend = apic ? 0.0f : water3d_internal::clamp01(params.flipBlend);
     const float picWeight = 1.0f - blend;
+    const float invDx2 = (dx > 0.0f) ? (1.0f / (dx * dx)) : 0.0f;
+    const float apicScale = 3.0f * invDx2;
+
+    auto accumulateAffine = [&](const Particle& p,
+                                float ox, float oy, float oz,
+                                int sx, int sy, int sz,
+                                auto idxFn,
+                                const std::vector<float>& field,
+                                float& outC0,
+                                float& outC1,
+                                float& outC2) {
+        const float fx = p.x / dx - ox;
+        const float fy = p.y / dx - oy;
+        const float fz = p.z / dx - oz;
+
+        int i0 = water3d_internal::clampi((int)std::floor(fx), 0, sx - 1);
+        int j0 = water3d_internal::clampi((int)std::floor(fy), 0, sy - 1);
+        int k0 = water3d_internal::clampi((int)std::floor(fz), 0, sz - 1);
+
+        const int i1 = std::min(i0 + 1, sx - 1);
+        const int j1 = std::min(j0 + 1, sy - 1);
+        const int k1 = std::min(k0 + 1, sz - 1);
+
+        const float tx = water3d_internal::clampf(fx - (float)i0, 0.0f, 1.0f);
+        const float ty = water3d_internal::clampf(fy - (float)j0, 0.0f, 1.0f);
+        const float tz = water3d_internal::clampf(fz - (float)k0, 0.0f, 1.0f);
+
+        float sumDx = 0.0f;
+        float sumDy = 0.0f;
+        float sumDz = 0.0f;
+
+        for (int dk = 0; dk < 2; ++dk) {
+            const int kk = (dk == 0) ? k0 : k1;
+            const float wz = (dk == 0) ? (1.0f - tz) : tz;
+            const float pzFace = (kk + oz) * dx;
+            for (int dj = 0; dj < 2; ++dj) {
+                const int jj = (dj == 0) ? j0 : j1;
+                const float wy = (dj == 0) ? (1.0f - ty) : ty;
+                const float pyFace = (jj + oy) * dx;
+                for (int di = 0; di < 2; ++di) {
+                    const int ii = (di == 0) ? i0 : i1;
+                    const float wx = (di == 0) ? (1.0f - tx) : tx;
+                    const float pxFace = (ii + ox) * dx;
+                    const float wght = wx * wy * wz;
+                    const float faceVal = field[(std::size_t)idxFn(ii, jj, kk)];
+                    sumDx += wght * faceVal * (pxFace - p.x);
+                    sumDy += wght * faceVal * (pyFace - p.y);
+                    sumDz += wght * faceVal * (pzFace - p.z);
+                }
+            }
+        }
+
+        outC0 = apicScale * sumDx;
+        outC1 = apicScale * sumDy;
+        outC2 = apicScale * sumDz;
+    };
 
     for (Particle& p : particles) {
         float picU, picV, picW;
         velAt(p.x, p.y, p.z, u, v, w, picU, picV, picW);
 
-        if (blend > 0.0f) {
+        if (!apic && blend > 0.0f) {
             const float du = sampleU(uDelta, p.x, p.y, p.z);
             const float dv = sampleV(vDelta, p.x, p.y, p.z);
             const float dw = sampleW(wDelta, p.x, p.y, p.z);
-
             p.u = picWeight * picU + blend * (p.u + du);
             p.v = picWeight * picV + blend * (p.v + dv);
             p.w = picWeight * picW + blend * (p.w + dw);
@@ -565,5 +638,22 @@ inline void MACWater3D::gridToParticles() {
             p.v = picV;
             p.w = picW;
         }
+
+        if (!apic) {
+            p.c00 = p.c01 = p.c02 = 0.0f;
+            p.c10 = p.c11 = p.c12 = 0.0f;
+            p.c20 = p.c21 = p.c22 = 0.0f;
+            continue;
+        }
+
+        accumulateAffine(p, 0.0f, 0.5f, 0.5f, nx + 1, ny, nz,
+                         [&](int i, int j, int k) { return idxU(i, j, k); },
+                         u, p.c00, p.c01, p.c02);
+        accumulateAffine(p, 0.5f, 0.0f, 0.5f, nx, ny + 1, nz,
+                         [&](int i, int j, int k) { return idxV(i, j, k); },
+                         v, p.c10, p.c11, p.c12);
+        accumulateAffine(p, 0.5f, 0.5f, 0.0f, nx, ny, nz + 1,
+                         [&](int i, int j, int k) { return idxW(i, j, k); },
+                         w, p.c20, p.c21, p.c22);
     }
 }

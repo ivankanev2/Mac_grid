@@ -138,6 +138,9 @@ inline void MACWater::addWaterSource(float cx, float cy, float radius, float amo
                 p.age = 0.0f;
                 p.c00 = p.c01 = p.c10 = p.c11 = 0.0f;
                 particles.push_back(p);
+                if (desiredMass >= 0.0f) {
+                    desiredMass += 1.0f;
+                }
 
                 if (maxParticles > 0 && (int)particles.size() >= maxParticles) break;
             }

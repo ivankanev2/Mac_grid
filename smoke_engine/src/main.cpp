@@ -16,6 +16,7 @@
 
 #include "Sim/mac_smoke_sim.h"
 #include "Sim/mac_water_sim.h"
+#include "Sim/mac_water3d.h"
 #include "Sim/pressure_solver.h"
 #include "Renderer/smoke_renderer.h"
 
@@ -30,6 +31,7 @@
 // window size and sim resolution
 static const int NX = 96;
 static const int NY = 96;
+static const int NZ = 64;
 
 // time variables
 double lastTime = glfwGetTime();
@@ -77,6 +79,7 @@ int main()
 
     // Renderer
     SmokeRenderer renderer(NX, NY);
+    SmokeRenderer water3DRenderer(NX, NY);
     SmokeRenderer coupledRenderer(NX, NY);
 
     // Simulator
@@ -91,6 +94,7 @@ int main()
 
     MAC2D sim(NX, NY, dx, dt_initial);
     MACWater waterSim(NX, NY, dx, dt_initial);
+    MACWater3D water3D(NX, NY, NZ, dx, dt_initial);
     MACCoupledSim coupled(NX, NY, dx, dt_initial);
 
     // Make both sims use the same solver instance.
@@ -115,6 +119,36 @@ int main()
         waterSim.velDamping       = ui.waterVelDamping;
         waterSim.openTop          = ui.waterOpenTop;
 
+        MACWater3D::Params p3 = water3D.params;
+        bool p3Changed = false;
+        auto assignFloat = [&](float& dst, float value) {
+            if (dst != value) { dst = value; p3Changed = true; }
+        };
+        auto assignInt = [&](int& dst, int value) {
+            if (dst != value) { dst = value; p3Changed = true; }
+        };
+        auto assignBool = [&](bool& dst, bool value) {
+            if (dst != value) { dst = value; p3Changed = true; }
+        };
+
+        assignFloat(p3.waterDissipation, ui.waterDissipation);
+        assignFloat(p3.gravity, ui.waterGravity);
+        assignFloat(p3.velDamping, ui.waterVelDamping);
+        assignBool(p3.openTop, ui.waterOpenTop);
+        assignInt(p3.pressureIters, ui.water3DPressureIters);
+        assignInt(p3.pressureSolverMode, ui.water3DPressureSolverMode);
+        assignBool(p3.useAPIC, ui.water3DUseAPIC);
+        assignFloat(p3.flipBlend, ui.water3DFlipBlend);
+        assignFloat(p3.pressureOmega, ui.water3DPressureOmega);
+        assignBool(p3.volumePreserveRhsMean, ui.water3DVolumePreserve);
+        assignFloat(p3.volumePreserveStrength, ui.water3DVolumePreserveStrength);
+        assignInt(p3.reseedRelaxIters, ui.water3DRelaxIters);
+        assignFloat(p3.reseedRelaxStrength, ui.water3DRelaxStrength);
+
+        if (p3Changed) {
+            water3D.setParams(p3);
+        }
+
         coupled.waterDissipation = ui.waterDissipation;
         coupled.waterGravity     = ui.waterGravity;
         coupled.velDamping       = ui.waterVelDamping;
@@ -136,10 +170,15 @@ int main()
 
             int steps = 0;
             while (accumulator > 0.0 && steps < maxStepsPerFrame) {
-                float maxSpeed = std::max({ sim.maxFaceSpeed(),
-                                            waterSim.maxFaceSpeed(),
-                                            waterSim.maxParticleSpeed() });
-                float dtCFL = ui.cfl * sim.dx / (maxSpeed + 1e-6f);
+                float maxSpeed = 0.0f;
+                if (ui.useWater3D) {
+                    maxSpeed = water3D.stats().maxSpeed;
+                } else {
+                    const float waterSpeed = std::max(waterSim.maxFaceSpeed(), waterSim.maxParticleSpeed());
+                    maxSpeed = std::max(sim.maxFaceSpeed(), waterSpeed);
+                }
+                const float cflDx = ui.useWater3D ? water3D.dx : sim.dx;
+                float dtCFL = ui.cfl * cflDx / (maxSpeed + 1e-6f);
 
                 // CFL is a hard cap
                 float dt = std::min(ui.dtMax, dtCFL);
@@ -150,13 +189,18 @@ int main()
                     dt = std::max(dt, ui.dtMin);
                 }
 
-                sim.setDt(dt);
-                waterSim.setDt(dt);
-                sim.step(ui.vortEps);
-                waterSim.step();
+                if (ui.useWater3D) {
+                    water3D.setDt(dt);
+                    water3D.step();
+                } else {
+                    sim.setDt(dt);
+                    sim.step(ui.vortEps);
+                    waterSim.setDt(dt);
+                    waterSim.step();
 
-                coupled.setDt(dt);
-                coupled.stepCoupled(ui.vortEps);
+                    coupled.setDt(dt);
+                    coupled.stepCoupled(ui.vortEps);
+                }
 
                 accumulator -= dt;
                 steps++;
@@ -173,13 +217,52 @@ int main()
         WaterRenderSettings wr;
         UI::BuildWaterRenderSettings(ui, wr);
 
-        // update textures for original smoke/water sims (used by Smoke View + Water View)
-        renderer.updateFromSim(sim, rs, ov);
-        renderer.updateWaterFromSim(waterSim, wr);
+        if (ui.useWater3D) {
+            const int viewMode = std::clamp(ui.water3DViewMode, 0, 2);
+            if (viewMode == 1) {
+                const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
+                const int field = std::clamp(ui.water3DDebugField, 0, 3);
+                const int maxSlice = (axis == 0)
+                    ? std::max(0, water3D.nz - 1)
+                    : (axis == 1)
+                        ? std::max(0, water3D.ny - 1)
+                        : std::max(0, water3D.nx - 1);
+                ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
 
-        // update textures for the coupled sim (used by Combined View)
-        coupledRenderer.updateFromSim(coupled, rs, ov);
-        coupledRenderer.updateWaterFromSim(coupled, wr);
+                auto slice = water3D.copyDebugSlice(
+                    static_cast<MACWater3D::SliceAxis>(axis),
+                    ui.water3DSliceIndex,
+                    static_cast<MACWater3D::DebugField>(field));
+                water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
+            } else {
+                const int maxDim = std::max({water3D.nx, water3D.ny, water3D.nz, 1});
+                const int targetRes = std::max(192, std::min(640, maxDim * 3));
+                if (water3DRenderer.width() != targetRes || water3DRenderer.height() != targetRes) {
+                    water3DRenderer.resize(targetRes, targetRes);
+                }
+                water3DRenderer.updateWaterFromVolume(
+                    water3D.water,
+                    water3D.solid,
+                    water3D.nx,
+                    water3D.ny,
+                    water3D.nz,
+                    viewMode,
+                    ui.water3DViewYawDeg,
+                    ui.water3DViewPitchDeg,
+                    ui.water3DViewZoom,
+                    ui.water3DVolumeDensity,
+                    ui.water3DSurfaceThreshold,
+                    wr);
+            }
+        } else {
+            // update textures for original smoke/water sims (used by Smoke View + Water View)
+            renderer.updateFromSim(sim, rs, ov);
+            renderer.updateWaterFromSim(waterSim, wr);
+
+            // update textures for the coupled sim (used by Combined View)
+            coupledRenderer.updateFromSim(coupled, rs, ov);
+            coupledRenderer.updateWaterFromSim(coupled, wr);
+        }
 
         // start imgui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -187,7 +270,7 @@ int main()
         ImGui::NewFrame();
 
         // draw UI
-        UI::Actions actions = UI::DrawAll(sim, waterSim, coupled, renderer, coupledRenderer, ui, probe, NX, NY);
+        UI::Actions actions = UI::DrawAll(sim, waterSim, water3D, coupled, renderer, water3DRenderer, coupledRenderer, ui, probe, NX, NY);
         if (UI::ConsumeResetLayoutRequest()) {
         // nothing needed here if panels.cpp already deleted ini and rebuilt docks
         // but it's fine to keep for future, you better not delete this >:)
@@ -197,7 +280,19 @@ int main()
         if (actions.resetRequested) {
             sim.reset();
             waterSim.reset();
+            water3D.reset();
             coupled.reset();
+        }
+        if (actions.applyWater3DGridRequested) {
+            const int nx3 = std::max(1, ui.water3DNX);
+            const int ny3 = std::max(1, ui.water3DNY);
+            const int nz3 = std::max(1, ui.water3DNZ);
+            const int maxDim = std::max({nx3, ny3, nz3});
+            const float dx3 = 1.0f / (float)maxDim;
+            water3D.reset(nx3, ny3, nz3, dx3, water3D.dt);
+        }
+        if (actions.resetWater3DRequested) {
+            water3D.reset();
         }
 
         // render GL

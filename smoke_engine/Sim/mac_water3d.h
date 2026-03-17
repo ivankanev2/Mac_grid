@@ -22,6 +22,11 @@ struct MACWater3D {
         float v = 0.0f;
         float w = 0.0f;
         float age = 0.0f;
+
+        // APIC affine velocity matrix rows (u, v, w) in world units.
+        float c00 = 0.0f, c01 = 0.0f, c02 = 0.0f;
+        float c10 = 0.0f, c11 = 0.0f, c12 = 0.0f;
+        float c20 = 0.0f, c21 = 0.0f, c22 = 0.0f;
     };
 
     enum class SliceAxis : int {
@@ -37,6 +42,11 @@ struct MACWater3D {
         Speed = 3,
     };
 
+    enum class PressureSolverMode : int {
+        RBGS = 0,
+        Jacobi = 1,
+    };
+
     struct Params {
         float waterDissipation = 1.0f;
         float gravity = -9.8f;
@@ -44,20 +54,26 @@ struct MACWater3D {
         float viscosity = 5e-4f;
         float flipBlend = 0.1f;
 
-        int particlesPerCell = 0;
+        int particlesPerCell = 2;
         int borderThickness = 2;
-        int maxParticles = 0;
+        int maxParticles = 500000;
 
         int maskDilations = 0;
         int extrapolationIters = 10;
         int pressureIters = 200;
         int diffuseIters = 20;
+        int pressureSolverMode = (int)PressureSolverMode::RBGS;
+        int reseedRelaxIters = 2;
 
         float pressureTol = 1e-10f;
         float pressureOmega = 1.7f;
         float diffuseOmega = 0.8f;
+        float reseedRelaxStrength = 0.45f;
+        float volumePreserveStrength = 0.05f;
 
         bool openTop = true;
+        bool useAPIC = true;
+        bool volumePreserveRhsMean = true;
     };
 
     struct SliceData {
@@ -79,6 +95,8 @@ struct MACWater3D {
         float maxDivergence = 0.0f;
         float dt = 0.0f;
         float lastStepMs = 0.0f;
+        float targetMass = 0.0f;
+        float desiredMass = -1.0f;
         std::size_t bytesAllocated = 0;
         const char* backendName = "CPU MAC 3D";
     };
@@ -128,10 +146,14 @@ struct MACWater3D {
     SliceData copyDebugSlice(SliceAxis axis, int index, DebugField field) const;
     const Stats& stats() const { return lastStats; }
     const std::vector<uint8_t>& userSolidMask() const { return solidUser; }
-    void refreshStats(float stepMs) { updateStats(stepMs); }
+    void refreshStats(float stepMs);
 
     bool isCudaEnabled() const { return cudaBackend != nullptr; }
-    bool hasFeatureParityWith2D() const { return false; }
+    bool hasFeatureParityWith2D() const {
+        // Keep this conservative until the 3D path has a real multigrid-grade
+        // pressure solve comparable to the 2D reference solver.
+        return false;
+    }
 
 protected:
     std::vector<uint8_t> solidUser;
@@ -203,7 +225,11 @@ protected:
     void advectParticles();
     void applyDissipation();
     void reseedParticles();
+    void relaxParticles(int iters, float strength);
 
     void rasterizeDebugFields();
     void updateStats(float stepMs);
+
+public:
+    void relaxParticlesForCuda(int iters, float strength) { relaxParticles(iters, strength); }
 };

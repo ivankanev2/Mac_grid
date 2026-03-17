@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 inline void MACWater3D::removeParticlesInSolids() {
     if (particles.empty()) return;
@@ -64,6 +65,9 @@ inline void MACWater3D::removeParticlesInSolids() {
         p.u = 0.0f;
         p.v = 0.0f;
         p.w = 0.0f;
+        p.c00 = p.c01 = p.c02 = 0.0f;
+        p.c10 = p.c11 = p.c12 = 0.0f;
+        p.c20 = p.c21 = p.c22 = 0.0f;
 
         particles[write++] = p;
     }
@@ -99,15 +103,7 @@ inline void MACWater3D::applyExternalForces() {
         for (int k = 0; k < nz; ++k) {
             for (int j = 0; j <= ny; ++j) {
                 for (int i = 0; i < nx; ++i) {
-                    const bool botLiquid = (j - 1 >= 0)
-                        ? (liquid[(std::size_t)idxCell(i, j - 1, k)] != 0)
-                        : false;
-                    const bool topLiquid = (j < ny)
-                        ? (liquid[(std::size_t)idxCell(i, j, k)] != 0)
-                        : false;
-                    if (botLiquid || topLiquid) {
-                        v[(std::size_t)idxV(i, j, k)] += dt * params.gravity;
-                    }
+                    v[(std::size_t)idxV(i, j, k)] += dt * params.gravity;
                 }
             }
         }
@@ -153,6 +149,7 @@ inline void MACWater3D::applyDissipation() {
     const float diss = water3d_internal::clamp01(params.waterDissipation);
     if (diss >= 0.999999f) return;
 
+    const std::size_t before = particles.size();
     const float dtRef = 0.02f;
     const float keepProb = std::pow(diss, dt / std::max(1e-6f, dtRef));
 
@@ -164,12 +161,20 @@ inline void MACWater3D::applyDissipation() {
         }
     }
     particles.resize(write);
+
+    if (desiredMass >= 0.0f) {
+        const std::size_t after = particles.size();
+        const std::size_t removed = (before > after) ? (before - after) : 0;
+        desiredMass = std::max(0.0f, desiredMass - (float)removed);
+    }
 }
 
 inline void MACWater3D::reseedParticles() {
     if (params.particlesPerCell <= 0) return;
 
     const int cellCount = nx * ny * nz;
+    if (cellCount <= 0) return;
+
     std::vector<int> counts((std::size_t)cellCount, 0);
     std::vector<uint8_t> occupied((std::size_t)cellCount, (uint8_t)0);
 
@@ -183,27 +188,44 @@ inline void MACWater3D::reseedParticles() {
         occupied[(std::size_t)id] = (uint8_t)1;
     }
 
-    std::vector<uint8_t> region = occupied;
+    std::vector<uint8_t> region((std::size_t)cellCount, (uint8_t)0);
     for (int k = 0; k < nz; ++k) {
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
                 const int id = idxCell(i, j, k);
-                if (solid[(std::size_t)id] || region[(std::size_t)id]) continue;
+                if (solid[(std::size_t)id]) continue;
+                if (occupied[(std::size_t)id]) {
+                    region[(std::size_t)id] = (uint8_t)1;
+                    continue;
+                }
 
                 const bool near =
-                    (i > 0 && occupied[(std::size_t)idxCell(i - 1, j, k)]) ||
+                    (i > 0     && occupied[(std::size_t)idxCell(i - 1, j, k)]) ||
                     (i + 1 < nx && occupied[(std::size_t)idxCell(i + 1, j, k)]) ||
-                    (j > 0 && occupied[(std::size_t)idxCell(i, j - 1, k)]) ||
+                    (j > 0     && occupied[(std::size_t)idxCell(i, j - 1, k)]) ||
                     (j + 1 < ny && occupied[(std::size_t)idxCell(i, j + 1, k)]) ||
-                    (k > 0 && occupied[(std::size_t)idxCell(i, j, k - 1)]) ||
+                    (k > 0     && occupied[(std::size_t)idxCell(i, j, k - 1)]) ||
                     (k + 1 < nz && occupied[(std::size_t)idxCell(i, j, k + 1)]);
-
                 if (near) region[(std::size_t)id] = (uint8_t)1;
             }
         }
     }
 
-    const int maxNewPerStep = std::max(4096, cellCount / 8);
+    const int target = std::max(1, params.particlesPerCell);
+    int softMaxParticles = (params.maxParticles > 0)
+        ? params.maxParticles
+        : std::max((int)particles.size() + 256, target);
+    if (desiredMass > 0.0f) {
+        const int desiredCap = std::max(target, (int)std::ceil(desiredMass * 1.15f));
+        softMaxParticles = std::min(softMaxParticles, desiredCap);
+    }
+    if ((int)particles.size() >= softMaxParticles) return;
+
+    const int remainingSpawnBudget = std::max(0, softMaxParticles - (int)particles.size());
+    const int baseNewCap = std::max(128, cellCount / 64);
+    const int maxNewPerStep = std::min(remainingSpawnBudget, std::min(baseNewCap, 2048));
+    if (maxNewPerStep <= 0) return;
+
     int spawned = 0;
     std::vector<Particle> newParticles;
     newParticles.reserve((std::size_t)std::min(maxNewPerStep, cellCount));
@@ -215,22 +237,24 @@ inline void MACWater3D::reseedParticles() {
                 if (!region[(std::size_t)id] || solid[(std::size_t)id]) continue;
 
                 const int have = counts[(std::size_t)id];
-                if (have >= params.particlesPerCell) continue;
+                if (have >= target) continue;
 
-                const int need = params.particlesPerCell - have;
-                for (int n = 0; n < need && spawned < maxNewPerStep; ++n) {
-                    if (params.maxParticles > 0 &&
-                        (int)(particles.size() + newParticles.size()) >= params.maxParticles) {
+                int need = target - have;
+                while (need-- > 0 && spawned < maxNewPerStep) {
+                    if ((int)(particles.size() + newParticles.size()) >= softMaxParticles) {
                         break;
                     }
 
-                    uint32_t seed =
-                        (uint32_t)(i + 92821U * j + 68917U * k + 131U * (n + 1) + 17U * stepCounter + 1U);
+                    uint32_t seed = (uint32_t)(i + 92821U * j + 68917U * k + 131U * (spawned + 1) + 17U * stepCounter);
                     Particle p;
                     p.x = (i + 0.1f + 0.8f * water3d_internal::rand01(seed)) * dx;
                     p.y = (j + 0.1f + 0.8f * water3d_internal::rand01(seed)) * dx;
                     p.z = (k + 0.1f + 0.8f * water3d_internal::rand01(seed)) * dx;
                     velAt(p.x, p.y, p.z, u, v, w, p.u, p.v, p.w);
+                    p.c00 = p.c01 = p.c02 = 0.0f;
+                    p.c10 = p.c11 = p.c12 = 0.0f;
+                    p.c20 = p.c21 = p.c22 = 0.0f;
+                    p.age = 0.0f;
                     newParticles.push_back(p);
                     spawned++;
                 }
@@ -238,5 +262,87 @@ inline void MACWater3D::reseedParticles() {
         }
     }
 
-    particles.insert(particles.end(), newParticles.begin(), newParticles.end());
+    if (!newParticles.empty()) {
+        particles.insert(particles.end(), newParticles.begin(), newParticles.end());
+    }
+}
+
+inline void MACWater3D::relaxParticles(int iters, float strength) {
+    if (particles.empty() || iters <= 0 || strength <= 0.0f) return;
+
+    const float r = 0.35f * dx;
+    const float r2 = r * r;
+    std::vector<std::vector<int>> buckets((std::size_t)(nx * ny * nz));
+
+    auto bucketId = [&](float x, float y, float z) {
+        int i = water3d_internal::clampi((int)std::floor(x / dx), 0, nx - 1);
+        int j = water3d_internal::clampi((int)std::floor(y / dx), 0, ny - 1);
+        int k = water3d_internal::clampi((int)std::floor(z / dx), 0, nz - 1);
+        return idxCell(i, j, k);
+    };
+
+    for (int it = 0; it < iters; ++it) {
+        for (auto& b : buckets) b.clear();
+        for (int p = 0; p < (int)particles.size(); ++p) {
+            const int id = bucketId(particles[(std::size_t)p].x,
+                                    particles[(std::size_t)p].y,
+                                    particles[(std::size_t)p].z);
+            if (!solid[(std::size_t)id]) {
+                buckets[(std::size_t)id].push_back(p);
+            }
+        }
+
+        for (int k = 0; k < nz; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int id = idxCell(i, j, k);
+                    if (solid[(std::size_t)id]) continue;
+
+                    const auto& A = buckets[(std::size_t)id];
+                    for (int dk = -1; dk <= 1; ++dk) {
+                        for (int dj = -1; dj <= 1; ++dj) {
+                            for (int di = -1; di <= 1; ++di) {
+                                const int ii = i + di;
+                                const int jj = j + dj;
+                                const int kk = k + dk;
+                                if (ii < 0 || jj < 0 || kk < 0 || ii >= nx || jj >= ny || kk >= nz) continue;
+
+                                const int nid = idxCell(ii, jj, kk);
+                                if (solid[(std::size_t)nid]) continue;
+                                const auto& B = buckets[(std::size_t)nid];
+
+                                for (int a : A) {
+                                    for (int b : B) {
+                                        if (a >= b) continue;
+
+                                        float dxp = particles[(std::size_t)b].x - particles[(std::size_t)a].x;
+                                        float dyp = particles[(std::size_t)b].y - particles[(std::size_t)a].y;
+                                        float dzp = particles[(std::size_t)b].z - particles[(std::size_t)a].z;
+                                        float d2 = dxp * dxp + dyp * dyp + dzp * dzp;
+                                        if (d2 >= r2 || d2 < 1e-12f) continue;
+
+                                        const float d = std::sqrt(d2);
+                                        const float push = (r - d) * strength;
+                                        const float nxp = dxp / d;
+                                        const float nyp = dyp / d;
+                                        const float nzp = dzp / d;
+
+                                        particles[(std::size_t)a].x -= 0.5f * push * nxp;
+                                        particles[(std::size_t)a].y -= 0.5f * push * nyp;
+                                        particles[(std::size_t)a].z -= 0.5f * push * nzp;
+                                        particles[(std::size_t)b].x += 0.5f * push * nxp;
+                                        particles[(std::size_t)b].y += 0.5f * push * nyp;
+                                        particles[(std::size_t)b].z += 0.5f * push * nzp;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        enforceParticleBounds();
+        removeParticlesInSolids();
+    }
 }

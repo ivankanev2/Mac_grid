@@ -3,6 +3,7 @@
 
 struct MAC2D;
 struct MACWater;
+struct MACWater3D;
 class SmokeRenderer;
 struct MACCoupledSim;
 
@@ -78,6 +79,35 @@ struct Settings {
     bool  showCombinedView = true;
     float combinedWaterAlpha = 0.5f;   // water overlay strength
     bool  combinedShowParticles = true;
+
+    // 3D water runtime mode and slice debug view.
+    // 3D water runtime mode and slice debug view.
+    bool  useWater3D = false;
+    int   water3DNX = 64;
+    int   water3DNY = 64;
+    int   water3DNZ = 48;
+    int   water3DViewMode = 0;     // 0=volume, 1=slice, 2=surface
+    float water3DViewYawDeg = 35.0f;
+    float water3DViewPitchDeg = 20.0f;
+    float water3DViewZoom = 1.15f;
+    float water3DVolumeDensity = 1.0f;
+    float water3DSurfaceThreshold = 0.12f;
+    float water3DSourceDepth = 0.5f; // used in volume/surface mode [0..1]
+    int   water3DSliceAxis = 0;    // 0=XY, 1=XZ, 2=YZ
+    int   water3DSliceIndex = 0;
+    int   water3DDebugField = 0;   // 0=water,1=pressure,2=divergence,3=speed
+    int   water3DPressureIters = 200;
+    int   water3DPressureSolverMode = 0; // 0=RBGS, 1=Jacobi
+    bool  water3DUseAPIC = true;
+    float water3DFlipBlend = 0.10f;
+    float water3DPressureOmega = 1.70f;
+    bool  water3DVolumePreserve = true;
+    float water3DVolumePreserveStrength = 0.05f;
+    int   water3DRelaxIters = 2;
+    float water3DRelaxStrength = 0.45f;
+    float water3DSourceVelX = 0.0f;
+    float water3DSourceVelY = 0.0f;
+    float water3DSourceVelZ = 0.0f;
 };
 
 struct Probe {
@@ -92,6 +122,8 @@ struct Probe {
 
 struct Actions {
     bool resetRequested = false;
+    bool resetWater3DRequested = false;
+    bool applyWater3DGridRequested = false;
 };
 
 void BuildRenderSettings(const Settings& ui,
@@ -103,8 +135,10 @@ void BuildWaterRenderSettings(const Settings& ui,
 
 Actions DrawAll(MAC2D& sim,
                 MACWater& water,
+                MACWater3D& water3D,
                 MACCoupledSim& coupled,
                 SmokeRenderer& renderer,
+                SmokeRenderer& water3DRenderer,
                 SmokeRenderer& coupledRenderer,
                 Settings& ui,
                 Probe& probe,
