@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <random>
-
+// something for particle creation
 namespace water_internal {
 
 inline int clampi(int v, int lo, int hi) {
