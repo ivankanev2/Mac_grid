@@ -140,10 +140,10 @@ void MACWater3D::step() {
 
     particleToGrid();
     buildLiquidMask();
-
+//gravity
     applyExternalForces();
     applyBoundary();
-
+// viscosity
     diffuseVelocityImplicit();
     applyBoundary();
 

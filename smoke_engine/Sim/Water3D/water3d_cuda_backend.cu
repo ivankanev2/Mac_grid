@@ -15,6 +15,7 @@
 #include <thrust/execution_policy.h>
 #include <thrust/remove.h>
 
+// i have no idea what is that
 struct MACWater3DCudaBackend {
     int nx = 0;
     int ny = 0;
