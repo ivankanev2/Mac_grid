@@ -4,6 +4,7 @@
 struct MAC2D;
 struct MACWater;
 struct MACWater3D;
+struct MACSmoke3D;
 class SmokeRenderer;
 struct MACCoupledSim;
 
@@ -80,9 +81,41 @@ struct Settings {
     float combinedWaterAlpha = 0.5f;   // water overlay strength
     bool  combinedShowParticles = true;
 
-    // 3D water runtime mode and slice debug view.
+    // 3D smoke runtime mode and view.
+    bool  useSmoke3D = false;
+    bool  showSmoke3DView = true;
+    bool  paintSmoke3D = true;
+    int   smoke3DNX = 64;
+    int   smoke3DNY = 64;
+    int   smoke3DNZ = 48;
+    int   smoke3DViewMode = 0;     // 0=volume, 1=slice
+    float smoke3DViewYawDeg = 35.0f;
+    float smoke3DViewPitchDeg = 18.0f;
+    float smoke3DViewZoom = 1.15f;
+    float smoke3DVolumeDensity = 1.0f;
+    float smoke3DSourceDepth = 0.25f;
+    int   smoke3DSliceAxis = 0;    // 0=XY, 1=XZ, 2=YZ
+    int   smoke3DSliceIndex = 0;
+    int   smoke3DDebugField = 0;   // 0=smoke,1=temp,2=pressure,3=divergence,4=speed
+    int   smoke3DPressureIters = 120;
+    int   smoke3DPressureSolverMode = 0; // 0=RBGS, 1=Jacobi
+    float smoke3DPressureOmega = 1.70f;
+    float smoke3DBuoyancyScale = 1.0f;
+    float smoke3DGravity = 9.81f;
+    float smoke3DVelDamping = 0.5f;
+    float smoke3DViscosity = 1e-4f;
+    float smoke3DSmokeDiffusivity = 0.0f;
+    float smoke3DTempDiffusivity = 0.0f;
+    bool  smoke3DOpenTop = true;
+    float smoke3DSourceAmount = 0.20f;
+    float smoke3DHeatAmount = 0.50f;
+    float smoke3DSourceVelX = 0.0f;
+    float smoke3DSourceVelY = 2.0f;
+    float smoke3DSourceVelZ = 0.0f;
+
     // 3D water runtime mode and slice debug view.
     bool  useWater3D = false;
+    bool  showWater3DView = true;
     int   water3DNX = 64;
     int   water3DNY = 64;
     int   water3DNZ = 48;
@@ -122,6 +155,8 @@ struct Probe {
 
 struct Actions {
     bool resetRequested = false;
+    bool resetSmoke3DRequested = false;
+    bool applySmoke3DGridRequested = false;
     bool resetWater3DRequested = false;
     bool applyWater3DGridRequested = false;
 };
@@ -136,9 +171,11 @@ void BuildWaterRenderSettings(const Settings& ui,
 Actions DrawAll(MAC2D& sim,
                 MACWater& water,
                 MACWater3D& water3D,
+                MACSmoke3D& smoke3D,
                 MACCoupledSim& coupled,
                 SmokeRenderer& renderer,
                 SmokeRenderer& water3DRenderer,
+                SmokeRenderer& smoke3DRenderer,
                 SmokeRenderer& coupledRenderer,
                 Settings& ui,
                 Probe& probe,

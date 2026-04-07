@@ -17,18 +17,25 @@ endif()
 include(FetchContent)
 
 # --------------------
-# GLFW (FetchContent)
+# GLFW (prefer system package, fall back to FetchContent)
 # --------------------
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+find_package(glfw3 CONFIG QUIET)
+if(NOT TARGET glfw)
+  find_package(glfw3 QUIET)
+endif()
 
-FetchContent_Declare(
-  glfw
-  GIT_REPOSITORY https://github.com/glfw/glfw.git
-  GIT_TAG 3.3.9
-)
-FetchContent_MakeAvailable(glfw)
+if(NOT TARGET glfw)
+  set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+
+  FetchContent_Declare(
+    glfw
+    GIT_REPOSITORY https://github.com/glfw/glfw.git
+    GIT_TAG 3.3.9
+  )
+  FetchContent_MakeAvailable(glfw)
+endif()
 
 # --------------------
 # OpenGL
@@ -86,6 +93,7 @@ add_executable(SmokeEngine
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/pressure_solver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_water_sim.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_water3d.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_smoke3d.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_coupled_sim.cpp
 
   ${CMAKE_CURRENT_SOURCE_DIR}/Renderer/smoke_renderer.cpp

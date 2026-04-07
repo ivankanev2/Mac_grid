@@ -103,6 +103,25 @@ inline void MACWater3D::applyExternalForces() {
         for (int k = 0; k < nz; ++k) {
             for (int j = 0; j <= ny; ++j) {
                 for (int i = 0; i < nx; ++i) {
+                    const bool lowerLiquid =
+                        (j > 0) &&
+                        liquid[(std::size_t)idxCell(i, j - 1, k)] &&
+                        !solid[(std::size_t)idxCell(i, j - 1, k)];
+                    const bool upperLiquid =
+                        (j < ny) &&
+                        liquid[(std::size_t)idxCell(i, j, k)] &&
+                        !solid[(std::size_t)idxCell(i, j, k)];
+                    if (!(lowerLiquid || upperLiquid)) continue;
+
+                    if (j == 0) continue;
+                    if (j == ny) {
+                        if (!params.openTop || !lowerLiquid) continue;
+                    } else {
+                        const bool botSolid = solid[(std::size_t)idxCell(i, j - 1, k)] != 0;
+                        const bool topSolid = solid[(std::size_t)idxCell(i, j, k)] != 0;
+                        if (botSolid || topSolid) continue;
+                    }
+
                     v[(std::size_t)idxV(i, j, k)] += dt * params.gravity;
                 }
             }

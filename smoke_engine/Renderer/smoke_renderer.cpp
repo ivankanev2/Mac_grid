@@ -481,6 +481,238 @@ void SmokeRenderer::updateWaterFromSim(const MACCoupledSim& sim,
     uploadWaterRGBA(sim.waterField(), sim.solidMask(), water);
 }
 
+
+void SmokeRenderer::updateSmokeFromSlice(const std::vector<float>& values,
+                                         const std::vector<uint8_t>& solid,
+                                         int width,
+                                         int height,
+                                         int fieldMode,
+                                         const SmokeRenderSettings& smoke)
+{
+    if (width <= 0 || height <= 0) return;
+    if ((int)values.size() != width * height || (int)solid.size() != width * height) return;
+
+    if (width != m_w || height != m_h) {
+        resize(width, height);
+    }
+
+    const bool signedField = (fieldMode == 2 || fieldMode == 3);
+    float maxVal = 0.0f;
+    float maxAbs = 0.0f;
+    for (int idx = 0; idx < width * height; ++idx) {
+        if (solid[(std::size_t)idx]) continue;
+        const float v = values[(std::size_t)idx];
+        maxVal = std::max(maxVal, v);
+        maxAbs = std::max(maxAbs, std::fabs(v));
+    }
+    maxVal = std::max(maxVal, 1e-6f);
+    maxAbs = std::max(maxAbs, 1e-6f);
+
+    std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
+
+    auto clamp01 = [](float x) {
+        if (x < 0.0f) return 0.0f;
+        if (x > 1.0f) return 1.0f;
+        return x;
+    };
+
+    for (int j = 0; j < m_h; ++j) {
+        const int srcJ = (m_h - 1 - j);
+        for (int i = 0; i < m_w; ++i) {
+            const int srcIdx = i + m_w * srcJ;
+            const int dstIdx = i + m_w * j;
+
+            if (solid[(std::size_t)srcIdx]) {
+                img[(std::size_t)dstIdx * 4 + 0] = 40;
+                img[(std::size_t)dstIdx * 4 + 1] = 90;
+                img[(std::size_t)dstIdx * 4 + 2] = 200;
+                img[(std::size_t)dstIdx * 4 + 3] = 255;
+                continue;
+            }
+
+            const float raw = values[(std::size_t)srcIdx];
+            float r = 0.0f;
+            float g = 0.0f;
+            float b = 0.0f;
+            float a = 0.0f;
+
+            if (signedField) {
+                const float mag = clamp01(std::fabs(raw) / maxAbs);
+                a = std::pow(mag, 0.65f) * 0.95f;
+                if (raw >= 0.0f) {
+                    r = 0.18f + 0.82f * mag;
+                    g = 0.05f + 0.32f * mag;
+                    b = 0.04f + 0.14f * mag;
+                } else {
+                    r = 0.05f + 0.14f * mag;
+                    g = 0.16f + 0.40f * mag;
+                    b = 0.24f + 0.76f * mag;
+                }
+            } else if (fieldMode == 1) {
+                const float t = clamp01(std::max(0.0f, raw) / maxVal);
+                a = std::pow(t, 0.60f) * std::max(0.2f, smoke.alphaScale);
+                r = 0.20f + 0.80f * t;
+                g = 0.06f + 0.62f * t;
+                b = 0.03f + 0.22f * t;
+            } else if (fieldMode == 4) {
+                const float s = clamp01(std::max(0.0f, raw) / maxVal);
+                a = std::pow(s, 0.60f) * 0.95f;
+                r = 0.08f + 0.18f * s;
+                g = 0.18f + 0.58f * s;
+                b = 0.30f + 0.70f * s;
+            } else {
+                const float d = clamp01(std::max(0.0f, raw) / std::max(1.0f, maxVal));
+                a = std::pow(d, smoke.alphaGamma) * smoke.alphaScale;
+                if (!smoke.useColor) {
+                    const float gray = std::pow(d, 0.6f);
+                    r = g = b = gray;
+                } else {
+                    const float gray = 0.12f + 0.88f * std::pow(d, 0.55f);
+                    r = gray;
+                    g = gray;
+                    b = gray;
+                }
+            }
+
+            img[(std::size_t)dstIdx * 4 + 0] = (uint8_t)std::lround(clamp01(r) * 255.0f);
+            img[(std::size_t)dstIdx * 4 + 1] = (uint8_t)std::lround(clamp01(g) * 255.0f);
+            img[(std::size_t)dstIdx * 4 + 2] = (uint8_t)std::lround(clamp01(b) * 255.0f);
+            img[(std::size_t)dstIdx * 4 + 3] = (uint8_t)std::lround(clamp01(a) * 255.0f);
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_2D, m_smokeTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_w, m_h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
+}
+
+void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
+                                          const std::vector<float>& tempValues,
+                                          const std::vector<uint8_t>& solid,
+                                          int nx,
+                                          int ny,
+                                          int nz,
+                                          float yawDeg,
+                                          float pitchDeg,
+                                          float zoom,
+                                          float densityScale,
+                                          const SmokeRenderSettings& smoke)
+{
+    if (nx <= 1 || ny <= 1 || nz <= 1) return;
+    const std::size_t cellCount = (std::size_t)nx * (std::size_t)ny * (std::size_t)nz;
+    if (smokeValues.size() != cellCount || solid.size() != cellCount) return;
+    if (!tempValues.empty() && tempValues.size() != cellCount) return;
+    if (m_w <= 0 || m_h <= 0) return;
+
+    const float yaw = yawDeg * 3.14159265358979323846f / 180.0f;
+    const float pitch = pitchDeg * 3.14159265358979323846f / 180.0f;
+    const float zoomClamped = std::clamp(zoom, 0.35f, 3.5f);
+    const float sigmaScale = std::max(0.05f, densityScale);
+    const int maxDim = std::max({nx, ny, nz, 1});
+    const WaterViewBox box = makeWaterViewBox(nx, ny, nz, (float)m_w / (float)std::max(1, m_h));
+    const float step = 0.60f / (float)std::max(24, maxDim);
+    const Vec3f bgA{0.025f, 0.030f, 0.040f};
+    const Vec3f bgB{0.060f, 0.070f, 0.085f};
+
+    std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
+
+    auto clamp01 = [](float x) {
+        if (x < 0.0f) return 0.0f;
+        if (x > 1.0f) return 1.0f;
+        return x;
+    };
+
+    for (int j = 0; j < m_h; ++j) {
+        const float py = 1.0f - 2.0f * ((j + 0.5f) / (float)m_h);
+        for (int i = 0; i < m_w; ++i) {
+            const float px = (2.0f * ((i + 0.5f) / (float)m_w) - 1.0f) * box.imageAspect;
+
+            Vec3f rayOriginWorld{0.0f, 0.0f, -box.camDist / zoomClamped};
+            Vec3f rayDirWorld = normalize3(Vec3f{px * box.fovScale, py * box.fovScale, box.camDist});
+            const Vec3f o = rotateInvYawPitch(rayOriginWorld, yaw, pitch);
+            const Vec3f d = normalize3(rotateInvYawPitch(rayDirWorld, yaw, pitch));
+
+            const float tBg = (float)j / (float)std::max(1, m_h - 1);
+            Vec3f color{
+                bgA.x * (1.0f - tBg) + bgB.x * tBg,
+                bgA.y * (1.0f - tBg) + bgB.y * tBg,
+                bgA.z * (1.0f - tBg) + bgB.z * tBg
+            };
+
+            float tmin = 0.0f;
+            float tmax = 0.0f;
+            if (intersectBox(o, d, box, tmin, tmax)) {
+                float t = std::max(0.0f, tmin);
+                float accumR = 0.0f;
+                float accumG = 0.0f;
+                float accumB = 0.0f;
+                float accumA = 0.0f;
+
+                while (t < tmax && accumA < 0.995f) {
+                    const Vec3f q = localToUnit(o + d * t, box);
+                    const float density = std::max(0.0f, sampleTrilinear(smokeValues, nx, ny, nz, q.x, q.y, q.z));
+                    const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
+                    if (!solidCell && density > 1e-4f) {
+                        const float temp = tempValues.empty()
+                            ? 0.0f
+                            : std::max(0.0f, sampleTrilinear(tempValues, nx, ny, nz, q.x, q.y, q.z));
+
+                        const float sigma = density * sigmaScale * 3.0f;
+                        const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * clamp01(smoke.alphaScale);
+
+                        float cr = 0.0f;
+                        float cg = 0.0f;
+                        float cb = 0.0f;
+                        if (!smoke.useColor) {
+                            const float gray = 0.22f + 0.68f * std::pow(clamp01(density), 0.55f);
+                            cr = gray;
+                            cg = gray;
+                            cb = gray;
+                        } else {
+                            const float tHeat = clamp01(temp * smoke.tempStrength);
+                            cr = (1.0f - tHeat) * 0.24f + tHeat * 0.98f;
+                            cg = (1.0f - tHeat) * 0.28f + tHeat * 0.56f;
+                            cb = (1.0f - tHeat) * 0.32f + tHeat * 0.12f;
+                            const float core = 1.0f - smoke.coreDark * std::pow(clamp01(density), 0.5f);
+                            cr *= 0.35f + 0.65f * core;
+                            cg *= 0.35f + 0.65f * core;
+                            cb *= 0.35f + 0.65f * core;
+                        }
+
+                        const float depthFade = 0.90f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
+                        cr *= depthFade;
+                        cg *= depthFade;
+                        cb *= depthFade;
+
+                        const float oneMinusA = 1.0f - accumA;
+                        accumR += oneMinusA * aStep * cr;
+                        accumG += oneMinusA * aStep * cg;
+                        accumB += oneMinusA * aStep * cb;
+                        accumA += oneMinusA * aStep;
+                    }
+                    t += step;
+                }
+
+                if (accumA > 0.0f) {
+                    color.x = color.x * (1.0f - accumA) + accumR;
+                    color.y = color.y * (1.0f - accumA) + accumG;
+                    color.z = color.z * (1.0f - accumA) + accumB;
+                }
+            }
+
+            const int dst = ((m_h - 1 - j) * m_w + i) * 4;
+            img[(std::size_t)dst + 0] = (uint8_t)std::lround(clamp01(color.x) * 255.0f);
+            img[(std::size_t)dst + 1] = (uint8_t)std::lround(clamp01(color.y) * 255.0f);
+            img[(std::size_t)dst + 2] = (uint8_t)std::lround(clamp01(color.z) * 255.0f);
+            img[(std::size_t)dst + 3] = 255;
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_2D, m_smokeTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_w, m_h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
+}
+
 void SmokeRenderer::updateWaterFromSlice(const std::vector<float>& values,
                                          const std::vector<uint8_t>& solid,
                                          int width,

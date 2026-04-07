@@ -4,6 +4,7 @@
 
 struct MAC2D;
 struct MACWater;
+struct MACSmoke3D;
 
 struct SmokeRenderSettings {
     bool useColor = false;
@@ -51,6 +52,25 @@ public:
 
     void updateWaterFromSim(const MACCoupledSim& sim,
                             const WaterRenderSettings& water);
+
+    void updateSmokeFromSlice(const std::vector<float>& values,
+                              const std::vector<uint8_t>& solid,
+                              int width,
+                              int height,
+                              int fieldMode,
+                              const SmokeRenderSettings& smoke);
+
+    void updateSmokeFromVolume(const std::vector<float>& smokeValues,
+                               const std::vector<float>& tempValues,
+                               const std::vector<uint8_t>& solid,
+                               int nx,
+                               int ny,
+                               int nz,
+                               float yawDeg,
+                               float pitchDeg,
+                               float zoom,
+                               float densityScale,
+                               const SmokeRenderSettings& smoke);
 
     void updateWaterFromSlice(const std::vector<float>& values,
                               const std::vector<uint8_t>& solid,
