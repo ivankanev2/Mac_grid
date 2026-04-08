@@ -84,7 +84,16 @@ inline void MACWater::rasterizeWaterField() {
 
     // IMPORTANT: targetMass should track conserved mass, not the clamped render field.
     // With 1 particle = 1 mass unit, this should be ~particles.size().
-    targetMass = (float)sumMass;
+    // Temporal smoothing prevents the volume-preservation correction from
+    // oscillating the free surface (correction pushes particles → mass changes
+    // → correction reverses → feedback loop).
+    const float rawMass = (float)sumMass;
+    if (targetMass > 0.0f) {
+        const float smoothAlpha = 1.0f - std::exp(-2.0f * dt);  // ~2 Hz time constant
+        targetMass += smoothAlpha * (rawMass - targetMass);
+    } else {
+        targetMass = rawMass;
+    }
 
     // Initialize desired volume the first time we have a valid conserved mass.
     if (desiredMass < 0.0f && targetMass > 0.0f) {

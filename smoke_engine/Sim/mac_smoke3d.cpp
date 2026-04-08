@@ -736,6 +736,9 @@ void MACSmoke3D::project() {
     const float invDt = 1.0f / std::max(1e-8f, dt);
     const float dx2 = dx * dx;
 
+    std::vector<uint8_t> fluidMask((std::size_t)cellCount, (uint8_t)0);
+    bool hasDirichletReference = false;
+
     auto isFluidCell = [&](int i, int j, int k) -> bool {
         if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return false;
         return !solid[(std::size_t)idxCell(i, j, k)];
@@ -750,6 +753,9 @@ void MACSmoke3D::project() {
                     pressure[(std::size_t)id] = 0.0f;
                     continue;
                 }
+
+                fluidMask[(std::size_t)id] = (uint8_t)1;
+                if (!std::isfinite(pressure[(std::size_t)id])) pressure[(std::size_t)id] = 0.0f;
 
                 float uL = u[(std::size_t)idxU(i, j, k)];
                 float uR = u[(std::size_t)idxU(i + 1, j, k)];
@@ -767,68 +773,52 @@ void MACSmoke3D::project() {
 
                 const float divCell = (uR - uL + vT - vB + wFr - wBk) * invDx;
                 rhs[(std::size_t)id] = -divCell * invDt;
-                if (!std::isfinite(pressure[(std::size_t)id])) pressure[(std::size_t)id] = 0.0f;
+
+                if (params.openTop && j == ny - 1) {
+                    hasDirichletReference = true;
+                }
             }
         }
     }
 
-    auto neighborContribution = [&](int ni, int nj, int nk, bool openTopOutside,
-                                    float& sum, int& diag) {
-        if (ni < 0 || nj < 0 || nk < 0 || ni >= nx || nj >= ny || nk >= nz) {
-            if (openTopOutside) {
-                diag++;
-            }
-            return;
-        }
+    const auto solverMode = static_cast<PressureSolverMode>(params.pressureSolverMode);
+    if (solverMode == PressureSolverMode::Multigrid) {
+        pressurePoisson.configure(
+            nx, ny, nz, dx,
+            params.openTop,
+            solid,
+            fluidMask,
+            /*removeMeanForGauge=*/!hasDirichletReference);
 
-        const int nid = idxCell(ni, nj, nk);
-        if (solid[(std::size_t)nid]) return;
-        sum += pressure[(std::size_t)nid];
-        diag++;
-    };
-
-    auto computeResidual = [&]() {
-        float maxResidual = 0.0f;
-        for (int k3 = 0; k3 < nz; ++k3) {
-            for (int j3 = 0; j3 < ny; ++j3) {
-                for (int i3 = 0; i3 < nx; ++i3) {
-                    const int id = idxCell(i3, j3, k3);
-                    if (solid[(std::size_t)id]) continue;
-
-                    float sum = 0.0f;
-                    int diag = 0;
-                    neighborContribution(i3 - 1, j3, k3, false, sum, diag);
-                    neighborContribution(i3 + 1, j3, k3, false, sum, diag);
-                    neighborContribution(i3, j3 - 1, k3, false, sum, diag);
-                    neighborContribution(i3, j3 + 1, k3, params.openTop && (j3 + 1 >= ny), sum, diag);
-                    neighborContribution(i3, j3, k3 - 1, false, sum, diag);
-                    neighborContribution(i3, j3, k3 + 1, false, sum, diag);
-
-                    if (diag <= 0) continue;
-                    const float residual = std::fabs((float)diag * pressure[(std::size_t)id] - sum - rhs[(std::size_t)id] * dx2)
-                                         / std::max(1e-8f, dx2);
-                    maxResidual = std::max(maxResidual, residual);
+        pressurePoisson.solveMG(
+            pressure,
+            rhs,
+            std::max(1, params.pressureIters),
+            std::max(0.0f, params.pressureTol),
+            dt);
+    } else {
+        auto neighborContribution = [&](int ni, int nj, int nk, bool openTopOutside,
+                                        float& sum, int& diag) {
+            if (ni < 0 || nj < 0 || nk < 0 || ni >= nx || nj >= ny || nk >= nz) {
+                if (openTopOutside) {
+                    diag++;
                 }
+                return;
             }
-        }
-        return maxResidual;
-    };
 
-    const bool useJacobi = (params.pressureSolverMode == (int)PressureSolverMode::Jacobi);
-    const int maxIters = std::max(1, params.pressureIters);
-    const float rbgsOmega = clampf(params.pressureOmega, 0.0f, 1.95f);
-    const float jacobiOmega = clampf(params.pressureOmega, 0.0f, 1.0f);
+            const int nid = idxCell(ni, nj, nk);
+            if (solid[(std::size_t)nid]) return;
+            sum += pressure[(std::size_t)nid];
+            diag++;
+        };
 
-    if (useJacobi) {
-        for (int it = 0; it < maxIters; ++it) {
+        auto computeResidual = [&]() {
+            float maxResidual = 0.0f;
             for (int k3 = 0; k3 < nz; ++k3) {
                 for (int j3 = 0; j3 < ny; ++j3) {
                     for (int i3 = 0; i3 < nx; ++i3) {
                         const int id = idxCell(i3, j3, k3);
-                        if (solid[(std::size_t)id]) {
-                            pressureTmp[(std::size_t)id] = 0.0f;
-                            continue;
-                        }
+                        if (solid[(std::size_t)id]) continue;
 
                         float sum = 0.0f;
                         int diag = 0;
@@ -839,30 +829,29 @@ void MACSmoke3D::project() {
                         neighborContribution(i3, j3, k3 - 1, false, sum, diag);
                         neighborContribution(i3, j3, k3 + 1, false, sum, diag);
 
-                        if (diag <= 0) {
-                            pressureTmp[(std::size_t)id] = 0.0f;
-                            continue;
-                        }
-
-                        const float target = (sum + rhs[(std::size_t)id] * dx2) / (float)diag;
-                        pressureTmp[(std::size_t)id] =
-                            pressure[(std::size_t)id] + jacobiOmega * (target - pressure[(std::size_t)id]);
+                        if (diag <= 0) continue;
+                        const float residual = std::fabs((float)diag * pressure[(std::size_t)id] - sum - rhs[(std::size_t)id] * dx2)
+                                             / std::max(1e-8f, dx2);
+                        maxResidual = std::max(maxResidual, residual);
                     }
                 }
             }
-            pressure.swap(pressureTmp);
-            if (computeResidual() * dt <= params.pressureTol) break;
-        }
-    } else {
-        for (int it = 0; it < maxIters; ++it) {
-            for (int color = 0; color < 2; ++color) {
+            return maxResidual;
+        };
+
+        const bool useJacobi = (solverMode == PressureSolverMode::Jacobi);
+        const int maxIters = std::max(1, params.pressureIters);
+        const float rbgsOmega = clampf(params.pressureOmega, 0.0f, 1.95f);
+        const float jacobiOmega = clampf(params.pressureOmega, 0.0f, 1.0f);
+
+        if (useJacobi) {
+            for (int it = 0; it < maxIters; ++it) {
                 for (int k3 = 0; k3 < nz; ++k3) {
                     for (int j3 = 0; j3 < ny; ++j3) {
                         for (int i3 = 0; i3 < nx; ++i3) {
-                            if (((i3 + j3 + k3) & 1) != color) continue;
                             const int id = idxCell(i3, j3, k3);
                             if (solid[(std::size_t)id]) {
-                                pressure[(std::size_t)id] = 0.0f;
+                                pressureTmp[(std::size_t)id] = 0.0f;
                                 continue;
                             }
 
@@ -876,17 +865,54 @@ void MACSmoke3D::project() {
                             neighborContribution(i3, j3, k3 + 1, false, sum, diag);
 
                             if (diag <= 0) {
-                                pressure[(std::size_t)id] = 0.0f;
+                                pressureTmp[(std::size_t)id] = 0.0f;
                                 continue;
                             }
 
                             const float target = (sum + rhs[(std::size_t)id] * dx2) / (float)diag;
-                            pressure[(std::size_t)id] += rbgsOmega * (target - pressure[(std::size_t)id]);
+                            pressureTmp[(std::size_t)id] =
+                                pressure[(std::size_t)id] + jacobiOmega * (target - pressure[(std::size_t)id]);
                         }
                     }
                 }
+                pressure.swap(pressureTmp);
+                if (computeResidual() * dt <= params.pressureTol) break;
             }
-            if (computeResidual() * dt <= params.pressureTol) break;
+        } else {
+            for (int it = 0; it < maxIters; ++it) {
+                for (int color = 0; color < 2; ++color) {
+                    for (int k3 = 0; k3 < nz; ++k3) {
+                        for (int j3 = 0; j3 < ny; ++j3) {
+                            for (int i3 = 0; i3 < nx; ++i3) {
+                                if (((i3 + j3 + k3) & 1) != color) continue;
+                                const int id = idxCell(i3, j3, k3);
+                                if (solid[(std::size_t)id]) {
+                                    pressure[(std::size_t)id] = 0.0f;
+                                    continue;
+                                }
+
+                                float sum = 0.0f;
+                                int diag = 0;
+                                neighborContribution(i3 - 1, j3, k3, false, sum, diag);
+                                neighborContribution(i3 + 1, j3, k3, false, sum, diag);
+                                neighborContribution(i3, j3 - 1, k3, false, sum, diag);
+                                neighborContribution(i3, j3 + 1, k3, params.openTop && (j3 + 1 >= ny), sum, diag);
+                                neighborContribution(i3, j3, k3 - 1, false, sum, diag);
+                                neighborContribution(i3, j3, k3 + 1, false, sum, diag);
+
+                                if (diag <= 0) {
+                                    pressure[(std::size_t)id] = 0.0f;
+                                    continue;
+                                }
+
+                                const float target = (sum + rhs[(std::size_t)id] * dx2) / (float)diag;
+                                pressure[(std::size_t)id] += rbgsOmega * (target - pressure[(std::size_t)id]);
+                            }
+                        }
+                    }
+                }
+                if (computeResidual() * dt <= params.pressureTol) break;
+            }
         }
     }
 

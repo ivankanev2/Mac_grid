@@ -190,14 +190,46 @@ static Vec3f sampleGradient(const std::vector<float>& volume, int nx, int ny, in
     return Vec3f{gx, gy, gz};
 }
 
+static bool isDarkTheme(int themeMode) {
+    return themeMode == 0;
+}
+
+static void solidThemeColor(int themeMode, uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (isDarkTheme(themeMode)) {
+        r = 44; g = 49; b = 55;
+    } else {
+        r = 214; g = 218; b = 224;
+    }
+}
+
+static Vec3f themedSmokeBgA(int themeMode) {
+    return isDarkTheme(themeMode) ? Vec3f{0.025f, 0.030f, 0.040f}
+                                  : Vec3f{0.982f, 0.980f, 0.974f};
+}
+
+static Vec3f themedSmokeBgB(int themeMode) {
+    return isDarkTheme(themeMode) ? Vec3f{0.060f, 0.070f, 0.085f}
+                                  : Vec3f{0.918f, 0.925f, 0.938f};
+}
+
+static Vec3f themedWaterBgA(int themeMode) {
+    return isDarkTheme(themeMode) ? Vec3f{0.045f, 0.055f, 0.070f}
+                                  : Vec3f{0.986f, 0.984f, 0.978f};
+}
+
+static Vec3f themedWaterBgB(int themeMode) {
+    return isDarkTheme(themeMode) ? Vec3f{0.080f, 0.095f, 0.120f}
+                                  : Vec3f{0.910f, 0.922f, 0.940f};
+}
+
 }
 
 unsigned int SmokeRenderer::makeTexture(int w, int h) {
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -253,9 +285,11 @@ void SmokeRenderer::uploadSmokeRGBA(const std::vector<float>& smoke,
             int dstIdx = i + w * j;
 
             if (solid[srcIdx]) {
-                img[dstIdx*4 + 0] = 40;
-                img[dstIdx*4 + 1] = 90;
-                img[dstIdx*4 + 2] = 200;
+                uint8_t sr = 0, sg = 0, sb = 0;
+                solidThemeColor(s.themeMode, sr, sg, sb);
+                img[dstIdx*4 + 0] = sr;
+                img[dstIdx*4 + 1] = sg;
+                img[dstIdx*4 + 2] = sb;
                 img[dstIdx*4 + 3] = 255;
                 continue;
             }
@@ -325,9 +359,11 @@ void SmokeRenderer::uploadWaterRGBA(const std::vector<float>& water,
             int dstIdx = i + w * j;
 
             if (solid[srcIdx]) {
-                img[dstIdx*4 + 0] = 40;
-                img[dstIdx*4 + 1] = 90;
-                img[dstIdx*4 + 2] = 200;
+                uint8_t sr = 0, sg = 0, sb = 0;
+                solidThemeColor(wset.themeMode, sr, sg, sb);
+                img[dstIdx*4 + 0] = sr;
+                img[dstIdx*4 + 1] = sg;
+                img[dstIdx*4 + 2] = sb;
                 img[dstIdx*4 + 3] = 255;
                 continue;
             }
@@ -336,10 +372,16 @@ void SmokeRenderer::uploadWaterRGBA(const std::vector<float>& water,
             float d = 1.0f - std::exp(-raw);
             float a = clamp01(d * wset.alpha);
 
-            // Slightly bluer water tint.
-            float r = 0.02f + 0.06f * d;
-            float g = 0.14f + 0.28f * d;
-            float b = 0.62f + 0.36f * d;
+            float r, g, b;
+            if (isDarkTheme(wset.themeMode)) {
+                r = 0.08f + 0.08f * d;
+                g = 0.16f + 0.18f * d;
+                b = 0.30f + 0.28f * d;
+            } else {
+                r = 0.18f + 0.08f * d;
+                g = 0.30f + 0.16f * d;
+                b = 0.50f + 0.22f * d;
+            }
 
             img[dstIdx*4 + 0] = (uint8_t)std::lround(r * 255.0f);
             img[dstIdx*4 + 1] = (uint8_t)std::lround(g * 255.0f);
@@ -523,9 +565,11 @@ void SmokeRenderer::updateSmokeFromSlice(const std::vector<float>& values,
             const int dstIdx = i + m_w * j;
 
             if (solid[(std::size_t)srcIdx]) {
-                img[(std::size_t)dstIdx * 4 + 0] = 40;
-                img[(std::size_t)dstIdx * 4 + 1] = 90;
-                img[(std::size_t)dstIdx * 4 + 2] = 200;
+                uint8_t sr = 0, sg = 0, sb = 0;
+                solidThemeColor(smoke.themeMode, sr, sg, sb);
+                img[(std::size_t)dstIdx * 4 + 0] = sr;
+                img[(std::size_t)dstIdx * 4 + 1] = sg;
+                img[(std::size_t)dstIdx * 4 + 2] = sb;
                 img[(std::size_t)dstIdx * 4 + 3] = 255;
                 continue;
             }
@@ -611,8 +655,8 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
     const int maxDim = std::max({nx, ny, nz, 1});
     const WaterViewBox box = makeWaterViewBox(nx, ny, nz, (float)m_w / (float)std::max(1, m_h));
     const float step = 0.60f / (float)std::max(24, maxDim);
-    const Vec3f bgA{0.025f, 0.030f, 0.040f};
-    const Vec3f bgB{0.060f, 0.070f, 0.085f};
+    const Vec3f bgA = themedSmokeBgA(smoke.themeMode);
+    const Vec3f bgB = themedSmokeBgB(smoke.themeMode);
 
     std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
 
@@ -759,8 +803,8 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
     const float step = 0.55f / (float)std::max(24, maxDim);
     const Vec3f lightDir = normalize3(Vec3f{-0.45f, 0.72f, 0.53f});
     const Vec3f viewLight = normalize3(Vec3f{0.0f, 0.0f, 1.0f});
-    const Vec3f bgA{0.045f, 0.055f, 0.070f};
-    const Vec3f bgB{0.080f, 0.095f, 0.120f};
+    const Vec3f bgA = themedWaterBgA(water.themeMode);
+    const Vec3f bgB = themedWaterBgB(water.themeMode);
 
     std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
 
@@ -829,9 +873,15 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
                         const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
                         const float spec = std::pow(std::clamp(dot3(normal, viewLight), 0.0f, 1.0f), 18.0f);
 
-                        color.x = 0.08f + 0.16f * ndl + 0.12f * rim + 0.22f * spec;
-                        color.y = 0.26f + 0.32f * ndl + 0.12f * rim + 0.18f * spec;
-                        color.z = 0.52f + 0.36f * ndl + 0.14f * rim + 0.20f * spec;
+                        if (isDarkTheme(water.themeMode)) {
+                            color.x = 0.08f + 0.16f * ndl + 0.12f * rim + 0.22f * spec;
+                            color.y = 0.26f + 0.32f * ndl + 0.12f * rim + 0.18f * spec;
+                            color.z = 0.52f + 0.36f * ndl + 0.14f * rim + 0.20f * spec;
+                        } else {
+                            color.x = 0.36f + 0.16f * ndl + 0.08f * rim + 0.18f * spec;
+                            color.y = 0.52f + 0.20f * ndl + 0.08f * rim + 0.16f * spec;
+                            color.z = 0.72f + 0.18f * ndl + 0.10f * rim + 0.18f * spec;
+                        }
                     }
                 } else {
                     float accumR = 0.0f;
@@ -862,9 +912,18 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
                             const float shade = 0.35f + 0.55f * ndl + 0.25f * rim;
 
                             const float depthFade = 0.85f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
-                            const float cr = (0.05f + 0.10f * raw) * depthFade * shade;
-                            const float cg = (0.18f + 0.28f * raw) * depthFade * shade;
-                            const float cb = (0.48f + 0.38f * raw) * depthFade * (0.85f + 0.25f * shade);
+                            float cr = 0.0f;
+                            float cg = 0.0f;
+                            float cb = 0.0f;
+                            if (isDarkTheme(water.themeMode)) {
+                                cr = (0.05f + 0.10f * raw) * depthFade * shade;
+                                cg = (0.18f + 0.28f * raw) * depthFade * shade;
+                                cb = (0.48f + 0.38f * raw) * depthFade * (0.85f + 0.25f * shade);
+                            } else {
+                                cr = (0.20f + 0.12f * raw) * depthFade * (0.90f + 0.15f * shade);
+                                cg = (0.34f + 0.20f * raw) * depthFade * shade;
+                                cb = (0.58f + 0.28f * raw) * depthFade * (0.88f + 0.18f * shade);
+                            }
 
                             const float oneMinusA = 1.0f - accumA;
                             accumR += oneMinusA * aStep * cr;
@@ -891,9 +950,15 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
                         if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
                         const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
                         const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 3.0f);
-                        color.x += 0.05f * ndl + 0.04f * rim;
-                        color.y += 0.07f * ndl + 0.05f * rim;
-                        color.z += 0.10f * ndl + 0.06f * rim;
+                        if (isDarkTheme(water.themeMode)) {
+                            color.x += 0.05f * ndl + 0.04f * rim;
+                            color.y += 0.07f * ndl + 0.05f * rim;
+                            color.z += 0.10f * ndl + 0.06f * rim;
+                        } else {
+                            color.x += 0.04f * ndl + 0.03f * rim;
+                            color.y += 0.05f * ndl + 0.04f * rim;
+                            color.z += 0.06f * ndl + 0.05f * rim;
+                        }
                     }
                 }
             }

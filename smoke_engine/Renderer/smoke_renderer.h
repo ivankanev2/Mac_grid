@@ -15,10 +15,12 @@ struct SmokeRenderSettings {
     float ageGray      = 0.65f;
     float ageDarken    = 0.55f;
     float coreDark     = 0.75f;
+    int   themeMode    = 0;
 };
 
 struct WaterRenderSettings {
     float alpha = 0.85f;
+    int   themeMode = 0;
 };
 
 struct OverlaySettings {

@@ -125,8 +125,8 @@ void PressureSolver::rebuildOperator()
                         return;
                     }
                 } else {
-                    // outside domain: treat as air Dirichlet ONLY if that face is open
-                    // (wFace already encodes openness)
+                    // outside domain: Dirichlet p=0 if face is open
+                    diagW += wFace;
                     return;
                 }
             };
@@ -387,7 +387,8 @@ void PressureSolver::ensureMultigrid()
                             diagW += wFace; // air Dirichlet
                         }
                     } else {
-                        // outside domain treated as air if open
+                        // outside domain: Dirichlet p=0 if face is open
+                        diagW += wFace;
                         return;
                     }
                 };

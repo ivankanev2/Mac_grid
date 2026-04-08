@@ -38,6 +38,7 @@ struct MACWater : public MACGridCore {
     float waterGravity     = -9.8f; // negative pulls down
     float velDamping       = 0.0f;  // exponential damping rate
     bool  openTop          = true;  // if true, top boundary is open (pressure ~ 0 to air)
+    bool  waterHeld        = false; // when true, gravity is forced to 0 (for text drop feature)
 
     // viscosity (implicit diffusion)
     float viscosity    = 5e-4f;   // [m^2/s], 0 disables
@@ -51,7 +52,7 @@ struct MACWater : public MACGridCore {
     int   borderThickness    = 2;       // solid border thickness (cells)
     int   maxParticles       = 0;  // safety cap
 
-    int   maskDilations      = 0;       // # IT NEEDS REALLY GENTLE TOUCH expand liquid mask by N 4-neighborhood dilations
+    int   maskDilations      = 0;       // expand liquid mask by N 4-neighborhood dilations (stabilizes free surface)
     int   extrapolationIters = 10;      // fill velocities into air for stable sampling
 
     int   pressureMaxIters   = 200;
@@ -70,7 +71,7 @@ struct MACWater : public MACGridCore {
     // This biases the projection so the net divergence in the liquid region is ~0,
     // which reduces slow volume gain/loss for open free-surface liquid.
     bool  volumePreserveRhsMean  = true;
-    float volumePreserveStrength = 0.05f; // 0..1 (1 = full mean removal)
+    float volumePreserveStrength = 0.01f; // 0..1 (gentle correction to avoid surface oscillation)
 
     MACWater(int NX, int NY, float DX, float DT);
 
@@ -78,6 +79,12 @@ struct MACWater : public MACGridCore {
     void step();
 
     void addWaterSource(float cx, float cy, float radius, float amount);
+    void addWaterTextParticles(const std::vector<uint8_t>& textMask, int maskW, int maskH, int ppc = 4);
+    void removeWaterTextParticles(const std::vector<uint8_t>& textMask, int maskW, int maskH);
+
+    // Toggle text-shaped solid obstacles in the water sim
+    void addSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH);
+    void removeSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH);
     virtual void applyBoundary();
 
     // Copy solid cells from another sim (smoke), then re-apply water borders.

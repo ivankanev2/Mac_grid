@@ -77,10 +77,11 @@ inline void MACWater::applyBoundary() {
         }
     }
 
-    // Optional: kill tangential velocity along the floor for stability.
+    // Kill tangential velocity along the floor for stability.
     for (int i = 0; i <= nx; ++i) {
         u[(size_t)idxU(i, 0)] = 0.0f;
     }
+
 
     // Internal solids: no-through for faces adjacent to any solid cell.
     for (int j = 0; j < ny; ++j) {

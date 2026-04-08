@@ -29,12 +29,27 @@ if(NOT TARGET glfw)
   set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
 
-  FetchContent_Declare(
-    glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG 3.3.9
-  )
-  FetchContent_MakeAvailable(glfw)
+  set(GLFW_LOCAL_SRC "")
+  foreach(_glfw_candidate
+      ${CMAKE_CURRENT_SOURCE_DIR}/external/glfw
+      ${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/glfw-src)
+    if(EXISTS ${_glfw_candidate}/CMakeLists.txt)
+      set(GLFW_LOCAL_SRC ${_glfw_candidate})
+      break()
+    endif()
+  endforeach()
+
+  if(GLFW_LOCAL_SRC)
+    message(STATUS "Using local GLFW source: ${GLFW_LOCAL_SRC}")
+    add_subdirectory(${GLFW_LOCAL_SRC} ${CMAKE_BINARY_DIR}/glfw_local EXCLUDE_FROM_ALL)
+  else()
+    FetchContent_Declare(
+      glfw
+      GIT_REPOSITORY https://github.com/glfw/glfw.git
+      GIT_TAG 3.3.9
+    )
+    FetchContent_MakeAvailable(glfw)
+  endif()
 endif()
 
 # --------------------
@@ -91,10 +106,12 @@ add_executable(SmokeEngine
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_smoke_sim_sampling.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_grid_core.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/pressure_solver.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Sim/pressure_solver3d.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_water_sim.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_water3d.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_smoke3d.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim/mac_coupled_sim.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Sim/text_mask.cpp
 
   ${CMAKE_CURRENT_SOURCE_DIR}/Renderer/smoke_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/UI/panels.cpp
@@ -115,6 +132,7 @@ target_include_directories(SmokeEngine PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/Sim
   ${CMAKE_CURRENT_SOURCE_DIR}/Renderer
   ${CMAKE_CURRENT_SOURCE_DIR}/UI
+  ${CMAKE_CURRENT_SOURCE_DIR}/external/stb
 )
 
 target_link_libraries(SmokeEngine PRIVATE imgui_lib glfw OpenGL::GL)

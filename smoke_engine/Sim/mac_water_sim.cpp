@@ -98,7 +98,8 @@ void MACWater::step() {
 
     // --- External forces ---
     // Gravity to v-faces that touch any liquid cell.
-    if (waterGravity != 0.0f) {
+    const float effectiveGravity = waterHeld ? 0.0f : waterGravity;
+    if (effectiveGravity != 0.0f) {
         for (int j = 0; j <= ny; ++j) {
             for (int i = 0; i < nx; ++i) {
                 const int id = idxV(i, j);
@@ -107,7 +108,7 @@ void MACWater::step() {
                 const bool topLiquid = (j < ny)     ? (liquid[(size_t)idxP(i, j)]     != 0) : false;
 
                 if (botLiquid || topLiquid) {
-                    v[(size_t)id] += dt * waterGravity;
+                    v[(size_t)id] += dt * effectiveGravity;
                 }
             }
         }
@@ -165,4 +166,113 @@ void MACWater::step() {
 
     // --- Rasterize for rendering ---
     rasterizeWaterField();
+}
+
+void MACWater::addWaterTextParticles(const std::vector<uint8_t>& textMask, int maskW, int maskH, int ppc) {
+    rebuildSolidsFromUser();
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int mi = (int)((float)i / (float)nx * (float)maskW);
+            int mj = (int)((float)j / (float)ny * (float)maskH);
+            mi = std::min(mi, maskW - 1);
+            mj = std::min(mj, maskH - 1);
+
+            if (!textMask[(size_t)(mi + maskW * mj)]) continue;
+
+            liquid[(size_t)idxP(i, j)] = 1;
+
+            for (int k = 0; k < ppc; ++k) {
+                Particle p;
+                p.x = (i + water_internal::randRange(0.1f, 0.9f)) * dx;
+                p.y = (j + water_internal::randRange(0.1f, 0.9f)) * dx;
+                p.u = 0.0f;
+                p.v = 0.0f;
+                p.age = 0.0f;
+                p.c00 = p.c01 = p.c10 = p.c11 = 0.0f;
+                particles.push_back(p);
+            }
+        }
+    }
+
+    desiredMass = (float)particles.size();
+    enforceParticleBounds();
+    removeParticlesInSolids();
+    rasterizeWaterField();
+
+    std::fprintf(stderr, "[MACWater] addWaterTextParticles: %d particles spawned\n", (int)particles.size());
+}
+
+void MACWater::removeWaterTextParticles(const std::vector<uint8_t>& textMask, int maskW, int maskH) {
+    auto inTextMask = [&](float x, float y) -> bool {
+        int i = std::clamp((int)(x / dx), 0, nx - 1);
+        int j = std::clamp((int)(y / dx), 0, ny - 1);
+
+        int mi = (int)((float)i / (float)nx * (float)maskW);
+        int mj = (int)((float)j / (float)ny * (float)maskH);
+        mi = std::min(mi, maskW - 1);
+        mj = std::min(mj, maskH - 1);
+
+        return textMask[(size_t)(mi + maskW * mj)] != 0;
+    };
+
+    particles.erase(
+        std::remove_if(
+            particles.begin(),
+            particles.end(),
+            [&](const Particle& p) { return inTextMask(p.x, p.y); }),
+        particles.end());
+
+    desiredMass = (float)particles.size();
+
+    enforceParticleBounds();
+    removeParticlesInSolids();
+
+    {
+        const int savedDil = maskDilations;
+        maskDilations = 0;
+        buildLiquidMask();
+        maskDilations = savedDil;
+    }
+
+    rasterizeWaterField();
+}
+
+void MACWater::addSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH) {
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int mi = (int)((float)i / (float)nx * (float)maskW);
+            int mj = (int)((float)j / (float)ny * (float)maskH);
+            mi = std::min(mi, maskW - 1);
+            mj = std::min(mj, maskH - 1);
+
+            if (textMask[(size_t)(mi + maskW * mj)]) {
+                solidUser[(size_t)idxP(i, j)] = 1;
+            }
+        }
+    }
+
+    rebuildSolidsFromUser();
+    removeParticlesInSolids();
+    syncSolidsToFluidAndFaces();
+    invalidatePressureMatrix();
+}
+
+void MACWater::removeSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH) {
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int mi = (int)((float)i / (float)nx * (float)maskW);
+            int mj = (int)((float)j / (float)ny * (float)maskH);
+            mi = std::min(mi, maskW - 1);
+            mj = std::min(mj, maskH - 1);
+
+            if (textMask[(size_t)(mi + maskW * mj)]) {
+                solidUser[(size_t)idxP(i, j)] = 0;
+            }
+        }
+    }
+
+    rebuildSolidsFromUser();
+    syncSolidsToFluidAndFaces();
+    invalidatePressureMatrix();
 }

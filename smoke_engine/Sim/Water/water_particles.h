@@ -126,10 +126,18 @@ inline void MACWater::advectParticles() {
         float u2, v2;
         velAt(midX, midY, u, v, u2, v2);
 
-        p.x = p.x + dtLocal * u2;
-        p.y = p.y + dtLocal * v2;
-        p.u = u2;
-        p.v = v2;
+        p.x = water_internal::clampf(p.x + dtLocal * u2, 0.0f, domainX);
+        p.y = water_internal::clampf(p.y + dtLocal * v2, 0.0f, domainY);
+        // Only overwrite velocity for APIC (grid sample at midpoint is a good
+        // approximation at the new position).  For FLIP the blended velocity
+        // from gridToParticles() must be preserved — overwriting it with a
+        // pure grid sample defeats the FLIP blend entirely.
+        if (!useAPIC) {
+            // keep FLIP-blended p.u / p.v from gridToParticles()
+        } else {
+            p.u = u2;
+            p.v = v2;
+        }
         p.age += dtLocal;
     }
 }

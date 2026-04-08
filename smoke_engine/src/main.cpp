@@ -2,6 +2,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
+#include <vector>
+#include <filesystem>
+#include <string>
 
 #include "UI/panels.h"
 
@@ -26,19 +30,213 @@
 #include "backends/imgui_impl_opengl3.h"
 
 #include "Sim/mac_coupled_sim.h"
+#include "Sim/text_mask.h"
 
 
 
 // window size and sim resolution
-static const int NX = 96;
-static const int NY = 96;
+static const int NX = 256;
+static const int NY = 256;
 static const int NZ = 64;
+
+// Persistent text mask (reused across resets)
+static std::vector<uint8_t> g_textMask;
 
 // time variables
 double lastTime = 0.0;
 double accumulator = 0.0;
 float simSpeed = 1.0f;          // 1.0 = real-time, 2.0 = 2x faster, etc.
 int maxStepsPerFrame = 8;       // cap to avoid death-spiral
+
+namespace {
+
+struct IconVec2 {
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+struct IconColor {
+    unsigned char r = 0;
+    unsigned char g = 0;
+    unsigned char b = 0;
+    unsigned char a = 0;
+};
+
+static constexpr int kThemeDark = 0;
+static constexpr int kThemeLight = 1;
+static constexpr IconColor kLogoRed{232, 29, 47, 255};
+static constexpr IconColor kLogoLightBg{250, 250, 249, 255};
+static constexpr IconColor kLogoDarkBg{23, 27, 31, 255};
+
+static float clamp01(float x) {
+    return std::max(0.0f, std::min(1.0f, x));
+}
+
+static float distSqToSegment(float px, float py, IconVec2 a, IconVec2 b) {
+    const float vx = b.x - a.x;
+    const float vy = b.y - a.y;
+    const float wx = px - a.x;
+    const float wy = py - a.y;
+    const float vv = vx * vx + vy * vy;
+    const float t = (vv > 1.0e-12f) ? clamp01((wx * vx + wy * vy) / vv) : 0.0f;
+    const float dx = px - (a.x + t * vx);
+    const float dy = py - (a.y + t * vy);
+    return dx * dx + dy * dy;
+}
+
+static float distToPolyline(float px, float py, const IconVec2* pts, int count) {
+    float best = 1.0e9f;
+    for (int i = 0; i + 1 < count; ++i) {
+        best = std::min(best, distSqToSegment(px, py, pts[i], pts[i + 1]));
+    }
+    return std::sqrt(best);
+}
+
+static float coverageForDisk(float dist, float radius, float aa) {
+    if (dist <= radius - aa) return 1.0f;
+    if (dist >= radius + aa) return 0.0f;
+    return clamp01((radius + aa - dist) / std::max(1.0e-6f, 2.0f * aa));
+}
+
+static float coverageForStroke(float dist, float halfWidth, float aa) {
+    if (dist <= halfWidth - aa) return 1.0f;
+    if (dist >= halfWidth + aa) return 0.0f;
+    return clamp01((halfWidth + aa - dist) / std::max(1.0e-6f, 2.0f * aa));
+}
+
+static void blendOver(unsigned char& dstR,
+                      unsigned char& dstG,
+                      unsigned char& dstB,
+                      unsigned char& dstA,
+                      IconColor src,
+                      float coverage)
+{
+    const float sa = clamp01((src.a / 255.0f) * coverage);
+    const float da = dstA / 255.0f;
+    const float outA = sa + da * (1.0f - sa);
+    if (outA <= 1.0e-6f) {
+        dstR = dstG = dstB = dstA = 0;
+        return;
+    }
+
+    const float sr = src.r / 255.0f;
+    const float sg = src.g / 255.0f;
+    const float sb = src.b / 255.0f;
+    const float dr = dstR / 255.0f;
+    const float dg = dstG / 255.0f;
+    const float db = dstB / 255.0f;
+
+    const float outR = (sr * sa + dr * da * (1.0f - sa)) / outA;
+    const float outG = (sg * sa + dg * da * (1.0f - sa)) / outA;
+    const float outB = (sb * sa + db * da * (1.0f - sa)) / outA;
+
+    dstR = (unsigned char)std::lround(clamp01(outR) * 255.0f);
+    dstG = (unsigned char)std::lround(clamp01(outG) * 255.0f);
+    dstB = (unsigned char)std::lround(clamp01(outB) * 255.0f);
+    dstA = (unsigned char)std::lround(clamp01(outA) * 255.0f);
+}
+
+static std::string findExistingPath(std::initializer_list<const char*> candidates) {
+    for (const char* rel : candidates) {
+        if (rel && rel[0] && std::filesystem::exists(rel)) {
+            return std::string(rel);
+        }
+    }
+    return {};
+}
+
+static bool loadViziorFonts(ImGuiIO& io, float dpiScale = 1.0f) {
+    io.Fonts->Clear();
+
+    ImFontConfig cfg{};
+    cfg.OversampleH = 4;
+    cfg.OversampleV = 4;
+    cfg.PixelSnapH = false;
+    cfg.RasterizerMultiply = 1.08f;
+
+    const float fontSize = 17.0f * std::max(1.0f, dpiScale);
+    const std::string roboto = findExistingPath({
+        "external/imgui/misc/fonts/Roboto-Medium.ttf",
+        "../external/imgui/misc/fonts/Roboto-Medium.ttf",
+        "../../external/imgui/misc/fonts/Roboto-Medium.ttf"
+    });
+
+    if (!roboto.empty()) {
+        if (ImFont* font = io.Fonts->AddFontFromFileTTF(roboto.c_str(), fontSize, &cfg)) {
+            io.FontDefault = font;
+            return true;
+        }
+    }
+
+    io.FontDefault = io.Fonts->AddFontDefault();
+    return false;
+}
+
+static void rasterViziorIcon(int w, int h, int themeMode, std::vector<unsigned char>& out) {
+    out.assign((size_t)w * (size_t)h * 4u, 0u);
+
+    const IconColor circleFill = (themeMode == kThemeLight) ? kLogoLightBg : kLogoDarkBg;
+    const float aa = 0.90f / (float)std::max(1, std::max(w, h));
+    const float circleR = 0.43f;
+    const float borderHalf = 0.014f;
+
+    const IconVec2 serifL[3] = {{0.24f, 0.29f}, {0.36f, 0.29f}, {0.40f, 0.33f}};
+    const IconVec2 serifR[3] = {{0.76f, 0.29f}, {0.64f, 0.29f}, {0.60f, 0.33f}};
+    const IconVec2 outerV[3] = {{0.33f, 0.31f}, {0.50f, 0.72f}, {0.67f, 0.31f}};
+    const IconVec2 innerCutV[3] = {{0.40f, 0.35f}, {0.50f, 0.61f}, {0.60f, 0.35f}};
+    const IconVec2 innerCoreV[3] = {{0.45f, 0.40f}, {0.50f, 0.53f}, {0.55f, 0.40f}};
+
+    for (int j = 0; j < h; ++j) {
+        for (int i = 0; i < w; ++i) {
+            const float x = (i + 0.5f) / (float)w;
+            const float y = (j + 0.5f) / (float)h;
+            const float dx = x - 0.5f;
+            const float dy = y - 0.5f;
+            const float dCircle = std::sqrt(dx * dx + dy * dy);
+            unsigned char r = 0, g = 0, b = 0, a = 0;
+
+            const float circleCov = coverageForDisk(dCircle, circleR, aa);
+            blendOver(r, g, b, a, circleFill, circleCov);
+
+            if (themeMode == kThemeLight) {
+                const float ringCov = circleCov * coverageForStroke(std::fabs(dCircle - circleR), borderHalf, aa * 1.6f);
+                blendOver(r, g, b, a, kLogoRed, ringCov);
+            }
+
+            const float serifDist = std::min(distToPolyline(x, y, serifL, 3), distToPolyline(x, y, serifR, 3));
+            const float outerDist = std::min(distToPolyline(x, y, outerV, 3), serifDist);
+            const float cutDist = distToPolyline(x, y, innerCutV, 3);
+            const float coreDist = distToPolyline(x, y, innerCoreV, 3);
+
+            blendOver(r, g, b, a, kLogoRed, circleCov * coverageForStroke(outerDist, 0.072f, aa * 1.8f));
+            blendOver(r, g, b, a, circleFill, circleCov * coverageForStroke(cutDist, 0.046f, aa * 1.6f));
+            blendOver(r, g, b, a, kLogoRed, circleCov * coverageForStroke(coreDist, 0.022f, aa * 1.4f));
+
+            const size_t idx = ((size_t)j * (size_t)w + (size_t)i) * 4u;
+            out[idx + 0] = r;
+            out[idx + 1] = g;
+            out[idx + 2] = b;
+            out[idx + 3] = a;
+        }
+    }
+}
+
+static void setViziorWindowIcon(GLFWwindow* win, int themeMode) {
+    std::vector<unsigned char> icon32;
+    std::vector<unsigned char> icon64;
+    rasterViziorIcon(32, 32, themeMode, icon32);
+    rasterViziorIcon(64, 64, themeMode, icon64);
+    GLFWimage images[2];
+    images[0].width = 32;
+    images[0].height = 32;
+    images[0].pixels = icon32.data();
+    images[1].width = 64;
+    images[1].height = 64;
+    images[1].pixels = icon64.data();
+    glfwSetWindowIcon(win, 2, images);
+}
+
+} // namespace
 
 int main()
 {
@@ -51,8 +249,11 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
-    GLFWwindow* win = glfwCreateWindow(1100, 800, "Smoke Engine", nullptr, nullptr);
+    GLFWwindow* win = glfwCreateWindow(1480, 920, "Vizior | Fluid Research Engine", nullptr, nullptr);
     if (!win) return 1;
+
+    UI::Settings ui;
+    UI::Probe probe;
 
     glfwMakeContextCurrent(win);
     glfwSwapInterval(1);
@@ -61,13 +262,20 @@ int main()
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = "imgui.ini";  // i fucking hate this line of code but need it
-    
+    io.IniFilename = "vizior_layout.ini";
 
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;      // keep docking
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;   // disable OS-windows
 
-    ImGui::StyleColorsDark();
+    float dpiX = 1.0f;
+    float dpiY = 1.0f;
+    glfwGetWindowContentScale(win, &dpiX, &dpiY);
+    loadViziorFonts(io, std::max(dpiX, dpiY));
+
+    UI::ApplyViziorTheme(ui.themeMode);
+    setViziorWindowIcon(win, ui.themeMode);
+    int appliedTheme = ui.themeMode;
 
     // tweak style when viewports enabled
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
@@ -106,13 +314,36 @@ int main()
     waterSim.setSharedPressureSolver(&sharedPressureSolver);
     coupled.setSharedPressureSolver(&sharedPressureSolver);
 
-    // UI state
-    UI::Settings ui;
-    UI::Probe probe;
+    // Rasterize MBZUAI text mask and apply to both simulations
+    const std::string robotoPath = findExistingPath({
+        "external/imgui/misc/fonts/Roboto-Medium.ttf",
+        "../external/imgui/misc/fonts/Roboto-Medium.ttf",
+        "../../external/imgui/misc/fonts/Roboto-Medium.ttf"
+    });
+    g_textMask = rasterizeTextMask(
+        "MBZUAI",
+        robotoPath.empty() ? "external/imgui/misc/fonts/Roboto-Medium.ttf" : robotoPath.c_str(),
+        NX, NY,
+        0.5f,   // center vertically
+        0.15f   // text height = 15% of grid height
+    );
+
+    // Smoke: add text as solid obstacle
+    sim.addSolidText(g_textMask, NX, NY);
+
+    // Water: seed particles in text shape, held in place
+    waterSim.waterHeld = true;
+    waterSim.addWaterTextParticles(g_textMask, NX, NY, 4);
 
     while (!glfwWindowShouldClose(win))
     {
         glfwPollEvents();
+
+        if (appliedTheme != ui.themeMode) {
+            UI::ApplyViziorTheme(ui.themeMode);
+            setViziorWindowIcon(win, ui.themeMode);
+            appliedTheme = ui.themeMode;
+        }
 
         // step sim (if playing)
         sim.smokeDissipation = ui.smokeDissipation;
@@ -354,7 +585,10 @@ int main()
         // but it's fine to keep for future, you better not delete this >:)
     }
 
-        // handle actions (reset)
+        // handle actions
+        if (actions.dropWaterTextRequested) {
+            waterSim.waterHeld = false;
+        }
         if (actions.resetRequested) {
             sim.reset();
             waterSim.reset();
@@ -362,6 +596,12 @@ int main()
             smoke3D.reset();
             coupled.reset();
         }
+         // Re-apply text mask after reset
+        if (!g_textMask.empty()) {
+                sim.addSolidText(g_textMask, NX, NY);
+                waterSim.waterHeld = true;
+                waterSim.addWaterTextParticles(g_textMask, NX, NY, 4);
+            }
         if (actions.applySmoke3DGridRequested) {
             const int nx3 = std::max(1, ui.smoke3DNX);
             const int ny3 = std::max(1, ui.smoke3DNY);
@@ -389,7 +629,11 @@ int main()
         int w, h;
         glfwGetFramebufferSize(win, &w, &h);
         glViewport(0, 0, w, h);
-        glClearColor(0, 0, 0, 1);
+        if (ui.themeMode == kThemeLight) {
+            glClearColor(0.948f, 0.944f, 0.937f, 1.0f);
+        } else {
+            glClearColor(0.055f, 0.066f, 0.078f, 1.0f);
+        }
         glClear(GL_COLOR_BUFFER_BIT);
 
         // render imgui

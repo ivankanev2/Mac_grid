@@ -50,6 +50,11 @@ struct Settings {
     // Advector debug
     float lastAdvectL2 = 0.0f;
 
+    // Appearance
+    int   themeMode = 0;            // 0=dark, 1=light
+    bool  showViewportHeaders = true;
+    bool  showViewportHints   = true;
+
     // Rendering look (smoke)
     bool  useColorSmoke = false;
     float smokeAlphaGamma   = 0.70f;
@@ -98,7 +103,7 @@ struct Settings {
     int   smoke3DSliceIndex = 0;
     int   smoke3DDebugField = 0;   // 0=smoke,1=temp,2=pressure,3=divergence,4=speed
     int   smoke3DPressureIters = 120;
-    int   smoke3DPressureSolverMode = 0; // 0=RBGS, 1=Jacobi
+    int   smoke3DPressureSolverMode = 0; // 0=Multigrid, 1=RBGS, 2=Jacobi
     float smoke3DPressureOmega = 1.70f;
     float smoke3DBuoyancyScale = 1.0f;
     float smoke3DGravity = 9.81f;
@@ -130,7 +135,7 @@ struct Settings {
     int   water3DSliceIndex = 0;
     int   water3DDebugField = 0;   // 0=water,1=pressure,2=divergence,3=speed
     int   water3DPressureIters = 200;
-    int   water3DPressureSolverMode = 0; // 0=RBGS, 1=Jacobi
+    int   water3DPressureSolverMode = 0; // 0=Multigrid, 1=RBGS, 2=Jacobi
     bool  water3DUseAPIC = true;
     float water3DFlipBlend = 0.10f;
     float water3DPressureOmega = 1.70f;
@@ -159,6 +164,7 @@ struct Actions {
     bool applySmoke3DGridRequested = false;
     bool resetWater3DRequested = false;
     bool applyWater3DGridRequested = false;
+    bool dropWaterTextRequested = false;
 };
 
 void BuildRenderSettings(const Settings& ui,
@@ -183,5 +189,7 @@ Actions DrawAll(MAC2D& sim,
 
 bool ConsumeSaveLayoutRequest();
 bool ConsumeResetLayoutRequest();
+
+void ApplyViziorTheme(int themeMode = 0);
 
 }

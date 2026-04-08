@@ -120,6 +120,46 @@ void MAC2D::addSolidCircle(float cx, float cy, float r) {
     invalidatePressureMatrix();
 }
 
+void MAC2D::addSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH) {
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int mi = (int)((float)i / (float)nx * (float)maskW);
+            int mj = (int)((float)j / (float)ny * (float)maskH);
+            mi = std::min(mi, maskW - 1);
+            mj = std::min(mj, maskH - 1);
+
+            if (textMask[(size_t)(mi + maskW * mj)]) {
+                solid[idxP(i, j)] = 1;
+                smoke[idxP(i, j)] = 0.0f;
+                temp[idxP(i, j)]  = 0.0f;
+                age[idxP(i, j)]   = 0.0f;
+            }
+        }
+    }
+
+    syncSolidsToFluidAndFaces();
+    invalidatePressureMatrix();
+}
+
+
+void MAC2D::removeSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH) {
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            int mi = (int)((float)i / (float)nx * (float)maskW);
+            int mj = (int)((float)j / (float)ny * (float)maskH);
+            mi = std::min(mi, maskW - 1);
+            mj = std::min(mj, maskH - 1);
+
+            if (textMask[(size_t)(mi + maskW * mj)]) {
+                solid[idxP(i, j)] = 0;
+            }
+        }
+    }
+
+    syncSolidsToFluidAndFaces();
+    invalidatePressureMatrix();
+}
+
 void MAC2D::step(float vortEps) {
     printf("[step] openTop=%d\n", (int)getOpenTop());
     // Velocity BC only (don’t inject scalars here)

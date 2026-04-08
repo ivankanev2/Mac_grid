@@ -14,6 +14,8 @@ struct MAC2D : public MACGridCore {
     void step(float vortEps);
 
     void addSolidCircle(float cx, float cy, float r);
+    void addSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH);
+    void removeSolidText(const std::vector<uint8_t>& textMask, int maskW, int maskH);
     void addSmokeSource(float cx, float cy, float radius, float amount);
     void addHeatSource(float cx, float cy, float radius, float amount);
     void updateAge(float dtLocal);

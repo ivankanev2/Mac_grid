@@ -103,6 +103,183 @@ static int  g_selectedStat = STAT_PRES_MS;
 static bool g_recordStats  = true;
 static std::vector<float> g_plotScratch;
 
+static bool g_builtDefaultLayout = false;
+
+static constexpr const char* kWinHub        = "Vizior Hub";
+static constexpr const char* kWinInspector  = "Inspector";
+static constexpr const char* kWinTelemetry  = "Telemetry";
+static constexpr const char* kWinSmoke2D    = "Smoke 2D Viewport";
+static constexpr const char* kWinWater2D    = "Water 2D Viewport";
+static constexpr const char* kWinSmoke3D    = "Smoke 3D Viewport";
+static constexpr const char* kWinWater3D    = "Water 3D Viewport";
+static constexpr const char* kWinCombined   = "Coupled Viewport";
+
+static constexpr int kThemeDark = 0;
+static constexpr int kThemeLight = 1;
+static int g_themeMode = kThemeDark;
+
+static ImVec4 kVizBg0;
+static ImVec4 kVizBg1;
+static ImVec4 kVizBg2;
+static ImVec4 kVizBg3;
+static ImVec4 kVizBorder;
+static ImVec4 kVizText;
+static ImVec4 kVizTextDim;
+static ImVec4 kVizAccent;
+static ImVec4 kVizAccent2;
+static ImVec4 kVizWhite;
+static ImVec4 kVizCard;
+static ImVec4 kVizChrome;
+
+static constexpr ImVec4 kVizLogoRed      = ImVec4(232.0f / 255.0f, 29.0f / 255.0f, 47.0f / 255.0f, 1.0f);
+static constexpr ImVec4 kVizLogoLightBg  = ImVec4(250.0f / 255.0f, 250.0f / 255.0f, 249.0f / 255.0f, 1.0f);
+static constexpr ImVec4 kVizLogoDarkBg   = ImVec4( 23.0f / 255.0f,  27.0f / 255.0f,  31.0f / 255.0f, 1.0f);
+
+static ImVec4 WithAlpha(ImVec4 c, float a) {
+    c.w = a;
+    return c;
+}
+
+static bool IsDarkTheme() {
+    return g_themeMode == kThemeDark;
+}
+
+static void SetPaletteDark() {
+    kVizBg0     = ImVec4(0.055f, 0.066f, 0.078f, 1.0f);
+    kVizBg1     = ImVec4(0.073f, 0.086f, 0.102f, 1.0f);
+    kVizBg2     = ImVec4(0.094f, 0.110f, 0.129f, 1.0f);
+    kVizBg3     = ImVec4(0.128f, 0.149f, 0.176f, 1.0f);
+    kVizBorder  = ImVec4(0.185f, 0.222f, 0.258f, 1.0f);
+    kVizText    = ImVec4(0.960f, 0.964f, 0.968f, 1.0f);
+    kVizTextDim = ImVec4(0.620f, 0.665f, 0.720f, 1.0f);
+    kVizAccent  = kVizLogoRed;
+    kVizAccent2 = ImVec4(1.0f, 0.320f, 0.400f, 1.0f);
+    kVizWhite   = ImVec4(0.985f, 0.988f, 0.992f, 1.0f);
+    kVizCard    = ImVec4(0.090f, 0.106f, 0.122f, 0.98f);
+    kVizChrome  = ImVec4(0.065f, 0.074f, 0.086f, 0.94f);
+}
+
+static void SetPaletteLight() {
+    kVizBg0     = ImVec4(0.948f, 0.944f, 0.937f, 1.0f);
+    kVizBg1     = ImVec4(0.980f, 0.980f, 0.976f, 1.0f);
+    kVizBg2     = ImVec4(0.992f, 0.992f, 0.988f, 1.0f);
+    kVizBg3     = ImVec4(0.905f, 0.912f, 0.922f, 1.0f);
+    kVizBorder  = ImVec4(0.825f, 0.845f, 0.870f, 1.0f);
+    kVizText    = ImVec4(0.090f, 0.106f, 0.122f, 1.0f);
+    kVizTextDim = ImVec4(0.420f, 0.470f, 0.525f, 1.0f);
+    kVizAccent  = kVizLogoRed;
+    kVizAccent2 = ImVec4(1.0f, 0.280f, 0.360f, 1.0f);
+    kVizWhite   = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    kVizCard    = ImVec4(1.0f, 1.0f, 1.0f, 0.98f);
+    kVizChrome  = ImVec4(0.988f, 0.988f, 0.982f, 0.96f);
+}
+
+static ImU32 VizColorU32(const ImVec4& c, float alphaMul = 1.0f) {
+    return ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, c.w * alphaMul));
+}
+
+static const char* PressureSolverLabel3D(int mode) {
+    switch (mode) {
+        case 0: return "Multigrid";
+        case 1: return "RBGS";
+        case 2: return "Jacobi";
+        default: return "Unknown";
+    }
+}
+
+void ApplyViziorTheme(int themeMode)
+{
+    g_themeMode = (themeMode == kThemeLight) ? kThemeLight : kThemeDark;
+    if (IsDarkTheme()) SetPaletteDark();
+    else SetPaletteLight();
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = ImGuiStyle{};
+    style.WindowPadding = ImVec2(14.0f, 12.0f);
+    style.FramePadding = ImVec2(12.0f, 8.0f);
+    style.CellPadding = ImVec2(8.0f, 7.0f);
+    style.ItemSpacing = ImVec2(10.0f, 10.0f);
+    style.ItemInnerSpacing = ImVec2(7.0f, 6.0f);
+    style.TouchExtraPadding = ImVec2(0.0f, 0.0f);
+    style.IndentSpacing = 20.0f;
+    style.ScrollbarSize = 14.0f;
+    style.GrabMinSize = 12.0f;
+    style.WindowRounding = 12.0f;
+    style.ChildRounding = 12.0f;
+    style.FrameRounding = 9.0f;
+    style.PopupRounding = 10.0f;
+    style.ScrollbarRounding = 10.0f;
+    style.GrabRounding = 9.0f;
+    style.TabRounding = 9.0f;
+    style.WindowBorderSize = 1.0f;
+    style.ChildBorderSize = 1.0f;
+    style.PopupBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.TabBorderSize = 0.0f;
+    style.DisabledAlpha = 0.70f;
+    style.WindowMenuButtonPosition = ImGuiDir_None;
+    style.ColorButtonPosition = ImGuiDir_Right;
+    style.AntiAliasedFill = true;
+    style.AntiAliasedLines = true;
+    style.AntiAliasedLinesUseTex = true;
+    style.CurveTessellationTol = 1.10f;
+    style.CircleTessellationMaxError = 0.18f;
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_Text]                 = kVizText;
+    colors[ImGuiCol_TextDisabled]         = kVizTextDim;
+    colors[ImGuiCol_WindowBg]             = kVizBg0;
+    colors[ImGuiCol_ChildBg]              = kVizBg1;
+    colors[ImGuiCol_PopupBg]              = WithAlpha(kVizBg1, 0.98f);
+    colors[ImGuiCol_Border]               = WithAlpha(kVizBorder, 0.88f);
+    colors[ImGuiCol_BorderShadow]         = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    colors[ImGuiCol_FrameBg]              = IsDarkTheme() ? WithAlpha(kVizBg2, 0.92f) : WithAlpha(kVizBg3, 0.42f);
+    colors[ImGuiCol_FrameBgHovered]       = WithAlpha(kVizAccent, IsDarkTheme() ? 0.16f : 0.14f);
+    colors[ImGuiCol_FrameBgActive]        = WithAlpha(kVizAccent, IsDarkTheme() ? 0.24f : 0.18f);
+    colors[ImGuiCol_TitleBg]              = kVizBg0;
+    colors[ImGuiCol_TitleBgActive]        = kVizBg1;
+    colors[ImGuiCol_TitleBgCollapsed]     = kVizBg0;
+    colors[ImGuiCol_MenuBarBg]            = IsDarkTheme() ? ImVec4(0.060f, 0.070f, 0.082f, 1.0f)
+                                                           : ImVec4(0.975f, 0.975f, 0.970f, 1.0f);
+    colors[ImGuiCol_ScrollbarBg]          = WithAlpha(kVizBg0, 0.92f);
+    colors[ImGuiCol_ScrollbarGrab]        = IsDarkTheme() ? kVizBg3 : ImVec4(0.810f, 0.830f, 0.850f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = WithAlpha(kVizAccent, 0.50f);
+    colors[ImGuiCol_ScrollbarGrabActive]  = kVizAccent;
+    colors[ImGuiCol_CheckMark]            = kVizAccent;
+    colors[ImGuiCol_SliderGrab]           = kVizAccent;
+    colors[ImGuiCol_SliderGrabActive]     = kVizAccent2;
+    colors[ImGuiCol_Button]               = WithAlpha(kVizAccent, IsDarkTheme() ? 0.18f : 0.12f);
+    colors[ImGuiCol_ButtonHovered]        = WithAlpha(kVizAccent, IsDarkTheme() ? 0.30f : 0.22f);
+    colors[ImGuiCol_ButtonActive]         = WithAlpha(kVizAccent2, IsDarkTheme() ? 0.38f : 0.28f);
+    colors[ImGuiCol_Header]               = WithAlpha(kVizAccent, IsDarkTheme() ? 0.14f : 0.12f);
+    colors[ImGuiCol_HeaderHovered]        = WithAlpha(kVizAccent, IsDarkTheme() ? 0.24f : 0.18f);
+    colors[ImGuiCol_HeaderActive]         = WithAlpha(kVizAccent2, IsDarkTheme() ? 0.32f : 0.22f);
+    colors[ImGuiCol_Separator]            = WithAlpha(kVizBorder, 0.90f);
+    colors[ImGuiCol_SeparatorHovered]     = WithAlpha(kVizAccent, 0.38f);
+    colors[ImGuiCol_SeparatorActive]      = kVizAccent;
+    colors[ImGuiCol_ResizeGrip]           = WithAlpha(kVizAccent, 0.14f);
+    colors[ImGuiCol_ResizeGripHovered]    = WithAlpha(kVizAccent, 0.30f);
+    colors[ImGuiCol_ResizeGripActive]     = WithAlpha(kVizAccent2, 0.42f);
+    colors[ImGuiCol_Tab]                  = IsDarkTheme() ? kVizBg1 : WithAlpha(kVizBg3, 0.35f);
+    colors[ImGuiCol_TabHovered]           = WithAlpha(kVizAccent, 0.22f);
+    colors[ImGuiCol_TabSelected]          = WithAlpha(kVizAccent, IsDarkTheme() ? 0.24f : 0.18f);
+    colors[ImGuiCol_TabDimmed]            = kVizBg0;
+    colors[ImGuiCol_TabDimmedSelected]    = IsDarkTheme() ? kVizBg2 : kVizBg3;
+    colors[ImGuiCol_DockingPreview]       = WithAlpha(kVizAccent, 0.70f);
+    colors[ImGuiCol_DockingEmptyBg]       = kVizBg0;
+    colors[ImGuiCol_PlotLines]            = kVizAccent;
+    colors[ImGuiCol_PlotLinesHovered]     = kVizAccent2;
+    colors[ImGuiCol_PlotHistogram]        = kVizAccent;
+    colors[ImGuiCol_PlotHistogramHovered] = kVizAccent2;
+    colors[ImGuiCol_TableHeaderBg]        = IsDarkTheme() ? kVizBg2 : kVizBg3;
+    colors[ImGuiCol_TableBorderStrong]    = kVizBorder;
+    colors[ImGuiCol_TableBorderLight]     = WithAlpha(kVizBorder, 0.50f);
+    colors[ImGuiCol_TableRowBg]           = WithAlpha(kVizBg1, 0.18f);
+    colors[ImGuiCol_TableRowBgAlt]        = WithAlpha(kVizBg2, 0.16f);
+    colors[ImGuiCol_TextSelectedBg]       = WithAlpha(kVizAccent, 0.20f);
+    colors[ImGuiCol_DragDropTarget]       = kVizAccent2;
+    colors[ImGuiCol_NavHighlight]         = kVizAccent;
+}
 
 bool ConsumeSaveLayoutRequest() {
     bool v = g_requestSaveLayout;
@@ -116,13 +293,169 @@ bool ConsumeResetLayoutRequest() {
     return v;
 }
 
+static bool DrawSegmentedToggle(const char* label, bool active) {
+    const ImVec4 fg = active ? (IsDarkTheme() ? kVizWhite : kVizWhite) : kVizText;
+    ImGui::PushStyleColor(ImGuiCol_Button, active ? WithAlpha(kVizAccent, IsDarkTheme() ? 0.86f : 0.82f)
+                                                  : (IsDarkTheme() ? kVizBg2 : WithAlpha(kVizBg3, 0.65f)));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? kVizAccent2 : WithAlpha(kVizAccent, 0.18f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, active ? kVizAccent2 : WithAlpha(kVizAccent2, 0.24f));
+    ImGui::PushStyleColor(ImGuiCol_Text, fg);
+    const bool clicked = ImGui::Button(label);
+    ImGui::PopStyleColor(4);
+    return clicked;
+}
 
+static void DrawViziorMark(ImDrawList* dl,
+                           ImVec2 center,
+                           float size,
+                           float alphaMul = 1.0f)
+{
+    const float radius = size * 0.48f;
+    const ImU32 circleFill = VizColorU32(IsDarkTheme() ? kVizLogoDarkBg : kVizLogoLightBg, alphaMul);
+    const ImU32 circleBorder = VizColorU32(IsDarkTheme() ? WithAlpha(kVizLogoDarkBg, 0.98f)
+                                                         : kVizLogoRed, alphaMul);
+    const ImU32 accent = VizColorU32(kVizLogoRed, alphaMul);
+    const ImU32 innerCut = VizColorU32(IsDarkTheme() ? kVizLogoDarkBg : kVizLogoLightBg, alphaMul);
+
+    dl->AddCircleFilled(center, radius, circleFill, 112);
+    if (IsDarkTheme()) {
+        dl->AddCircle(center, radius, VizColorU32(WithAlpha(kVizWhite, 0.05f), alphaMul), 112, std::max(1.0f, size * 0.014f));
+    } else {
+        dl->AddCircle(center, radius, circleBorder, 112, std::max(1.5f, size * 0.028f));
+    }
+
+    auto map = [&](float x, float y) {
+        return ImVec2(center.x + x * size, center.y + y * size);
+    };
+    auto stroke = [&](const ImVec2* pts, int count, ImU32 col, float thickness) {
+        dl->PathClear();
+        for (int i = 0; i < count; ++i) dl->PathLineTo(pts[i]);
+        dl->PathStroke(col, 0, thickness);
+    };
+
+    const ImVec2 serifL[3] = { map(-0.30f, -0.18f), map(-0.18f, -0.18f), map(-0.13f, -0.13f) };
+    const ImVec2 serifR[3] = { map( 0.30f, -0.18f), map( 0.18f, -0.18f), map( 0.13f, -0.13f) };
+    const ImVec2 outerPath[3] = { map(-0.20f, -0.15f), map(0.00f, 0.26f), map(0.20f, -0.15f) };
+    const ImVec2 innerCutPath[3] = { map(-0.12f, -0.11f), map(0.00f, 0.15f), map(0.12f, -0.11f) };
+    const ImVec2 innerCorePath[3] = { map(-0.06f, -0.08f), map(0.00f, 0.04f), map(0.06f, -0.08f) };
+
+    const float outerW = std::max(2.0f, size * 0.140f);
+    const float cutW = std::max(1.0f, size * 0.090f);
+    const float coreW = std::max(1.0f, size * 0.040f);
+
+    stroke(serifL, 3, accent, std::max(1.0f, size * 0.080f));
+    stroke(serifR, 3, accent, std::max(1.0f, size * 0.080f));
+    stroke(outerPath, 3, accent, outerW);
+
+    stroke(serifL, 3, innerCut, std::max(1.0f, size * 0.045f));
+    stroke(serifR, 3, innerCut, std::max(1.0f, size * 0.045f));
+    stroke(innerCutPath, 3, innerCut, cutW);
+
+    stroke(innerCorePath, 3, accent, coreW);
+}
+
+static void DrawInlineTag(const char* label,
+                          const ImVec4& bg,
+                          const ImVec4* fgOverride = nullptr)
+{
+    const ImVec4 fg = fgOverride ? *fgOverride : (IsDarkTheme() ? kVizWhite : kVizText);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    const ImVec2 size(textSize.x + 18.0f, textSize.y + 8.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), VizColorU32(bg), 7.0f);
+    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), VizColorU32(WithAlpha(kVizBorder, 0.65f)), 7.0f);
+    dl->AddText(ImVec2(pos.x + 9.0f, pos.y + 4.0f), VizColorU32(fg), label);
+    ImGui::Dummy(size);
+}
+
+static void DrawViewportHeader(const Settings& ui,
+                               const char* title,
+                               const char* subtitle,
+                               const char* stateTag)
+{
+    if (!ui.showViewportHeaders) return;
+
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float width = std::max(160.0f, ImGui::GetContentRegionAvail().x);
+    const float height = 42.0f;
+    const ImVec2 p1(p0.x + width, p0.y + height);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0, p1, VizColorU32(kVizChrome), 10.0f);
+    dl->AddRect(p0, p1, VizColorU32(WithAlpha(kVizBorder, 0.85f)), 10.0f);
+    dl->AddRectFilled(ImVec2(p0.x, p0.y), ImVec2(p0.x + 4.0f, p1.y), VizColorU32(kVizAccent), 10.0f);
+    DrawViziorMark(dl, ImVec2(p0.x + 23.0f, p0.y + height * 0.5f), 22.0f);
+
+    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.03f,
+                ImVec2(p0.x + 42.0f, p0.y + 7.0f),
+                VizColorU32(kVizText), title);
+    if (subtitle && subtitle[0]) {
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.92f,
+                    ImVec2(p0.x + 42.0f, p0.y + 23.0f),
+                    VizColorU32(kVizTextDim), subtitle);
+    }
+
+    if (stateTag && stateTag[0]) {
+        const ImVec2 tagSize = ImGui::CalcTextSize(stateTag);
+        const ImVec2 tMin(p1.x - tagSize.x - 24.0f, p0.y + 9.0f);
+        const ImVec2 tMax(p1.x - 10.0f, p0.y + 9.0f + tagSize.y + 6.0f);
+        dl->AddRectFilled(tMin, tMax, VizColorU32(WithAlpha(kVizAccent, IsDarkTheme() ? 0.18f : 0.14f)), 7.0f);
+        dl->AddRect(tMin, tMax, VizColorU32(WithAlpha(kVizAccent, 0.35f)), 7.0f);
+        dl->AddText(ImVec2(tMin.x + 8.0f, tMin.y + 3.0f), VizColorU32(IsDarkTheme() ? kVizWhite : kVizText), stateTag);
+    }
+
+    ImGui::Dummy(ImVec2(width, height + 6.0f));
+}
+
+static void DrawViewportCanvasBackdrop(const ImVec2& p0, const ImVec2& size)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p1(p0.x + size.x, p0.y + size.y);
+    const ImVec4 bg = IsDarkTheme() ? ImVec4(0.045f, 0.052f, 0.061f, 1.0f)
+                                    : ImVec4(0.975f, 0.974f, 0.968f, 1.0f);
+    dl->AddRectFilled(p0, p1, VizColorU32(bg), 12.0f);
+    dl->AddRect(p0, p1, VizColorU32(WithAlpha(kVizBorder, 0.85f)), 12.0f, 0, 1.0f);
+    dl->AddLine(ImVec2(p0.x + 10.0f, p0.y + 10.0f), ImVec2(p0.x + 54.0f, p0.y + 10.0f), VizColorU32(WithAlpha(kVizAccent, 0.85f)), 2.0f);
+}
+
+static void BuildDefaultDockLayout(const ImGuiViewport* vp)
+{
+    ImGui::DockBuilderRemoveNode(dock_id);
+    ImGui::DockBuilderAddNode(dock_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dock_id, vp->Size);
+
+    ImGuiID dock_left = 0;
+    ImGuiID dock_main = dock_id;
+    ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Left, 0.24f, &dock_left, &dock_main);
+
+    ImGuiID dock_bottom = 0;
+    ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Down, 0.28f, &dock_bottom, &dock_main);
+
+    ImGuiID dock_hub = 0;
+    ImGuiID dock_inspector_stack = 0;
+    ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Up, 0.34f, &dock_hub, &dock_inspector_stack);
+
+    ImGuiID dock_inspector = 0;
+    ImGuiID dock_telemetry = 0;
+    ImGui::DockBuilderSplitNode(dock_inspector_stack, ImGuiDir_Down, 0.48f, &dock_telemetry, &dock_inspector);
+
+    ImGui::DockBuilderDockWindow(kWinHub, dock_hub);
+    ImGui::DockBuilderDockWindow(kWinInspector, dock_inspector);
+    ImGui::DockBuilderDockWindow(kWinTelemetry, dock_telemetry);
+
+    ImGui::DockBuilderDockWindow(kWinSmoke2D, dock_main);
+    ImGui::DockBuilderDockWindow(kWinWater2D, dock_main);
+    ImGui::DockBuilderDockWindow(kWinSmoke3D, dock_main);
+    ImGui::DockBuilderDockWindow(kWinWater3D, dock_main);
+    ImGui::DockBuilderDockWindow(kWinCombined, dock_bottom);
+
+    ImGui::DockBuilderFinish(dock_id);
+}
 
 // ------------------------------------------------------------
-// Dockspace root (everything can dock, and can be dragged out
-// into a new native OS window when Viewports are enabled). :)
+// Dockspace root
 // ------------------------------------------------------------
-static void BeginDockspaceRoot()
+static void BeginDockspaceRoot(Settings& ui)
 {
     ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDocking |
@@ -142,98 +475,79 @@ static void BeginDockspaceRoot()
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-
     ImGui::Begin("##EditorRoot", nullptr, flags);
     ImGui::PopStyleVar(2);
 
+    dock_id = ImGui::GetID("ViziorDockspace");
+
     if (g_requestResetLayout) {
         g_requestResetLayout = false;
-
         const char* ini = ImGui::GetIO().IniFilename;
-        if (ini) std::remove(ini);          // delete saved layout
-        ImGui::DockBuilderRemoveNode(dock_id); // nuke current dock node
-
-        // force rebuild default layout on next lines this frame
+        if (ini) std::remove(ini);
+        ImGui::DockBuilderRemoveNode(dock_id);
+        g_builtDefaultLayout = false;
     }
 
     if (ImGui::BeginMenuBar()) {
-        if (ImGui::Button("+")) ImGui::OpenPopup("AddPanelPopup");
-        ImGui::SameLine();
-        ImGui::TextUnformatted("Dock/Undock: drag tabs. Viewports lets tabs become OS windows.");
-        ImGui::EndMenuBar();
-    }
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::Button("Save Layout")) {
-            g_requestSaveLayout = true;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Reset Layout")) {
-            g_requestResetLayout = true;
-        }
+        const ImVec2 logoPos = ImGui::GetCursorScreenPos();
+        DrawViziorMark(ImGui::GetWindowDrawList(), ImVec2(logoPos.x + 11.0f, logoPos.y + 10.0f), 20.0f);
+        ImGui::Dummy(ImVec2(24.0f, 20.0f));
+        ImGui::SameLine(0.0f, 8.0f);
+        ImGui::TextUnformatted("Vizior");
+        ImGui::SameLine(0.0f, 14.0f);
 
+        if (ImGui::Button("Save Layout")) g_requestSaveLayout = true;
         ImGui::SameLine();
-        ImGui::TextUnformatted("Drag tabs to dock. Save Layout writes imgui.ini.");
+        if (ImGui::Button("Reset Layout")) g_requestResetLayout = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Panels")) ImGui::OpenPopup("AddPanelPopup");
+        ImGui::SameLine(0.0f, 10.0f);
+        ImGui::TextDisabled("Theme");
+        ImGui::SameLine(0.0f, 6.0f);
+        if (DrawSegmentedToggle("Dark##TopTheme", ui.themeMode == kThemeDark)) ui.themeMode = kThemeDark;
+        ImGui::SameLine(0.0f, 4.0f);
+        if (DrawSegmentedToggle("Light##TopTheme", ui.themeMode == kThemeLight)) ui.themeMode = kThemeLight;
+
+        const char* tag = IsDarkTheme() ? "Fluid Research Engine | Dark" : "Fluid Research Engine | Light";
+        const float tagW = ImGui::CalcTextSize(tag).x;
+        const float availW = ImGui::GetContentRegionAvail().x;
+        if (availW > tagW + 8.0f) {
+            ImGui::SameLine(ImGui::GetCursorPosX() + availW - tagW);
+        } else {
+            ImGui::SameLine();
+        }
+        ImGui::TextDisabled("%s", tag);
         ImGui::EndMenuBar();
     }
 
     if (ImGui::BeginPopup("AddPanelPopup")) {
-        ImGui::TextUnformatted("Next step: add/remove panels dynamically here.");
+        ImGui::TextUnformatted("Workspace panels");
         ImGui::Separator();
-        ImGui::TextDisabled("For now, your panels are:");
-        ImGui::BulletText("Controls");
-        ImGui::BulletText("Data / Debug");
-        ImGui::BulletText("Smoke View");
-        ImGui::BulletText("Water View");
-        ImGui::BulletText("Combined View");
-        ImGui::BulletText("Smoke 3D View");
-        ImGui::BulletText("Water 3D View");
+        ImGui::TextDisabled("Dock any tab anywhere to build your layout.");
+        ImGui::BulletText("%s", kWinHub);
+        ImGui::BulletText("%s", kWinInspector);
+        ImGui::BulletText("%s", kWinTelemetry);
+        ImGui::BulletText("%s", kWinSmoke2D);
+        ImGui::BulletText("%s", kWinWater2D);
+        ImGui::BulletText("%s", kWinCombined);
+        ImGui::BulletText("%s", kWinSmoke3D);
+        ImGui::BulletText("%s", kWinWater3D);
         ImGui::EndPopup();
     }
 
-    // assign to the global, do NOT redeclare locally
-    dock_id = ImGui::GetID("MyDockspace");
-    ImGui::DockSpace(dock_id, ImVec2(0,0), ImGuiDockNodeFlags_None);
+    ImGui::DockSpace(dock_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
-    // --- Default layout initialization (only if there's no saved imgui.ini) ---
-    static bool built_default_layout = false;
-    if (!built_default_layout)
-    {
-        built_default_layout = true;
-
-        // If ImGui is allowed to use an ini file, check if it exists.
-        bool ini_exists = false;
-        const char* ini = ImGui::GetIO().IniFilename;
-        if (ini != nullptr) {
-            // simple portable check without <filesystem>
-            FILE* f = std::fopen(ini, "r");
-            if (f) { ini_exists = true; std::fclose(f); }
+    if (!g_builtDefaultLayout) {
+        g_builtDefaultLayout = true;
+        bool iniExists = false;
+        if (const char* ini = ImGui::GetIO().IniFilename) {
+            if (FILE* f = std::fopen(ini, "r")) {
+                iniExists = true;
+                std::fclose(f);
+            }
         }
-
-        if (!ini_exists)
-        {
-            // Remove existing node (if any), add a fresh one and split it
-            ImGui::DockBuilderRemoveNode(dock_id); // clear any previous layout
-            ImGui::DockBuilderAddNode(dock_id, ImGuiDockNodeFlags_DockSpace);
-            ImGui::DockBuilderSetNodeSize(dock_id, vp->Size);
-
-            // Split into left (25%) and right (75%)
-            ImGuiID dock_left, dock_right;
-            ImGui::DockBuilderSplitNode(dock_id, ImGuiDir_Left, 0.25f, &dock_left, &dock_right);
-
-            // Split left into top (50%) and bottom (50%)
-            ImGuiID dock_left_top, dock_left_bottom;
-            ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Up, 0.5f, &dock_left_top, &dock_left_bottom);
-
-            // Dock windows (must match ImGui::Begin titles exactly)
-            ImGui::DockBuilderDockWindow("Controls",       dock_left_top);
-            ImGui::DockBuilderDockWindow("Data / Debug",   dock_left_bottom);
-            ImGui::DockBuilderDockWindow("Smoke View",     dock_right);
-            ImGui::DockBuilderDockWindow("Water View",     dock_right);
-            ImGui::DockBuilderDockWindow("Combined View",  dock_right);
-            ImGui::DockBuilderDockWindow("Smoke 3D View",  dock_right);
-            ImGui::DockBuilderDockWindow("Water 3D View",  dock_right);
-
-            ImGui::DockBuilderFinish(dock_id);
+        if (!iniExists) {
+            BuildDefaultDockLayout(vp);
         }
     }
 
@@ -258,6 +572,100 @@ static void drawArrow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col) {
     dl->AddLine(b, p1, col, 1.0f);
     dl->AddLine(b, p2, col, 1.0f);
 }
+
+static void DrawInspectorSectionLabel(const char* title, const char* subtitle = nullptr)
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, kVizText);
+    ImGui::TextUnformatted(title);
+    ImGui::PopStyleColor();
+    if (subtitle && subtitle[0]) {
+        ImGui::TextDisabled("%s", subtitle);
+    }
+    ImGui::Separator();
+}
+
+static void DrawViziorHub(MAC2D& sim,
+                          MACWater& water,
+                          MACWater3D& water3D,
+                          MACSmoke3D& smoke3D,
+                          Settings& ui,
+                          Actions& actions)
+{
+    ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
+    ImGui::Begin(kWinHub);
+
+    const ImVec2 heroMin = ImGui::GetCursorScreenPos();
+    const float heroW = std::max(160.0f, ImGui::GetContentRegionAvail().x);
+    const float heroH = 166.0f;
+    const ImVec2 heroMax(heroMin.x + heroW, heroMin.y + heroH);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(heroMin, heroMax, VizColorU32(kVizCard), 8.0f);
+    dl->AddRect(heroMin, heroMax, VizColorU32(ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.35f)), 8.0f);
+    dl->AddRectFilled(ImVec2(heroMin.x, heroMin.y), ImVec2(heroMin.x + 5.0f, heroMax.y), VizColorU32(kVizAccent2), 8.0f);
+
+    DrawViziorMark(dl,
+                   ImVec2(heroMin.x + 74.0f, heroMin.y + heroH * 0.50f),
+                   110.0f);
+
+    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 2.20f,
+                ImVec2(heroMin.x + 146.0f, heroMin.y + 34.0f),
+                VizColorU32(kVizText), "VIZIOR");
+    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.00f,
+                ImVec2(heroMin.x + 148.0f, heroMin.y + 74.0f),
+                VizColorU32(kVizTextDim), "Fluid Research Engine");
+    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.92f,
+                ImVec2(heroMin.x + 148.0f, heroMin.y + 98.0f),
+                VizColorU32(kVizTextDim), "Research workspace for smoke, water and 3D pressure experiments.");
+
+    ImGui::Dummy(ImVec2(heroW, heroH + 4.0f));
+
+    DrawInlineTag(ui.playing ? "SIM LIVE" : "SIM PAUSED",
+                  ui.playing ? ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.28f)
+                             : ImVec4(kVizBg3.x, kVizBg3.y, kVizBg3.z, 1.0f));
+    ImGui::SameLine(0.0f, 6.0f);
+    DrawInlineTag(ui.useSmoke3D ? "SMOKE 3D ON" : "SMOKE 3D OFF",
+                  ui.useSmoke3D ? ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.20f)
+                                : ImVec4(kVizBg2.x, kVizBg2.y, kVizBg2.z, 1.0f));
+    ImGui::SameLine(0.0f, 6.0f);
+    DrawInlineTag(ui.useWater3D ? "WATER 3D ON" : "WATER 3D OFF",
+                  ui.useWater3D ? ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.20f)
+                                : ImVec4(kVizBg2.x, kVizBg2.y, kVizBg2.z, 1.0f));
+
+    if (ImGui::Button(ui.playing ? "Pause Simulation" : "Run Simulation")) {
+        ui.playing = !ui.playing;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset All")) {
+        actions.resetRequested = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save Layout")) {
+        g_requestSaveLayout = true;
+    }
+
+    ImGui::Separator();
+    if (ImGui::BeginTable("HubMetrics", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("2D workspace");
+        ImGui::Text("%dx%d grid | dt %.4f", sim.nx, sim.ny, sim.dt);
+        ImGui::Text("Water particles: %zu", water.particles.size());
+
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("3D numerics");
+        ImGui::Text("Smoke: %s", PressureSolverLabel3D(ui.smoke3DPressureSolverMode));
+        ImGui::Text("Water: %s", PressureSolverLabel3D(ui.water3DPressureSolverMode));
+        ImGui::Text("Smoke active: %d | Water particles: %d", smoke3D.stats().activeCells, water3D.stats().particleCount);
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Workspace note");
+    ImGui::TextWrapped("Light and dark shells now share the Vizior red accent and your badge-style logo, while the physics and solver paths remain untouched.");
+
+    ImGui::End();
+}
+
 
 static inline float uAtCellCenter(const MAC2D& sim, int i, int j) {
     int i0 = std::max(0, std::min(i, sim.nx - 1));
@@ -435,6 +843,7 @@ void BuildRenderSettings(const Settings& ui,
     outSmoke.ageGray      = ui.ageGrayStrength;
     outSmoke.ageDarken    = ui.ageDarkenStrength;
     outSmoke.coreDark     = ui.coreDarkStrength;
+    outSmoke.themeMode    = ui.themeMode;
 
     outOverlay.showDiv   = ui.showDivOverlay;
     outOverlay.showVort  = ui.showVortOverlay;
@@ -448,6 +857,7 @@ void BuildWaterRenderSettings(const Settings& ui,
                               WaterRenderSettings& outWater)
 {
     outWater.alpha = ui.waterAlpha;
+    outWater.themeMode = ui.themeMode;
 }
 static Actions drawControls(MAC2D& sim,
                             MACWater& water,
@@ -458,271 +868,272 @@ static Actions drawControls(MAC2D& sim,
     Actions a;
 
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls");
+    ImGui::Begin(kWinInspector);
 
-    ImGui::Checkbox("Play", &ui.playing);
-    ImGui::Separator();
-
-    bool ot = sim.getOpenTop();
-    if (ImGui::Checkbox("Open top (outflow)", &ot)) sim.setOpenTop(ot);
-
-    bool open = sim.isValveOpen();
-    if (ImGui::Checkbox("Valve open", &open)) sim.setValveOpen(open);
-    ImGui::SameLine();
-    ImGui::Text("Valve: %s", sim.isValveOpen() ? "OPEN" : "CLOSED");
-
-    ImGui::SliderFloat("Inlet speed", &sim.inletSpeed, -3.0f, 3.0f);
-    ImGui::SliderFloat("Inlet smoke", &sim.inletSmoke, 0.0f, 1.0f);
-    ImGui::SliderFloat("Inlet temp",  &sim.inletTemp,  0.0f, 1.0f);
-
-    ImGui::Separator();
-    ImGui::Checkbox("Paint solid", &ui.paintSolid);
-    ImGui::SameLine();
-    ImGui::Checkbox("Erase", &ui.eraseSolid);
-
-    ImGui::Checkbox("Circle", &ui.circleMode);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Rect");
-
-    if (ImGui::Button("Reset Smoke")) {
-        a.resetRequested = true;
+    if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Appearance", "Theme, branding and viewport presentation.");
+        ImGui::TextDisabled("Theme");
+        if (DrawSegmentedToggle("Dark", ui.themeMode == kThemeDark)) ui.themeMode = kThemeDark;
+        ImGui::SameLine();
+        if (DrawSegmentedToggle("Light", ui.themeMode == kThemeLight)) ui.themeMode = kThemeLight;
+        ImGui::Checkbox("Viewport headers", &ui.showViewportHeaders);
+        ImGui::Checkbox("Viewport hints", &ui.showViewportHints);
+        ImGui::TextDisabled("Roboto is loaded at startup so text stays cleaner and less pixelated.");
     }
 
-    ImGui::SliderFloat("Brush radius", &ui.brushRadius, 0.01f, 0.20f);
-    ImGui::SliderFloat("Rect half-size", &ui.rectHalfSize, 0.01f, 0.30f);
-    ImGui::SliderFloat("View scale", &ui.viewScale, 1.0f, 12.0f);
+    if (ImGui::CollapsingHeader("Runtime", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Runtime", "Playback, global CFL stepping and primary 2D smoke controls.");
+        if (ImGui::Button(ui.playing ? "Pause" : "Play")) ui.playing = !ui.playing;
+        ImGui::SameLine();
+        if (ImGui::Button("Reset All Sims")) a.resetRequested = true;
 
-    ImGui::Separator();
-    ImGui::TextUnformatted("Water");
-    if (ImGui::Checkbox("Paint water", &ui.paintWater)) {
-        if (ui.paintWater) ui.eraseSolid = false;
-    }
-    ImGui::Checkbox("Show water view", &ui.showWaterView);
-    ImGui::Checkbox("Show water particles", &ui.showWaterParticles);
-    ImGui::SliderFloat("Water amount", &ui.waterAmount, 0.01f, 1.00f);
-    ImGui::SliderFloat("Water gravity", &ui.waterGravity, -20.0f, 20.0f);
-    ImGui::SliderFloat("Water dissipation", &ui.waterDissipation, 0.980f, 1.000f);
-    ImGui::SliderFloat("Water damping", &ui.waterVelDamping, 0.0f, 5.0f);
-    ImGui::Checkbox("Water open top", &ui.waterOpenTop);
-    ImGui::SliderFloat("Water alpha", &ui.waterAlpha, 0.0f, 1.0f);
+        bool ot = sim.getOpenTop();
+        if (ImGui::Checkbox("Open top (2D smoke outflow)", &ot)) sim.setOpenTop(ot);
 
-    ImGui::Separator();
-    ImGui::TextUnformatted("Smoke 3D");
-    ImGui::Checkbox("Run 3D smoke", &ui.useSmoke3D);
-    ImGui::Checkbox("Show 3D smoke view", &ui.showSmoke3DView);
-    ImGui::Checkbox("Paint 3D smoke", &ui.paintSmoke3D);
-    ImGui::Text("Backend: %s", smoke3D.stats().backendName);
-    ImGui::Text("Grid: %d x %d x %d", smoke3D.nx, smoke3D.ny, smoke3D.nz);
-    ImGui::Text("Active cells: %d   Max speed: %.3f", smoke3D.stats().activeCells, smoke3D.stats().maxSpeed);
-    ImGui::Text("Backend memory: %.2f MB", (double)smoke3D.stats().bytesAllocated / (1024.0 * 1024.0));
+        bool open = sim.isValveOpen();
+        if (ImGui::Checkbox("2D smoke valve open", &open)) sim.setValveOpen(open);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", sim.isValveOpen() ? "OPEN" : "CLOSED");
 
-    ImGui::SliderInt("Smoke 3D nx", &ui.smoke3DNX, 16, 160);
-    ImGui::SliderInt("Smoke 3D ny", &ui.smoke3DNY, 16, 160);
-    ImGui::SliderInt("Smoke 3D nz", &ui.smoke3DNZ, 16, 160);
-    if (ImGui::Button("Apply Smoke 3D grid")) {
-        a.applySmoke3DGridRequested = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset Smoke 3D")) {
-        a.resetSmoke3DRequested = true;
+        ImGui::Checkbox("Use MacCormack advection", &sim.useMacCormack);
+        ImGui::SliderFloat("View scale", &ui.viewScale, 1.0f, 12.0f);
+        ImGui::SliderFloat("CFL", &ui.cfl, 0.1f, 1.5f);
+        ImGui::SliderFloat("dt max", &ui.dtMax, 0.001f, 0.05f);
+        ImGui::SliderFloat("dt min", &ui.dtMin, 0.0001f, 0.01f);
+
+        ImGui::SliderFloat("2D inlet speed", &sim.inletSpeed, -3.0f, 3.0f);
+        ImGui::SliderFloat("2D inlet smoke", &sim.inletSmoke, 0.0f, 1.0f);
+        ImGui::SliderFloat("2D inlet temp", &sim.inletTemp, 0.0f, 1.0f);
+        ImGui::SliderFloat("Vorticity confinement", &ui.vortEps, 0.0f, 8.0f);
+        ImGui::SliderFloat("Smoke dissipation", &ui.smokeDissipation, 0.980f, 1.000f);
+        ImGui::SliderFloat("Temp dissipation", &ui.tempDissipation, 0.900f, 1.000f);
     }
 
-    {
-        const char* solverItems[] = { "RBGS", "Jacobi" };
-        ui.smoke3DPressureSolverMode = std::clamp(ui.smoke3DPressureSolverMode, 0, 1);
-        ImGui::Combo("Smoke 3D pressure solver", &ui.smoke3DPressureSolverMode, solverItems, 2);
-    }
-    ImGui::SliderInt("Smoke 3D pressure iters", &ui.smoke3DPressureIters, 20, 1200);
-    ImGui::SliderFloat("Smoke 3D pressure omega", &ui.smoke3DPressureOmega, 0.1f, 1.95f);
-    ImGui::SliderFloat("Smoke 3D buoyancy", &ui.smoke3DBuoyancyScale, 0.0f, 5.0f);
-    ImGui::SliderFloat("Smoke 3D gravity", &ui.smoke3DGravity, -20.0f, 20.0f);
-    ImGui::SliderFloat("Smoke 3D damping", &ui.smoke3DVelDamping, 0.0f, 5.0f);
-    ImGui::SliderFloat("Smoke 3D viscosity", &ui.smoke3DViscosity, 0.0f, 0.01f, "%.5f");
-    ImGui::SliderFloat("Smoke 3D smoke diffusion", &ui.smoke3DSmokeDiffusivity, 0.0f, 0.01f, "%.5f");
-    ImGui::SliderFloat("Smoke 3D temp diffusion", &ui.smoke3DTempDiffusivity, 0.0f, 0.01f, "%.5f");
-    ImGui::Checkbox("Smoke 3D open top", &ui.smoke3DOpenTop);
-    ImGui::SliderFloat("Smoke 3D source amount", &ui.smoke3DSourceAmount, 0.01f, 1.00f);
-    ImGui::SliderFloat("Smoke 3D heat amount", &ui.smoke3DHeatAmount, 0.0f, 2.0f);
-    ImGui::SliderFloat("Smoke 3D source vel X", &ui.smoke3DSourceVelX, -5.0f, 5.0f);
-    ImGui::SliderFloat("Smoke 3D source vel Y", &ui.smoke3DSourceVelY, -5.0f, 5.0f);
-    ImGui::SliderFloat("Smoke 3D source vel Z", &ui.smoke3DSourceVelZ, -5.0f, 5.0f);
+    if (ImGui::CollapsingHeader("Viewport overlays", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Viewport overlays", "Diagnostic overlays for 2D debug inspection.");
+        ImGui::Checkbox("Divergence heatmap", &ui.showDivOverlay);
+        ImGui::SliderFloat("Div scale", &ui.divScale, 0.1f, 50.0f);
+        ImGui::SliderFloat("Div alpha", &ui.divAlpha, 0.0f, 1.0f);
 
-    {
-        const char* viewItems[] = { "Volume", "Slice" };
+        ImGui::Checkbox("Velocity arrows", &ui.showVelOverlay);
+        ImGui::SliderInt("Velocity stride", &ui.velStride, 2, 16);
+        ImGui::SliderFloat("Velocity scale", &ui.velScale, 0.05f, 2.0f);
+
+        ImGui::Checkbox("Vorticity heatmap", &ui.showVortOverlay);
+        ImGui::SliderFloat("Vorticity scale", &ui.vortScale, 0.1f, 50.0f);
+        ImGui::SliderFloat("Vorticity alpha", &ui.vortAlpha, 0.0f, 1.0f);
+
+        ImGui::Checkbox("Color smoke by temperature/age", &ui.useColorSmoke);
+        ImGui::SliderFloat("Smoke alpha gamma", &ui.smokeAlphaGamma, 0.10f, 2.00f);
+        ImGui::SliderFloat("Smoke alpha scale", &ui.smokeAlphaScale, 0.0f, 2.0f);
+        ImGui::SliderFloat("Water alpha", &ui.waterAlpha, 0.0f, 1.0f);
+
+        if (ImGui::Button("Drop MBZUAI")) {
+        a.dropWaterTextRequested = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextColored(
+            water.waterHeld ? ImVec4(0.2f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.2f, 0.2f, 1.0f),
+            water.waterHeld ? "(Held)" : "(Falling)");
+    }
+
+    if (ImGui::CollapsingHeader("Painting & solids", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Painting & solids", "Sculpt obstacles and inject fluid directly in the active viewports.");
+        ImGui::Checkbox("Paint solid", &ui.paintSolid);
+        ImGui::SameLine();
+        ImGui::Checkbox("Erase solid", &ui.eraseSolid);
+        if (ui.eraseSolid) ui.paintWater = false;
+
+        ImGui::Checkbox("Circular brush", &ui.circleMode);
+        ImGui::SliderFloat("Brush radius", &ui.brushRadius, 0.01f, 0.20f);
+        ImGui::SliderFloat("Rectangle half-size", &ui.rectHalfSize, 0.01f, 0.30f);
+
+        if (ImGui::Checkbox("Paint water source", &ui.paintWater)) {
+            if (ui.paintWater) ui.eraseSolid = false;
+        }
+        ImGui::SliderFloat("Water source amount", &ui.waterAmount, 0.01f, 1.00f);
+        ImGui::Checkbox("Pipe authoring mode", &g_pipeMode);
+        ImGui::SliderFloat("Pipe radius", &sim.pipe.radius, 0.01f, 0.25f);
+        ImGui::SliderFloat("Pipe wall thickness", &sim.pipe.wall, 0.005f, 0.10f);
+
+        if (ImGui::Button("Clear 2D pipe")) {
+            sim.clearPipe();
+            sim.rebuildSolidsFromPipe(false);
+            sim.enforceBoundaries();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Rebuild 2D solids")) {
+            sim.rebuildSolidsFromPipe(false);
+            sim.enforceBoundaries();
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Water 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Water 2D", "Free-surface controls for the mature 2D reference solver.");
+        ImGui::Checkbox("Show 2D water viewport", &ui.showWaterView);
+        ImGui::Checkbox("Show 2D water particles", &ui.showWaterParticles);
+        ImGui::Checkbox("2D water open top", &ui.waterOpenTop);
+        ImGui::SliderFloat("2D water gravity", &ui.waterGravity, -20.0f, 20.0f);
+        ImGui::SliderFloat("2D water dissipation", &ui.waterDissipation, 0.980f, 1.000f);
+        ImGui::SliderFloat("2D water damping", &ui.waterVelDamping, 0.0f, 5.0f);
+        ImGui::TextDisabled("Particles: %zu | Max particle speed: %.3f", water.particles.size(), water.maxParticleSpeed());
+    }
+
+    if (ImGui::CollapsingHeader("Smoke 3D", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Smoke 3D", "Runtime, numerics, source authoring and volume/slice display.");
+        ImGui::Checkbox("Run 3D smoke", &ui.useSmoke3D);
+        ImGui::Checkbox("Show 3D smoke viewport", &ui.showSmoke3DView);
+        ImGui::Checkbox("Paint 3D smoke source", &ui.paintSmoke3D);
+        ImGui::TextDisabled("Backend: %s | Active cells: %d | Max speed: %.3f",
+                            smoke3D.stats().backendName,
+                            smoke3D.stats().activeCells,
+                            smoke3D.stats().maxSpeed);
+        ImGui::SliderInt("Smoke 3D nx", &ui.smoke3DNX, 16, 160);
+        ImGui::SliderInt("Smoke 3D ny", &ui.smoke3DNY, 16, 160);
+        ImGui::SliderInt("Smoke 3D nz", &ui.smoke3DNZ, 16, 160);
+        if (ImGui::Button("Apply Smoke 3D grid")) a.applySmoke3DGridRequested = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Reset Smoke 3D")) a.resetSmoke3DRequested = true;
+
+        const char* solverItems[] = { "Multigrid", "RBGS", "Jacobi" };
+        ui.smoke3DPressureSolverMode = std::clamp(ui.smoke3DPressureSolverMode, 0, 2);
+        ImGui::Combo("Smoke 3D pressure solver", &ui.smoke3DPressureSolverMode, solverItems, 3);
+        ImGui::SliderInt("Smoke 3D pressure iters", &ui.smoke3DPressureIters, 20, 1200);
+        ImGui::SliderFloat("Smoke 3D pressure omega", &ui.smoke3DPressureOmega, 0.1f, 1.95f);
+        ImGui::SliderFloat("Smoke 3D buoyancy", &ui.smoke3DBuoyancyScale, 0.0f, 5.0f);
+        ImGui::SliderFloat("Smoke 3D gravity", &ui.smoke3DGravity, 0.0f, 20.0f);
+        ImGui::SliderFloat("Smoke 3D velocity damping", &ui.smoke3DVelDamping, 0.0f, 5.0f);
+        ImGui::SliderFloat("Smoke 3D viscosity", &ui.smoke3DViscosity, 0.0f, 0.01f, "%.5f");
+        ImGui::SliderFloat("Smoke 3D smoke diffusivity", &ui.smoke3DSmokeDiffusivity, 0.0f, 0.01f, "%.5f");
+        ImGui::SliderFloat("Smoke 3D temp diffusivity", &ui.smoke3DTempDiffusivity, 0.0f, 0.01f, "%.5f");
+        ImGui::Checkbox("Smoke 3D open top", &ui.smoke3DOpenTop);
+        ImGui::SliderFloat("Smoke 3D source amount", &ui.smoke3DSourceAmount, 0.0f, 1.0f);
+        ImGui::SliderFloat("Smoke 3D heat amount", &ui.smoke3DHeatAmount, 0.0f, 1.0f);
+        ImGui::SliderFloat("Smoke 3D source vel X", &ui.smoke3DSourceVelX, -5.0f, 5.0f);
+        ImGui::SliderFloat("Smoke 3D source vel Y", &ui.smoke3DSourceVelY, -5.0f, 5.0f);
+        ImGui::SliderFloat("Smoke 3D source vel Z", &ui.smoke3DSourceVelZ, -5.0f, 5.0f);
+
+        const char* smokeViewItems[] = { "Volume", "Slice" };
         ui.smoke3DViewMode = std::clamp(ui.smoke3DViewMode, 0, 1);
-        ImGui::Combo("Smoke 3D view mode", &ui.smoke3DViewMode, viewItems, 2);
-    }
-
-    if (ui.smoke3DViewMode == 1) {
-        const char* axisItems[] = { "XY", "XZ", "YZ" };
-        ui.smoke3DSliceAxis = std::clamp(ui.smoke3DSliceAxis, 0, 2);
-        ImGui::Combo("Smoke 3D slice axis", &ui.smoke3DSliceAxis, axisItems, 3);
-
-        const int maxSlice = (ui.smoke3DSliceAxis == 0)
-            ? std::max(0, smoke3D.nz - 1)
-            : (ui.smoke3DSliceAxis == 1)
-                ? std::max(0, smoke3D.ny - 1)
-                : std::max(0, smoke3D.nx - 1);
-        ui.smoke3DSliceIndex = std::clamp(ui.smoke3DSliceIndex, 0, maxSlice);
-
-        {
+        ImGui::Combo("Smoke 3D view mode", &ui.smoke3DViewMode, smokeViewItems, 2);
+        if (ui.smoke3DViewMode == 1) {
+            const char* axisItems[] = { "XY", "XZ", "YZ" };
+            ui.smoke3DSliceAxis = std::clamp(ui.smoke3DSliceAxis, 0, 2);
+            ImGui::Combo("Smoke 3D slice axis", &ui.smoke3DSliceAxis, axisItems, 3);
+            const int maxSlice = (ui.smoke3DSliceAxis == 0)
+                ? std::max(0, smoke3D.nz - 1)
+                : (ui.smoke3DSliceAxis == 1)
+                    ? std::max(0, smoke3D.ny - 1)
+                    : std::max(0, smoke3D.nx - 1);
+            ui.smoke3DSliceIndex = std::clamp(ui.smoke3DSliceIndex, 0, maxSlice);
             const char* fieldItems[] = { "Smoke", "Temperature", "Pressure", "Divergence", "Speed" };
             ui.smoke3DDebugField = std::clamp(ui.smoke3DDebugField, 0, 4);
             ImGui::Combo("Smoke 3D debug field", &ui.smoke3DDebugField, fieldItems, 5);
+            ImGui::SliderInt("Smoke 3D slice index", &ui.smoke3DSliceIndex, 0, std::max(0, maxSlice));
+        } else {
+            ImGui::SliderFloat("Smoke 3D yaw", &ui.smoke3DViewYawDeg, -180.0f, 180.0f);
+            ImGui::SliderFloat("Smoke 3D pitch", &ui.smoke3DViewPitchDeg, -89.0f, 89.0f);
+            ImGui::SliderFloat("Smoke 3D zoom", &ui.smoke3DViewZoom, 0.35f, 3.5f);
+            if (ImGui::Button("Reset Smoke 3D view")) {
+                ui.smoke3DViewYawDeg = 35.0f;
+                ui.smoke3DViewPitchDeg = 18.0f;
+                ui.smoke3DViewZoom = 1.15f;
+            }
+            ImGui::SliderFloat("Smoke 3D density scale", &ui.smoke3DVolumeDensity, 0.2f, 8.0f);
+            ImGui::SliderFloat("Smoke 3D source depth", &ui.smoke3DSourceDepth, 0.0f, 1.0f);
         }
-        ImGui::SliderInt("Smoke 3D slice index", &ui.smoke3DSliceIndex, 0, std::max(0, maxSlice));
-    } else {
-        ImGui::SliderFloat("Smoke 3D yaw", &ui.smoke3DViewYawDeg, -180.0f, 180.0f);
-        ImGui::SliderFloat("Smoke 3D pitch", &ui.smoke3DViewPitchDeg, -89.0f, 89.0f);
-        ImGui::SliderFloat("Smoke 3D zoom", &ui.smoke3DViewZoom, 0.35f, 3.5f);
-        if (ImGui::Button("Reset Smoke 3D view")) {
-            ui.smoke3DViewYawDeg = 35.0f;
-            ui.smoke3DViewPitchDeg = 18.0f;
-            ui.smoke3DViewZoom = 1.15f;
-        }
-        ImGui::SliderFloat("Smoke 3D density scale", &ui.smoke3DVolumeDensity, 0.2f, 8.0f);
-        ImGui::SliderFloat("Smoke 3D source depth", &ui.smoke3DSourceDepth, 0.0f, 1.0f);
-        ImGui::TextDisabled("RMB drag orbit, mouse wheel zoom, LMB paint smoke source.");
     }
 
-    ImGui::Separator();
-    ImGui::TextUnformatted("Water 3D");
-    ImGui::Checkbox("Run 3D water", &ui.useWater3D);
-    ImGui::Checkbox("Show 3D water view", &ui.showWater3DView);
-    ImGui::Text("Backend: %s", water3D.stats().backendName);
-    ImGui::Text("CUDA runtime: %s", water3D.isCudaEnabled() ? "enabled" : "disabled");
-    ImGui::Text("Grid: %d x %d x %d", water3D.nx, water3D.ny, water3D.nz);
-    ImGui::Text("Particles: %d   Liquid cells: %d", water3D.stats().particleCount, water3D.stats().liquidCells);
-    ImGui::Text("Mass target/desired: %.0f / %.0f", water3D.stats().targetMass, water3D.stats().desiredMass);
-    ImGui::Text("Backend memory: %.2f MB", (double)water3D.stats().bytesAllocated / (1024.0 * 1024.0));
+    if (ImGui::CollapsingHeader("Water 3D", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Water 3D", "3D liquid path, APIC controls and multigrid-driven pressure tuning.");
+        ImGui::Checkbox("Run 3D water", &ui.useWater3D);
+        ImGui::Checkbox("Show 3D water viewport", &ui.showWater3DView);
+        ImGui::TextDisabled("Backend: %s | CUDA: %s", water3D.stats().backendName, water3D.isCudaEnabled() ? "enabled" : "disabled");
+        ImGui::TextDisabled("Particles: %d | Liquid cells: %d", water3D.stats().particleCount, water3D.stats().liquidCells);
 
-    ImGui::SliderInt("Water 3D nx", &ui.water3DNX, 16, 192);
-    ImGui::SliderInt("Water 3D ny", &ui.water3DNY, 16, 192);
-    ImGui::SliderInt("Water 3D nz", &ui.water3DNZ, 16, 192);
-    if (ImGui::Button("Apply Water 3D grid")) {
-        a.applyWater3DGridRequested = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset Water 3D")) {
-        a.resetWater3DRequested = true;
-    }
+        ImGui::SliderInt("Water 3D nx", &ui.water3DNX, 16, 192);
+        ImGui::SliderInt("Water 3D ny", &ui.water3DNY, 16, 192);
+        ImGui::SliderInt("Water 3D nz", &ui.water3DNZ, 16, 192);
+        if (ImGui::Button("Apply Water 3D grid")) a.applyWater3DGridRequested = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Reset Water 3D")) a.resetWater3DRequested = true;
 
-    {
-        const char* solverItems[] = { "RBGS", "Jacobi" };
-        ui.water3DPressureSolverMode = std::clamp(ui.water3DPressureSolverMode, 0, 1);
-        ImGui::Combo("Water 3D pressure solver", &ui.water3DPressureSolverMode, solverItems, 2);
-    }
-    ImGui::SliderInt("Water 3D pressure iters", &ui.water3DPressureIters, 20, 2000);
-    ImGui::SliderFloat("Water 3D pressure omega", &ui.water3DPressureOmega, 0.1f, 1.95f);
-    ImGui::Checkbox("Water 3D APIC", &ui.water3DUseAPIC);
-    ImGui::BeginDisabled(ui.water3DUseAPIC);
-    ImGui::SliderFloat("Water 3D FLIP blend", &ui.water3DFlipBlend, 0.0f, 1.0f);
-    ImGui::EndDisabled();
-    if (ui.water3DUseAPIC) {
-        ImGui::TextDisabled("FLIP blend is only used when APIC is off.");
-    }
-    ImGui::Checkbox("Water 3D volume preservation", &ui.water3DVolumePreserve);
-    ImGui::SliderFloat("Water 3D preserve strength", &ui.water3DVolumePreserveStrength, 0.0f, 0.25f);
-    ImGui::SliderInt("Water 3D relax iters", &ui.water3DRelaxIters, 0, 8);
-    ImGui::SliderFloat("Water 3D relax strength", &ui.water3DRelaxStrength, 0.0f, 1.0f);
+        const char* solverItems[] = { "Multigrid", "RBGS", "Jacobi" };
+        ui.water3DPressureSolverMode = std::clamp(ui.water3DPressureSolverMode, 0, 2);
+        ImGui::Combo("Water 3D pressure solver", &ui.water3DPressureSolverMode, solverItems, 3);
+        ImGui::SliderInt("Water 3D pressure iters", &ui.water3DPressureIters, 20, 2000);
+        ImGui::SliderFloat("Water 3D pressure omega", &ui.water3DPressureOmega, 0.1f, 1.95f);
+        ImGui::Checkbox("Water 3D APIC", &ui.water3DUseAPIC);
+        ImGui::BeginDisabled(ui.water3DUseAPIC);
+        ImGui::SliderFloat("Water 3D FLIP blend", &ui.water3DFlipBlend, 0.0f, 1.0f);
+        ImGui::EndDisabled();
+        ImGui::Checkbox("Water 3D volume preservation", &ui.water3DVolumePreserve);
+        ImGui::SliderFloat("Water 3D preserve strength", &ui.water3DVolumePreserveStrength, 0.0f, 0.25f);
+        ImGui::SliderInt("Water 3D relax iters", &ui.water3DRelaxIters, 0, 8);
+        ImGui::SliderFloat("Water 3D relax strength", &ui.water3DRelaxStrength, 0.0f, 1.0f);
+        ImGui::SliderFloat("Water 3D source vel X", &ui.water3DSourceVelX, -5.0f, 5.0f);
+        ImGui::SliderFloat("Water 3D source vel Y", &ui.water3DSourceVelY, -5.0f, 5.0f);
+        ImGui::SliderFloat("Water 3D source vel Z", &ui.water3DSourceVelZ, -5.0f, 5.0f);
 
-    ImGui::SliderFloat("Water 3D source vel X", &ui.water3DSourceVelX, -5.0f, 5.0f);
-    ImGui::SliderFloat("Water 3D source vel Y", &ui.water3DSourceVelY, -5.0f, 5.0f);
-    ImGui::SliderFloat("Water 3D source vel Z", &ui.water3DSourceVelZ, -5.0f, 5.0f);
-
-    {
-        const char* viewItems[] = { "Volume", "Slice", "Surface" };
+        const char* waterViewItems[] = { "Volume", "Slice", "Surface" };
         ui.water3DViewMode = std::clamp(ui.water3DViewMode, 0, 2);
-        ImGui::Combo("Water 3D view mode", &ui.water3DViewMode, viewItems, 3);
-    }
-
-    if (ui.water3DViewMode == 1) {
-        const char* axisItems[] = { "XY", "XZ", "YZ" };
-        ui.water3DSliceAxis = std::clamp(ui.water3DSliceAxis, 0, 2);
-        ImGui::Combo("Water 3D slice axis", &ui.water3DSliceAxis, axisItems, 3);
-
-        const int maxSlice = (ui.water3DSliceAxis == 0)
-            ? std::max(0, water3D.nz - 1)
-            : (ui.water3DSliceAxis == 1)
-                ? std::max(0, water3D.ny - 1)
-                : std::max(0, water3D.nx - 1);
-        ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
-
-        {
+        ImGui::Combo("Water 3D view mode", &ui.water3DViewMode, waterViewItems, 3);
+        if (ui.water3DViewMode == 1) {
+            const char* axisItems[] = { "XY", "XZ", "YZ" };
+            ui.water3DSliceAxis = std::clamp(ui.water3DSliceAxis, 0, 2);
+            ImGui::Combo("Water 3D slice axis", &ui.water3DSliceAxis, axisItems, 3);
+            const int maxSlice = (ui.water3DSliceAxis == 0)
+                ? std::max(0, water3D.nz - 1)
+                : (ui.water3DSliceAxis == 1)
+                    ? std::max(0, water3D.ny - 1)
+                    : std::max(0, water3D.nx - 1);
+            ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
             const char* fieldItems[] = { "Water", "Pressure", "Divergence", "Speed" };
             ui.water3DDebugField = std::clamp(ui.water3DDebugField, 0, 3);
             ImGui::Combo("Water 3D debug field", &ui.water3DDebugField, fieldItems, 4);
+            ImGui::SliderInt("Water 3D slice index", &ui.water3DSliceIndex, 0, std::max(0, maxSlice));
+        } else {
+            ImGui::SliderFloat("Water 3D yaw", &ui.water3DViewYawDeg, -180.0f, 180.0f);
+            ImGui::SliderFloat("Water 3D pitch", &ui.water3DViewPitchDeg, -89.0f, 89.0f);
+            ImGui::SliderFloat("Water 3D zoom", &ui.water3DViewZoom, 0.35f, 3.5f);
+            if (ImGui::Button("Reset Water 3D view")) {
+                ui.water3DViewYawDeg = 35.0f;
+                ui.water3DViewPitchDeg = 20.0f;
+                ui.water3DViewZoom = 1.15f;
+            }
+            ImGui::SliderFloat("Water 3D density scale", &ui.water3DVolumeDensity, 0.2f, 8.0f);
+            ImGui::SliderFloat("Water 3D surface threshold", &ui.water3DSurfaceThreshold, 0.01f, 0.75f);
+            ImGui::SliderFloat("Water 3D source depth", &ui.water3DSourceDepth, 0.0f, 1.0f);
         }
-        ImGui::SliderInt("Water 3D slice index", &ui.water3DSliceIndex, 0, std::max(0, maxSlice));
-    } else {
-        ImGui::SliderFloat("Water 3D yaw", &ui.water3DViewYawDeg, -180.0f, 180.0f);
-        ImGui::SliderFloat("Water 3D pitch", &ui.water3DViewPitchDeg, -89.0f, 89.0f);
-        ImGui::SliderFloat("Water 3D zoom", &ui.water3DViewZoom, 0.35f, 3.5f);
-        if (ImGui::Button("Reset Water 3D view")) {
-            ui.water3DViewYawDeg = 35.0f;
-            ui.water3DViewPitchDeg = 20.0f;
-            ui.water3DViewZoom = 1.15f;
+    }
+
+    if (ImGui::CollapsingHeader("Coupled & pipe workspace", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Coupled & pipe workspace", "Overlay water on smoke, inspect the coupled path, and author pipe sketches.");
+        ImGui::Checkbox("Show coupled viewport", &ui.showCombinedView);
+        ImGui::SliderFloat("Coupled water alpha", &ui.combinedWaterAlpha, 0.0f, 1.0f);
+        ImGui::Checkbox("Coupled particles", &ui.combinedShowParticles);
+
+        bool copen = coupled.isValveOpen();
+        if (ImGui::Checkbox("Coupled valve open", &copen)) coupled.setValveOpen(copen);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", coupled.isValveOpen() ? "OPEN" : "CLOSED");
+        ImGui::SliderFloat("Coupled inlet speed", &coupled.inletSpeed, -3.0f, 3.0f);
+        ImGui::SliderFloat("Coupled inlet smoke", &coupled.inletSmoke, 0.0f, 1.0f);
+        ImGui::SliderFloat("Coupled inlet temp", &coupled.inletTemp, 0.0f, 1.0f);
+
+        ImGui::Checkbox("Coupled pipe mode", &g_pipeMode);
+        ImGui::SliderFloat("Coupled pipe radius", &coupled.pipe.radius, 0.01f, 0.25f);
+        ImGui::SliderFloat("Coupled wall thickness", &coupled.pipe.wall, 0.005f, 0.10f);
+        if (ImGui::Button("Clear coupled pipe")) {
+            coupled.clearPipe();
+            coupled.rebuildSolidsFromPipe(false);
+            coupled.enforceBoundaries();
         }
-        ImGui::SliderFloat("Water 3D density scale", &ui.water3DVolumeDensity, 0.2f, 8.0f);
-        ImGui::SliderFloat("Water 3D surface threshold", &ui.water3DSurfaceThreshold, 0.01f, 0.75f);
-        ImGui::SliderFloat("Water 3D source depth", &ui.water3DSourceDepth, 0.0f, 1.0f);
-        ImGui::TextDisabled("RMB drag orbit, mouse wheel zoom, LMB paint source.");
-    }
-
-    ImGui::Checkbox("Combined View", &ui.showCombinedView);
-    ImGui::SliderFloat("Combined Water Alpha", &ui.combinedWaterAlpha, 0.0f, 1.0f);
-    ImGui::Checkbox("Combined Particles", &ui.combinedShowParticles);
-
-    ImGui::Separator();
-    ImGui::Checkbox("Pipe mode", &g_pipeMode);
-    ImGui::SliderFloat("Pipe radius", &sim.pipe.radius, 0.01f, 0.25f);
-    ImGui::SliderFloat("Wall thickness", &sim.pipe.wall, 0.005f, 0.10f);
-
-    if (ImGui::Button("Clear pipe")) {
-        sim.clearPipe();
-        sim.rebuildSolidsFromPipe(false);
-        sim.enforceBoundaries();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Rebuild solids")) {
-        sim.rebuildSolidsFromPipe(false);
-        sim.enforceBoundaries();
-    }
-
-    // ---------------- Coupled (Combined View) controls ----------------
-    ImGui::Separator();
-    ImGui::TextUnformatted("Combined View (Coupled Sim)");
-
-    // bool cot = coupled.getOpenTop();
-    // if (ImGui::Checkbox("Coupled open top (outflow)", &cot)) coupled.setOpenTop(cot);
-
-    ImGui::TextDisabled("Coupled open top (outflow): forced OFF for now");
-
-    bool copen = coupled.isValveOpen();
-    if (ImGui::Checkbox("Coupled valve open", &copen)) coupled.setValveOpen(copen);
-    ImGui::SameLine();
-    ImGui::Text("Valve: %s", coupled.isValveOpen() ? "OPEN" : "CLOSED");
-
-    ImGui::SliderFloat("Coupled inlet speed", &coupled.inletSpeed, -3.0f, 3.0f);
-    ImGui::SliderFloat("Coupled inlet smoke", &coupled.inletSmoke, 0.0f, 1.0f);
-    ImGui::SliderFloat("Coupled inlet temp",  &coupled.inletTemp,  0.0f, 1.0f);
-
-    // If you prefer, you can remove this checkbox and keep only the global one.
-    // Leaving it here is fine because it just toggles the same global g_pipeMode.
-    ImGui::Checkbox("Coupled pipe mode", &g_pipeMode);
-
-    ImGui::SliderFloat("Coupled pipe radius", &coupled.pipe.radius, 0.01f, 0.25f);
-    ImGui::SliderFloat("Coupled wall thickness", &coupled.pipe.wall, 0.005f, 0.10f);
-
-    if (ImGui::Button("Coupled clear pipe")) {
-        coupled.clearPipe();
-        coupled.rebuildSolidsFromPipe(false);
-        coupled.enforceBoundaries();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Coupled rebuild solids")) {
-        coupled.rebuildSolidsFromPipe(false);
-        coupled.enforceBoundaries();
+        ImGui::SameLine();
+        if (ImGui::Button("Rebuild coupled solids")) {
+            coupled.rebuildSolidsFromPipe(false);
+            coupled.enforceBoundaries();
+        }
     }
 
     ImGui::End();
@@ -736,11 +1147,14 @@ static void drawDebugTabs(MAC2D& sim,
                           Settings& ui,
                           Probe& probe) {
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Data / Debug");
+    ImGui::Begin(kWinTelemetry);
+
+    ImGui::TextDisabled("Pressure, divergence, advection and solver diagnostics.");
+    ImGui::Separator();
 
     if (ImGui::BeginTabBar("DebugTabs")) {
 
-        if (ImGui::BeginTabItem("Formulas")) {
+        if (ImGui::BeginTabItem("Numerics")) {
             ImGui::TextWrapped("MAC grid (staggered): u on vertical faces, v on horizontal faces, smoke/pressure at cell centers.");
             ImGui::Separator();
             ImGui::Text("Divergence (cell center):");
@@ -842,7 +1256,7 @@ static void drawDebugTabs(MAC2D& sim,
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Profiler")) {
+        if (ImGui::BeginTabItem("Timeline")) {
             const auto& st = sim.getStats();
 
             if (ImGui::Button(g_recordStats ? "Pause Recording" : "Resume Recording"))
@@ -941,7 +1355,7 @@ static void drawDebugTabs(MAC2D& sim,
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Smoke")) {
+        if (ImGui::BeginTabItem("Rendering")) {
             ImGui::TextUnformatted("Smoke Rendering");
             ImGui::Checkbox("Color by temperature / age", &ui.useColorSmoke);
             ImGui::SliderFloat("Alpha gamma", &ui.smokeAlphaGamma, 0.10f, 2.00f);
@@ -977,10 +1391,14 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
                                      int NX, int NY)
 {
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Smoke View");
+    ImGui::Begin(kWinSmoke2D);
 
-    float scale = ui.viewScale;
-    ImGui::Image((ImTextureID)(intptr_t)renderer.smokeTex(), ImVec2(NX * scale, NY * scale));
+    DrawViewportHeader(ui, "Smoke 2D", "MAC grid | multigrid | solids", ui.playing ? "LIVE" : "PAUSED");
+    const float scale = ui.viewScale;
+    const ImVec2 imageSize(NX * scale, NY * scale);
+    const ImVec2 imagePos = ImGui::GetCursorScreenPos();
+    DrawViewportCanvasBackdrop(imagePos, imageSize);
+    ImGui::Image((ImTextureID)(intptr_t)renderer.smokeTex(), imageSize);
 
     ImVec2 p0 = ImGui::GetItemRectMin();
     ImVec2 p1 = ImGui::GetItemRectMax();
@@ -993,7 +1411,7 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
                      p0.y + (1.0f - sim.pipe.y[k])   * (p1.y - p0.y));
             ImVec2 b(p0.x + sim.pipe.x[k+1] * (p1.x - p0.x),
                      p0.y + (1.0f - sim.pipe.y[k+1]) * (p1.y - p0.y));
-            dl->AddLine(a, b, IM_COL32(0, 150, 255, 220), 2.0f);
+            dl->AddLine(a, b, IM_COL32(225, 64, 72, 220), 2.0f);
         }
     }
 
@@ -1129,6 +1547,10 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
                 }
             }
         }
+    }
+
+    if (ui.showViewportHints) {
+        ImGui::TextDisabled("LMB paint solids or erase | Pipe mode uses click placement in-view.");
     }
 
     ImGui::End();
@@ -1314,6 +1736,48 @@ static bool makeWater3DPanelRay(const ImVec2& mouse,
     return true;
 }
 
+static void Handle3DNavigation(bool hovered,
+                               float& yawDeg,
+                               float& pitchDeg,
+                               float& zoom,
+                               float resetYaw,
+                               float resetPitch,
+                               float resetZoom)
+{
+    if (!hovered) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    const bool alt = io.KeyAlt;
+    const bool zoomDrag = (alt && ImGui::IsMouseDown(ImGuiMouseButton_Right)) ||
+                          (io.KeyCtrl && ImGui::IsMouseDown(ImGuiMouseButton_Middle));
+    const bool orbitDrag = ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                           ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
+                           (alt && ImGui::IsMouseDown(ImGuiMouseButton_Left));
+
+    if (zoomDrag) {
+        zoom = std::clamp(zoom * std::pow(1.014f, -io.MouseDelta.y), 0.35f, 3.5f);
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    } else if (orbitDrag) {
+        const float speed = io.KeyShift ? 0.68f : 0.36f;
+        yawDeg += io.MouseDelta.x * speed;
+        pitchDeg = std::clamp(pitchDeg - io.MouseDelta.y * speed, -89.0f, 89.0f);
+        if (yawDeg > 180.0f) yawDeg -= 360.0f;
+        if (yawDeg < -180.0f) yawDeg += 360.0f;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+
+    if (std::fabs(io.MouseWheel) > 1e-6f) {
+        zoom = std::clamp(zoom * std::pow(1.12f, io.MouseWheel), 0.35f, 3.5f);
+    }
+
+    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle) ||
+        (alt && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) {
+        yawDeg = resetYaw;
+        pitchDeg = resetPitch;
+        zoom = resetZoom;
+    }
+}
+
 static void drawWaterViewAndInteract(MACWater& water,
                                      SmokeRenderer& renderer,
                                      Settings& ui)
@@ -1321,12 +1785,16 @@ static void drawWaterViewAndInteract(MACWater& water,
     if (!ui.showWaterView) return;
 
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Water View");
+    ImGui::Begin(kWinWater2D);
 
+    DrawViewportHeader(ui, "Water 2D", "Particle / grid liquid", ui.paintWater ? "SOURCE" : "VIEW");
     const float scale = ui.viewScale;
     const int texW = std::max(1, renderer.width());
     const int texH = std::max(1, renderer.height());
-    ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), ImVec2(texW * scale, texH * scale));
+    const ImVec2 imageSize(texW * scale, texH * scale);
+    const ImVec2 imagePos = ImGui::GetCursorScreenPos();
+    DrawViewportCanvasBackdrop(imagePos, imageSize);
+    ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), imageSize);
 
     const ImVec2 p0 = ImGui::GetItemRectMin();
     const ImVec2 p1 = ImGui::GetItemRectMax();
@@ -1387,6 +1855,10 @@ static void drawWaterViewAndInteract(MACWater& water,
         }
     }
 
+    if (ui.showViewportHints) {
+        ImGui::TextDisabled("LMB inject water source directly into the 2D liquid domain.");
+    }
+
     ImGui::End();
 }
 
@@ -1397,12 +1869,16 @@ static void drawSmoke3DViewAndInteract(MACSmoke3D& smoke3D,
     if (!ui.showSmoke3DView) return;
 
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Smoke 3D View");
+    ImGui::Begin(kWinSmoke3D);
 
+    DrawViewportHeader(ui, "Smoke 3D", PressureSolverLabel3D(ui.smoke3DPressureSolverMode), ui.useSmoke3D ? "ACTIVE" : "IDLE");
     const float scale = ui.viewScale;
     const int texW = std::max(1, renderer.width());
     const int texH = std::max(1, renderer.height());
-    ImGui::Image((ImTextureID)(intptr_t)renderer.smokeTex(), ImVec2(texW * scale, texH * scale));
+    const ImVec2 imageSize(texW * scale, texH * scale);
+    const ImVec2 imagePos = ImGui::GetCursorScreenPos();
+    DrawViewportCanvasBackdrop(imagePos, imageSize);
+    ImGui::Image((ImTextureID)(intptr_t)renderer.smokeTex(), imageSize);
 
     const ImVec2 p0 = ImGui::GetItemRectMin();
     const ImVec2 p1 = ImGui::GetItemRectMax();
@@ -1413,20 +1889,23 @@ static void drawSmoke3DViewAndInteract(MACSmoke3D& smoke3D,
     const float domainX = std::max(1e-6f, smoke3D.nx * smoke3D.dx);
     const float domainY = std::max(1e-6f, smoke3D.ny * smoke3D.dx);
     const float domainZ = std::max(1e-6f, smoke3D.nz * smoke3D.dx);
+    const bool canPaintVolume = hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)
+                             && !ImGui::GetIO().KeyAlt
+                             && !ImGui::IsMouseDown(ImGuiMouseButton_Right)
+                             && !ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+    const bool canPaintSlice = hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)
+                            && !ImGui::GetIO().KeyAlt;
 
     if (!sliceMode) {
-        if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-            const ImVec2 d = ImGui::GetIO().MouseDelta;
-            ui.smoke3DViewYawDeg += d.x * 0.35f;
-            ui.smoke3DViewPitchDeg = std::clamp(ui.smoke3DViewPitchDeg - d.y * 0.35f, -89.0f, 89.0f);
-            if (ui.smoke3DViewYawDeg > 180.0f) ui.smoke3DViewYawDeg -= 360.0f;
-            if (ui.smoke3DViewYawDeg < -180.0f) ui.smoke3DViewYawDeg += 360.0f;
-        }
-        if (hovered && std::fabs(ImGui::GetIO().MouseWheel) > 1e-6f) {
-            ui.smoke3DViewZoom = std::clamp(ui.smoke3DViewZoom * std::pow(1.12f, ImGui::GetIO().MouseWheel), 0.35f, 3.5f);
-        }
+        Handle3DNavigation(hovered,
+                           ui.smoke3DViewYawDeg,
+                           ui.smoke3DViewPitchDeg,
+                           ui.smoke3DViewZoom,
+                           35.0f, 18.0f, 1.15f);
 
-        ImGui::TextDisabled("RMB drag orbit, mouse wheel zoom, LMB paint smoke source.");
+        if (ui.showViewportHints) {
+            ImGui::TextDisabled("MMB/RMB/Alt+LMB orbit | wheel or Alt+RMB zoom | double-click MMB reset | LMB paint.");
+        }
 
         const Water3DPanelBox box = makeWater3DPanelBox(
             smoke3D.nx,
@@ -1460,13 +1939,14 @@ static void drawSmoke3DViewAndInteract(MACSmoke3D& smoke3D,
                                                ui.smoke3DViewZoom,
                                                p0, p1, nullptr);
         }
-        const ImU32 edgeCol = IM_COL32(230, 240, 255, 180);
+        const ImU32 edgeCol = IsDarkTheme() ? IM_COL32(240, 242, 248, 200)
+                                            : IM_COL32(92, 102, 114, 182);
         for (int e = 0; e < 12; ++e) {
             dl->AddLine(proj[edges[e][0]], proj[edges[e][1]], edgeCol, 1.2f);
         }
         dl->PopClipRect();
 
-        if (hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (canPaintVolume) {
             Water3DViewVec3 rayOrigin{};
             Water3DViewVec3 rayDir{};
             if (makeWater3DPanelRay(ImGui::GetMousePos(), p0, p1, box,
@@ -1496,7 +1976,7 @@ static void drawSmoke3DViewAndInteract(MACSmoke3D& smoke3D,
             }
         }
     } else {
-        if (hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (canPaintSlice) {
             const ImVec2 m = ImGui::GetMousePos();
             const float u = (m.x - p0.x) / std::max(1e-6f, (p1.x - p0.x));
             const float v = (m.y - p0.y) / std::max(1e-6f, (p1.y - p0.y));
@@ -1535,6 +2015,10 @@ static void drawSmoke3DViewAndInteract(MACSmoke3D& smoke3D,
         }
     }
 
+    if (sliceMode && ui.showViewportHints) {
+        ImGui::TextDisabled("Slice paint: LMB inject smoke and heat | switch axis/index in Inspector.");
+    }
+
     ImGui::End();
 }
 
@@ -1545,12 +2029,16 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
     if (!ui.showWater3DView) return;
 
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Water 3D View");
+    ImGui::Begin(kWinWater3D);
 
+    DrawViewportHeader(ui, "Water 3D", PressureSolverLabel3D(ui.water3DPressureSolverMode), ui.useWater3D ? "ACTIVE" : "IDLE");
     const float scale = ui.viewScale;
     const int texW = std::max(1, renderer.width());
     const int texH = std::max(1, renderer.height());
-    ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), ImVec2(texW * scale, texH * scale));
+    const ImVec2 imageSize(texW * scale, texH * scale);
+    const ImVec2 imagePos = ImGui::GetCursorScreenPos();
+    DrawViewportCanvasBackdrop(imagePos, imageSize);
+    ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), imageSize);
 
     const ImVec2 p0 = ImGui::GetItemRectMin();
     const ImVec2 p1 = ImGui::GetItemRectMax();
@@ -1563,21 +2051,23 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
     const float domainZ = std::max(1e-6f, water3D.nz * water3D.dx);
 
     if (!sliceMode) {
-        if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-            const ImVec2 d = ImGui::GetIO().MouseDelta;
-            ui.water3DViewYawDeg += d.x * 0.35f;
-            ui.water3DViewPitchDeg = std::clamp(ui.water3DViewPitchDeg - d.y * 0.35f, -89.0f, 89.0f);
-            if (ui.water3DViewYawDeg > 180.0f) ui.water3DViewYawDeg -= 360.0f;
-            if (ui.water3DViewYawDeg < -180.0f) ui.water3DViewYawDeg += 360.0f;
-        }
-        if (hovered && std::fabs(ImGui::GetIO().MouseWheel) > 1e-6f) {
-            ui.water3DViewZoom = std::clamp(ui.water3DViewZoom * std::pow(1.12f, ImGui::GetIO().MouseWheel), 0.35f, 3.5f);
-        }
+        Handle3DNavigation(hovered,
+                           ui.water3DViewYawDeg,
+                           ui.water3DViewPitchDeg,
+                           ui.water3DViewZoom,
+                           35.0f,
+                           20.0f,
+                           1.15f);
     }
 
-    if (!sliceMode) {
-        ImGui::TextDisabled("RMB drag orbit, mouse wheel zoom, LMB paint source.");
+    const bool canPaintVolume = hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                                !ImGui::GetIO().KeyAlt &&
+                                !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
+                                !ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+    const bool canPaintSlice = hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                               !ImGui::GetIO().KeyAlt;
 
+    if (!sliceMode) {
         const Water3DPanelBox box = makeWater3DPanelBox(
             water3D.nx,
             water3D.ny,
@@ -1610,7 +2100,8 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
                                                ui.water3DViewZoom,
                                                p0, p1, nullptr);
         }
-        const ImU32 edgeCol = IM_COL32(230, 240, 255, 210);
+        const ImU32 edgeCol = IsDarkTheme() ? IM_COL32(242, 244, 248, 208)
+                                            : IM_COL32(92, 102, 114, 185);
         for (int e = 0; e < 12; ++e) {
             dl->AddLine(proj[edges[e][0]], proj[edges[e][1]], edgeCol, 1.35f);
         }
@@ -1646,7 +2137,7 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
 
         dl->PopClipRect();
 
-        if (hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (canPaintVolume) {
             Water3DViewVec3 rayOrigin{};
             Water3DViewVec3 rayDir{};
             if (makeWater3DPanelRay(ImGui::GetMousePos(), p0, p1, box,
@@ -1723,7 +2214,7 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
             dl->PopClipRect();
         }
 
-        if (hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (canPaintSlice) {
             const ImVec2 m = ImGui::GetMousePos();
             const float u = (m.x - p0.x) / std::max(1e-6f, (p1.x - p0.x));
             const float v = (m.y - p0.y) / std::max(1e-6f, (p1.y - p0.y));
@@ -1761,6 +2252,14 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
         }
     }
 
+    if (ui.showViewportHints) {
+        if (sliceMode) {
+            ImGui::TextDisabled("Slice paint: LMB inject | switch slice axis/index in Inspector.");
+        } else {
+            ImGui::TextDisabled("MMB/RMB/Alt+LMB orbit | wheel or Alt+RMB zoom | double-click MMB reset | LMB inject.");
+        }
+    }
+
     ImGui::End();
 }
 
@@ -1774,10 +2273,13 @@ static void drawCombinedView(MACCoupledSim& coupled,
     if (!ui.showCombinedView) return;
 
     ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Combined View");
+    ImGui::Begin(kWinCombined);
 
-    float scale = ui.viewScale;
-    ImVec2 size(NX * scale, NY * scale);
+    DrawViewportHeader(ui, "Coupled", "Smoke + water composite workspace", g_pipeMode ? "PIPE" : "LIVE");
+    const float scale = ui.viewScale;
+    const ImVec2 size(NX * scale, NY * scale);
+    const ImVec2 imagePos = ImGui::GetCursorScreenPos();
+    DrawViewportCanvasBackdrop(imagePos, size);
 
     // Draw smoke from coupled sim
     ImGui::Image((ImTextureID)(intptr_t)coupledRenderer.smokeTex(), size);
@@ -1797,7 +2299,6 @@ static void drawCombinedView(MACCoupledSim& coupled,
 
     // Optional overlay of particles from coupled sim:
     if (ui.combinedShowParticles && !coupled.particles.empty()) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
         const float w = p1.x - p0.x;
         const float h = p1.y - p0.y;
         const float domainX = std::max(1e-6f, coupled.nx * coupled.dx);
@@ -1824,7 +2325,7 @@ static void drawCombinedView(MACCoupledSim& coupled,
         dl->PopClipRect();
     }
 
-    bool hovered = ImGui::IsItemHovered();
+    const bool hovered = ImGui::IsItemHovered();
 
     // Pipe polyline overlay
     if (coupled.pipe.x.size() >= 2) {
@@ -1833,7 +2334,7 @@ static void drawCombinedView(MACCoupledSim& coupled,
                     p0.y + (1.0f - coupled.pipe.y[k])   * (p1.y - p0.y));
             ImVec2 b(p0.x + coupled.pipe.x[k+1] * (p1.x - p0.x),
                     p0.y + (1.0f - coupled.pipe.y[k+1]) * (p1.y - p0.y));
-            dl->AddLine(a, b, IM_COL32(0, 150, 255, 220), 2.0f);
+            dl->AddLine(a, b, IM_COL32(225, 64, 72, 220), 2.0f);
         }
     }
 
@@ -1930,6 +2431,12 @@ static void drawCombinedView(MACCoupledSim& coupled,
         }
     }
 
+    if (ui.showViewportHints) {
+        ImGui::TextDisabled(g_pipeMode
+            ? "Pipe edit: LMB place points on the coupled viewport."
+            : "LMB paint solids or water depending on active tool. Use Inspector to switch modes.");
+    }
+
     ImGui::End();
 }
 
@@ -1947,7 +2454,7 @@ Actions DrawAll(MAC2D& sim,
                 int NX, int NY)
 {
     // Dockspace root must be drawn BEFORE your windows
-    BeginDockspaceRoot();
+    BeginDockspaceRoot(ui);
 
     // --- feed stat history once per frame ---
     if (g_recordStats) {
@@ -1970,7 +2477,16 @@ Actions DrawAll(MAC2D& sim,
         g_hist[STAT_PRESSURE_SOLVER].push((float)st.pressureSolver);
     }
 
-    Actions a = drawControls(sim, water, water3D, smoke3D, coupled, ui);
+    Actions a;
+    DrawViziorHub(sim, water, water3D, smoke3D, ui, a);
+    {
+        Actions inspectorActions = drawControls(sim, water, water3D, smoke3D, coupled, ui);
+        a.resetRequested = a.resetRequested || inspectorActions.resetRequested;
+        a.resetSmoke3DRequested = inspectorActions.resetSmoke3DRequested;
+        a.applySmoke3DGridRequested = inspectorActions.applySmoke3DGridRequested;
+        a.resetWater3DRequested = inspectorActions.resetWater3DRequested;
+        a.applyWater3DGridRequested = inspectorActions.applyWater3DGridRequested;
+    }
     drawDebugTabs(sim, water, water3D, smoke3D, ui, probe);
     drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
     drawWaterViewAndInteract(water, renderer, ui);

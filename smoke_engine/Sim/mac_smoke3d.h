@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "pressure_solver3d.h"
+
 struct MACSmoke3D {
     struct Vec3 {
         float x = 0.0f;
@@ -27,8 +29,9 @@ struct MACSmoke3D {
     };
 
     enum class PressureSolverMode : int {
-        RBGS = 0,
-        Jacobi = 1,
+        Multigrid = 0,
+        RBGS = 1,
+        Jacobi = 2,
     };
 
     struct Params {
@@ -47,7 +50,7 @@ struct MACSmoke3D {
         int borderThickness = 1;
         int pressureIters = 120;
         int diffuseIters = 16;
-        int pressureSolverMode = (int)PressureSolverMode::RBGS;
+        int pressureSolverMode = (int)PressureSolverMode::Multigrid;
 
         float pressureTol = 1e-6f;
         float pressureOmega = 1.7f;
@@ -84,6 +87,8 @@ struct MACSmoke3D {
 
     Params params;
     Stats lastStats;
+
+    PressureSolver3D pressurePoisson;
 
     std::vector<float> u;
     std::vector<float> v;

@@ -300,7 +300,7 @@ inline void MACWater::gridToParticles() {
     const float blend = apic ? 0.0f : water_internal::clampf(flipBlend, 0.0f, 1.0f);
     const float picW = 1.0f - blend;
     const float invDx2 = (dx > 0.0f) ? (1.0f / (dx * dx)) : 0.0f;
-    const float apicScale = 3.0f * invDx2;
+    const float apicScale = 4.0f * invDx2;
 
     for (Particle& p : particles) {
         float picU, picV;

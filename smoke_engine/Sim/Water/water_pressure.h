@@ -76,11 +76,17 @@ if (volumePreserveRhsMean) {
         // Positive relErr => we lost volume => we want slight expansion (positive divergence).
         const float relErr = (desiredMass - targetMass) / desiredMass;
 
-        // Divergence target (1/s). Correct over a ~1/k timestep scale.
-        float divTarget = (relErr * k) / std::max(1e-6f, dt);
+        // Divergence target (1/s).  We want a gentle correction that doesn't
+        // overshoot.  relErr * k gives a dimensionless fraction per step;
+        // dividing by dt once converts to a divergence rate.  The old code
+        // divided by dt here AND again when building rhsAddFace, making the
+        // correction scale as 1/dt^2 — far too aggressive, causing surface
+        // oscillation.  Now we build the divergence target directly in RHS
+        // units (1/(s*s)) so only one dt division happens total.
+        float divTarget = relErr * k;   // dimensionless, per-step
 
-        // Clamp based on what the sim is producing this step (prevents “pumping”).
-        const float divClamp = (maxAbsDiv > 0.0f) ? (0.25f * maxAbsDiv) : (0.0f);
+        // Clamp to a fraction of the current divergence magnitude (prevents “pumping”).
+        const float divClamp = (maxAbsDiv > 0.0f) ? (0.1f * maxAbsDiv) : (0.0f);
         if (divClamp > 0.0f) {
             divTarget = clampf(divTarget, -divClamp, divClamp);
         } else {
@@ -111,6 +117,8 @@ if (volumePreserveRhsMean) {
         // For each liquid cell, for each neighbor that is air (or out-of-bounds -> air),
         // add the per-face RHS correction. This yields smoother, physically-meaningful
         // corrections (cells with more exposed faces receive proportionally more correction).
+        // divTarget is now dimensionless (per-step).  RHS has units 1/(s*s)
+        // (i.e. -div/dt), so one division by dt converts correctly.
         const float rhsAddFace = divTarget * invDt;
 
         for (int j = 0; j < ny; ++j) {
