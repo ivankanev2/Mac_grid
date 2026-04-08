@@ -26,6 +26,12 @@ MACWater3D::~MACWater3D() {
     }
 }
 
+MACWater3DCudaBackend* MACWater3D::activeCudaBackend() const {
+    if (cudaBackend == nullptr) return nullptr;
+    if (backendPreference == BackendPreference::CPU) return nullptr;
+    return cudaBackend;
+}
+
 void MACWater3D::reset() {
     const int cellCount = std::max(1, nx * ny * nz);
     const int uCount = std::max(1, (nx + 1) * ny * nz);
@@ -78,8 +84,8 @@ void MACWater3D::reset() {
     rasterizeDebugFields();
     updateStats(0.0f);
 
-    if (cudaBackend != nullptr) {
-        water3dCudaReset(cudaBackend, *this);
+    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
+        water3dCudaReset(backend, *this);
     }
 }
 
@@ -95,8 +101,8 @@ void MACWater3D::reset(int NX, int NY, int NZ, float DX, float DT) {
 void MACWater3D::setParams(const Params& newParams) {
     params = newParams;
 
-    if (cudaBackend != nullptr) {
-        water3dCudaSetParams(cudaBackend, *this);
+    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
+        water3dCudaSetParams(backend, *this);
         return;
     }
 
@@ -112,9 +118,19 @@ void MACWater3D::refreshStats(float stepMs) {
     updateStats(stepMs);
 }
 
+void MACWater3D::setBackendPreference(BackendPreference newPreference) {
+    backendPreference = newPreference;
+
+    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
+        water3dCudaReset(backend, *this);
+    } else {
+        updateStats(0.0f);
+    }
+}
+
 void MACWater3D::step() {
-    if (cudaBackend != nullptr) {
-        water3dCudaStep(cudaBackend, *this);
+    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
+        water3dCudaStep(backend, *this);
         return;
     }
 
@@ -182,8 +198,8 @@ void MACWater3D::step() {
 }
 
 void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity) {
-    if (cudaBackend != nullptr) {
-        water3dCudaAddWaterSourceSphere(cudaBackend, *this, center, radius, velocity);
+    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
+        water3dCudaAddWaterSourceSphere(backend, *this, center, radius, velocity);
         return;
     }
 
@@ -259,9 +275,9 @@ void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Ve
 }
 
 void MACWater3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
-    if (cudaBackend != nullptr) {
+    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
         solidUser = mask;
-        water3dCudaSetVoxelSolids(cudaBackend, *this);
+        water3dCudaSetVoxelSolids(backend, *this);
         return;
     }
 

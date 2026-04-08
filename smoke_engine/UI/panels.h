@@ -14,9 +14,20 @@ struct OverlaySettings;
 
 namespace UI {
 
+enum ActiveWorkspace {
+    kWorkspaceSmoke2D = 0,
+    kWorkspaceWater2D = 1,
+    kWorkspaceSmoke3D = 2,
+    kWorkspaceWater3D = 3,
+    kWorkspaceCoupled = 4,
+};
+
+const char* ActiveWorkspaceLabel(int workspace);
+
 struct Settings {
     // Playback
     bool  playing = true;
+    int   activeWorkspace = kWorkspaceSmoke2D;
 
     // Painting solids
     bool  paintSolid = true;
@@ -136,6 +147,7 @@ struct Settings {
     int   water3DDebugField = 0;   // 0=water,1=pressure,2=divergence,3=speed
     int   water3DPressureIters = 200;
     int   water3DPressureSolverMode = 0; // 0=Multigrid, 1=RBGS, 2=Jacobi
+    int   water3DBackendMode = 0;        // 0=Auto, 1=CPU, 2=CUDA
     bool  water3DUseAPIC = true;
     float water3DFlipBlend = 0.10f;
     float water3DPressureOmega = 1.70f;

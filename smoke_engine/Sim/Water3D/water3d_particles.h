@@ -218,14 +218,14 @@ inline void MACWater3D::reseedParticles() {
                     continue;
                 }
 
-                const bool near =
+                const bool Isnear =
                     (i > 0     && occupied[(std::size_t)idxCell(i - 1, j, k)]) ||
                     (i + 1 < nx && occupied[(std::size_t)idxCell(i + 1, j, k)]) ||
                     (j > 0     && occupied[(std::size_t)idxCell(i, j - 1, k)]) ||
                     (j + 1 < ny && occupied[(std::size_t)idxCell(i, j + 1, k)]) ||
                     (k > 0     && occupied[(std::size_t)idxCell(i, j, k - 1)]) ||
                     (k + 1 < nz && occupied[(std::size_t)idxCell(i, j, k + 1)]);
-                if (near) region[(std::size_t)id] = (uint8_t)1;
+                if (Isnear) region[(std::size_t)id] = (uint8_t)1;
             }
         }
     }

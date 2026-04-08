@@ -6,14 +6,26 @@
 #include <cmath>
 #include <limits>
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-
 #ifdef __APPLE__
   #define GL_SILENCE_DEPRECATION
+  #define GLFW_INCLUDE_NONE
+  #include <GLFW/glfw3.h>
   #include <OpenGL/gl3.h>
-#else
+#elif defined(_WIN32)
+  #define WIN32_LEAN_AND_MEAN
+  #define NOMINMAX
+  #include <windows.h>
+  #define GLFW_INCLUDE_NONE
+  #include <GLFW/glfw3.h>
   #include <GL/gl.h>
+#else
+  #define GLFW_INCLUDE_NONE
+  #include <GLFW/glfw3.h>
+  #include <GL/gl.h>
+#endif
+
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
 #include <vector>

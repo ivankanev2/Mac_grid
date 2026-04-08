@@ -50,6 +50,12 @@ struct MACWater3D {
         Jacobi = 2,
     };
 
+    enum class BackendPreference : int {
+        Auto = 0,
+        CPU = 1,
+        CUDA = 2,
+    };
+
     struct Params {
         float waterDissipation = 1.0f;
         float gravity = -9.8f;
@@ -134,6 +140,7 @@ struct MACWater3D {
     float desiredMass = -1.0f;
 
     int stepCounter = 0;
+    BackendPreference backendPreference = BackendPreference::Auto;
     MACWater3DCudaBackend* cudaBackend = nullptr;
 
     MACWater3D(int NX, int NY, int NZ, float DX, float DT);
@@ -143,6 +150,9 @@ struct MACWater3D {
     void reset(int NX, int NY, int NZ, float DX, float DT);
     void setDt(float newDt) { dt = newDt; lastStats.dt = dt; }
     void setParams(const Params& newParams);
+    void setBackendPreference(BackendPreference newPreference);
+    BackendPreference backendPreferenceMode() const { return backendPreference; }
+    bool isCudaAvailable() const { return cudaBackend != nullptr; }
     void step();
 
     void addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity);
@@ -153,7 +163,9 @@ struct MACWater3D {
     const std::vector<uint8_t>& userSolidMask() const { return solidUser; }
     void refreshStats(float stepMs);
 
-    bool isCudaEnabled() const { return cudaBackend != nullptr; }
+    bool isCudaEnabled() const {
+        return cudaBackend != nullptr && backendPreference != BackendPreference::CPU;
+    }
     bool hasFeatureParityWith2D() const {
         // The 3D path now has its own reusable multigrid-capable pressure solve.
         // Keep this simple boolean for the UI while the remaining validation work
@@ -235,7 +247,9 @@ protected:
 
     void rasterizeDebugFields();
     void updateStats(float stepMs);
+    MACWater3DCudaBackend* activeCudaBackend() const;
 
 public:
     void relaxParticlesForCuda(int iters, float strength) { relaxParticles(iters, strength); }
+    void projectLiquidForCudaBridge() { projectLiquid(); }
 };

@@ -216,13 +216,13 @@ inline void MACWater::reseedParticles() {
 
             if (occ[(size_t)id]) { region[(size_t)id] = 1; continue; }
 
-            const bool near =
+            const bool Isnear =
                 (i > 0     && occ[(size_t)idxP(i - 1, j)]) ||
                 (i < nx-1  && occ[(size_t)idxP(i + 1, j)]) ||
                 (j > 0     && occ[(size_t)idxP(i, j - 1)]) ||
                 (j < ny-1  && occ[(size_t)idxP(i, j + 1)]);
 
-            if (near) region[(size_t)id] = 1;
+            if (Isnear) region[(size_t)id] = 1;
         }
     }
 

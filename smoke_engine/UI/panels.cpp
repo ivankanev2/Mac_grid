@@ -187,6 +187,17 @@ static const char* PressureSolverLabel3D(int mode) {
     }
 }
 
+const char* ActiveWorkspaceLabel(int workspace) {
+    switch (workspace) {
+        case kWorkspaceSmoke2D: return "Smoke 2D";
+        case kWorkspaceWater2D: return "Water 2D";
+        case kWorkspaceSmoke3D: return "Smoke 3D";
+        case kWorkspaceWater3D: return "Water 3D";
+        case kWorkspaceCoupled: return "Coupled";
+        default: return "Unknown";
+    }
+}
+
 void ApplyViziorTheme(int themeMode)
 {
     g_themeMode = (themeMode == kThemeLight) ? kThemeLight : kThemeDark;
@@ -428,9 +439,6 @@ static void BuildDefaultDockLayout(const ImGuiViewport* vp)
     ImGuiID dock_main = dock_id;
     ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Left, 0.24f, &dock_left, &dock_main);
 
-    ImGuiID dock_bottom = 0;
-    ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Down, 0.28f, &dock_bottom, &dock_main);
-
     ImGuiID dock_hub = 0;
     ImGuiID dock_inspector_stack = 0;
     ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Up, 0.34f, &dock_hub, &dock_inspector_stack);
@@ -447,7 +455,7 @@ static void BuildDefaultDockLayout(const ImGuiViewport* vp)
     ImGui::DockBuilderDockWindow(kWinWater2D, dock_main);
     ImGui::DockBuilderDockWindow(kWinSmoke3D, dock_main);
     ImGui::DockBuilderDockWindow(kWinWater3D, dock_main);
-    ImGui::DockBuilderDockWindow(kWinCombined, dock_bottom);
+    ImGui::DockBuilderDockWindow(kWinCombined, dock_main);
 
     ImGui::DockBuilderFinish(dock_id);
 }
@@ -623,19 +631,19 @@ static void DrawViziorHub(MAC2D& sim,
                   ui.playing ? ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.28f)
                              : ImVec4(kVizBg3.x, kVizBg3.y, kVizBg3.z, 1.0f));
     ImGui::SameLine(0.0f, 6.0f);
-    DrawInlineTag(ui.useSmoke3D ? "SMOKE 3D ON" : "SMOKE 3D OFF",
-                  ui.useSmoke3D ? ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.20f)
-                                : ImVec4(kVizBg2.x, kVizBg2.y, kVizBg2.z, 1.0f));
-    ImGui::SameLine(0.0f, 6.0f);
-    DrawInlineTag(ui.useWater3D ? "WATER 3D ON" : "WATER 3D OFF",
-                  ui.useWater3D ? ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.20f)
-                                : ImVec4(kVizBg2.x, kVizBg2.y, kVizBg2.z, 1.0f));
+    DrawInlineTag(ActiveWorkspaceLabel(ui.activeWorkspace),
+                  ImVec4(kVizAccent.x, kVizAccent.y, kVizAccent.z, 0.20f));
+    if (ui.activeWorkspace == kWorkspaceWater3D) {
+        ImGui::SameLine(0.0f, 6.0f);
+        DrawInlineTag(water3D.stats().backendName,
+                      ImVec4(kVizBg2.x, kVizBg2.y, kVizBg2.z, 1.0f));
+    }
 
     if (ImGui::Button(ui.playing ? "Pause Simulation" : "Run Simulation")) {
         ui.playing = !ui.playing;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Reset All")) {
+    if (ImGui::Button("Reset Active Workspace")) {
         actions.resetRequested = true;
     }
     ImGui::SameLine();
@@ -643,7 +651,22 @@ static void DrawViziorHub(MAC2D& sim,
         g_requestSaveLayout = true;
     }
 
+    ImGui::SameLine();
+    ui.activeWorkspace = std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
+    ImGui::SetNextItemWidth(170.0f);
+    if (ImGui::BeginCombo("##HubWorkspaceCombo", ActiveWorkspaceLabel(ui.activeWorkspace))) {
+        for (int workspace = kWorkspaceSmoke2D; workspace <= kWorkspaceCoupled; ++workspace) {
+            const bool selected = (ui.activeWorkspace == workspace);
+            if (ImGui::Selectable(ActiveWorkspaceLabel(workspace), selected)) {
+                ui.activeWorkspace = workspace;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
     ImGui::Separator();
+    ImGui::TextDisabled("Only the selected workspace is stepped and rendered. Switching discards the previous simulation and boots the new workspace from a clean state.");
     if (ImGui::BeginTable("HubMetrics", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -661,7 +684,7 @@ static void DrawViziorHub(MAC2D& sim,
 
     ImGui::Separator();
     ImGui::TextDisabled("Workspace note");
-    ImGui::TextWrapped("Light and dark shells now share the Vizior red accent and your badge-style logo, while the physics and solver paths remain untouched.");
+    ImGui::TextWrapped("Single active-workspace mode keeps hidden smoke and water solvers from burning CPU and GPU time in the background while preserving the same solver controls for the selected view.");
 
     ImGui::End();
 }
@@ -909,6 +932,14 @@ static Actions drawControls(MAC2D& sim,
         ImGui::SliderFloat("Temp dissipation", &ui.tempDissipation, 0.900f, 1.000f);
     }
 
+    if (ImGui::CollapsingHeader("Workspace", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawInspectorSectionLabel("Workspace", "Only one simulation workspace stays alive at a time to avoid hidden GPU and CPU cost.");
+        static const char* workspaceItems[] = { "Smoke 2D", "Water 2D", "Smoke 3D", "Water 3D", "Coupled" };
+        ui.activeWorkspace = std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
+        ImGui::Combo("Active workspace", &ui.activeWorkspace, workspaceItems, 5);
+        ImGui::TextDisabled("Switching workspaces discards the old state and boots the selected simulation from a clean reset.");
+    }
+
     if (ImGui::CollapsingHeader("Viewport overlays", ImGuiTreeNodeFlags_DefaultOpen)) {
         DrawInspectorSectionLabel("Viewport overlays", "Diagnostic overlays for 2D debug inspection.");
         ImGui::Checkbox("Divergence heatmap", &ui.showDivOverlay);
@@ -970,7 +1001,7 @@ static Actions drawControls(MAC2D& sim,
 
     if (ImGui::CollapsingHeader("Water 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
         DrawInspectorSectionLabel("Water 2D", "Free-surface controls for the mature 2D reference solver.");
-        ImGui::Checkbox("Show 2D water viewport", &ui.showWaterView);
+        ImGui::TextDisabled("Viewport activation is controlled by the active workspace selector.");
         ImGui::Checkbox("Show 2D water particles", &ui.showWaterParticles);
         ImGui::Checkbox("2D water open top", &ui.waterOpenTop);
         ImGui::SliderFloat("2D water gravity", &ui.waterGravity, -20.0f, 20.0f);
@@ -981,8 +1012,7 @@ static Actions drawControls(MAC2D& sim,
 
     if (ImGui::CollapsingHeader("Smoke 3D", ImGuiTreeNodeFlags_DefaultOpen)) {
         DrawInspectorSectionLabel("Smoke 3D", "Runtime, numerics, source authoring and volume/slice display.");
-        ImGui::Checkbox("Run 3D smoke", &ui.useSmoke3D);
-        ImGui::Checkbox("Show 3D smoke viewport", &ui.showSmoke3DView);
+        ImGui::TextDisabled("Workspace status: %s", ui.activeWorkspace == kWorkspaceSmoke3D ? "active" : "inactive");
         ImGui::Checkbox("Paint 3D smoke source", &ui.paintSmoke3D);
         ImGui::TextDisabled("Backend: %s | Active cells: %d | Max speed: %.3f",
                             smoke3D.stats().backendName,
@@ -1046,9 +1076,14 @@ static Actions drawControls(MAC2D& sim,
 
     if (ImGui::CollapsingHeader("Water 3D", ImGuiTreeNodeFlags_DefaultOpen)) {
         DrawInspectorSectionLabel("Water 3D", "3D liquid path, APIC controls and multigrid-driven pressure tuning.");
-        ImGui::Checkbox("Run 3D water", &ui.useWater3D);
-        ImGui::Checkbox("Show 3D water viewport", &ui.showWater3DView);
-        ImGui::TextDisabled("Backend: %s | CUDA: %s", water3D.stats().backendName, water3D.isCudaEnabled() ? "enabled" : "disabled");
+        ImGui::TextDisabled("Workspace status: %s", ui.activeWorkspace == kWorkspaceWater3D ? "active" : "inactive");
+        ui.water3DBackendMode = std::clamp(ui.water3DBackendMode, 0, 2);
+        const char* waterBackendItems[] = { "Auto", "CPU", "CUDA" };
+        ImGui::Combo("Water 3D backend", &ui.water3DBackendMode, waterBackendItems, 3);
+        ImGui::TextDisabled("Backend: %s | CUDA available: %s | active: %s",
+                            water3D.stats().backendName,
+                            water3D.isCudaAvailable() ? "yes" : "no",
+                            water3D.isCudaEnabled() ? "cuda" : "cpu");
         ImGui::TextDisabled("Particles: %d | Liquid cells: %d", water3D.stats().particleCount, water3D.stats().liquidCells);
 
         ImGui::SliderInt("Water 3D nx", &ui.water3DNX, 16, 192);
@@ -1109,7 +1144,7 @@ static Actions drawControls(MAC2D& sim,
 
     if (ImGui::CollapsingHeader("Coupled & pipe workspace", ImGuiTreeNodeFlags_DefaultOpen)) {
         DrawInspectorSectionLabel("Coupled & pipe workspace", "Overlay water on smoke, inspect the coupled path, and author pipe sketches.");
-        ImGui::Checkbox("Show coupled viewport", &ui.showCombinedView);
+        ImGui::TextDisabled("Workspace status: %s", ui.activeWorkspace == kWorkspaceCoupled ? "active" : "inactive");
         ImGui::SliderFloat("Coupled water alpha", &ui.combinedWaterAlpha, 0.0f, 1.0f);
         ImGui::Checkbox("Coupled particles", &ui.combinedShowParticles);
 
@@ -2456,6 +2491,14 @@ Actions DrawAll(MAC2D& sim,
     // Dockspace root must be drawn BEFORE your windows
     BeginDockspaceRoot(ui);
 
+    ui.activeWorkspace = std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
+    ui.showWaterView = (ui.activeWorkspace == kWorkspaceWater2D);
+    ui.showSmoke3DView = (ui.activeWorkspace == kWorkspaceSmoke3D);
+    ui.showWater3DView = (ui.activeWorkspace == kWorkspaceWater3D);
+    ui.showCombinedView = (ui.activeWorkspace == kWorkspaceCoupled);
+    ui.useSmoke3D = (ui.activeWorkspace == kWorkspaceSmoke3D);
+    ui.useWater3D = (ui.activeWorkspace == kWorkspaceWater3D);
+
     // --- feed stat history once per frame ---
     if (g_recordStats) {
         const auto& st = sim.getStats();
@@ -2487,12 +2530,36 @@ Actions DrawAll(MAC2D& sim,
         a.resetWater3DRequested = inspectorActions.resetWater3DRequested;
         a.applyWater3DGridRequested = inspectorActions.applyWater3DGridRequested;
     }
+
+    ui.activeWorkspace = std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
+    ui.showWaterView = (ui.activeWorkspace == kWorkspaceWater2D);
+    ui.showSmoke3DView = (ui.activeWorkspace == kWorkspaceSmoke3D);
+    ui.showWater3DView = (ui.activeWorkspace == kWorkspaceWater3D);
+    ui.showCombinedView = (ui.activeWorkspace == kWorkspaceCoupled);
+    ui.useSmoke3D = (ui.activeWorkspace == kWorkspaceSmoke3D);
+    ui.useWater3D = (ui.activeWorkspace == kWorkspaceWater3D);
+
     drawDebugTabs(sim, water, water3D, smoke3D, ui, probe);
-    drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
-    drawWaterViewAndInteract(water, renderer, ui);
-    drawCombinedView(coupled, coupledRenderer, dock_id, ui, NX, NY);
-    drawSmoke3DViewAndInteract(smoke3D, smoke3DRenderer, ui);
-    drawWater3DViewAndInteract(water3D, water3DRenderer, ui);
+    switch (std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled)) {
+        case kWorkspaceSmoke2D:
+            drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
+            break;
+        case kWorkspaceWater2D:
+            drawWaterViewAndInteract(water, renderer, ui);
+            break;
+        case kWorkspaceSmoke3D:
+            drawSmoke3DViewAndInteract(smoke3D, smoke3DRenderer, ui);
+            break;
+        case kWorkspaceWater3D:
+            drawWater3DViewAndInteract(water3D, water3DRenderer, ui);
+            break;
+        case kWorkspaceCoupled:
+            drawCombinedView(coupled, coupledRenderer, dock_id, ui, NX, NY);
+            break;
+        default:
+            drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
+            break;
+    }
 
     // keep solids consistent between smoke and water sims
     water.syncSolidsFrom(sim);

@@ -15,7 +15,7 @@
 #include <thrust/execution_policy.h>
 #include <thrust/remove.h>
 
-// i have no idea what is that
+// Runtime-owned CUDA buffers and cached simulation dimensions.
 struct MACWater3DCudaBackend {
     int nx = 0;
     int ny = 0;
@@ -473,7 +473,7 @@ __global__ void applyBoundaryWKernel(float* w, const uint8_t* solid, int nx, int
 __global__ void scatterParticlesKernel(const MACWater3D::Particle* particles, int particleCount,
                                        float* u, float* v, float* w,
                                        float* uWeight, float* vWeight, float* wWeight,
-                                       int nx, int ny, int nz, float dx) {
+                                       int nx, int ny, int nz, float dx, bool useAPIC) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= particleCount) return;
 
@@ -509,7 +509,17 @@ __global__ void scatterParticlesKernel(const MACWater3D::Particle* particles, in
             tx * ty * tz
         };
         for (int n = 0; n < 8; ++n) {
-            atomicAdd(u + ids[n], p.u * ws[n]);
+            float value = p.u;
+            if (useAPIC) {
+                const int kk = (n / 4 == 0) ? k0 : k1;
+                const int jj = ((n % 4) / 2 == 0) ? j0 : j1;
+                const int ii = (n % 2 == 0) ? i0 : i1;
+                const float pxFace = (float)ii * dx;
+                const float pyFace = ((float)jj + 0.5f) * dx;
+                const float pzFace = ((float)kk + 0.5f) * dx;
+                value += p.c00 * (pxFace - p.x) + p.c01 * (pyFace - p.y) + p.c02 * (pzFace - p.z);
+            }
+            atomicAdd(u + ids[n], value * ws[n]);
             atomicAdd(uWeight + ids[n], ws[n]);
         }
     }
@@ -544,7 +554,17 @@ __global__ void scatterParticlesKernel(const MACWater3D::Particle* particles, in
             tx * ty * tz
         };
         for (int n = 0; n < 8; ++n) {
-            atomicAdd(v + ids[n], p.v * ws[n]);
+            float value = p.v;
+            if (useAPIC) {
+                const int kk = (n / 4 == 0) ? k0 : k1;
+                const int jj = ((n % 4) / 2 == 0) ? j0 : j1;
+                const int ii = (n % 2 == 0) ? i0 : i1;
+                const float pxFace = ((float)ii + 0.5f) * dx;
+                const float pyFace = (float)jj * dx;
+                const float pzFace = ((float)kk + 0.5f) * dx;
+                value += p.c10 * (pxFace - p.x) + p.c11 * (pyFace - p.y) + p.c12 * (pzFace - p.z);
+            }
+            atomicAdd(v + ids[n], value * ws[n]);
             atomicAdd(vWeight + ids[n], ws[n]);
         }
     }
@@ -579,7 +599,17 @@ __global__ void scatterParticlesKernel(const MACWater3D::Particle* particles, in
             tx * ty * tz
         };
         for (int n = 0; n < 8; ++n) {
-            atomicAdd(w + ids[n], p.w * ws[n]);
+            float value = p.w;
+            if (useAPIC) {
+                const int kk = (n / 4 == 0) ? k0 : k1;
+                const int jj = ((n % 4) / 2 == 0) ? j0 : j1;
+                const int ii = (n % 2 == 0) ? i0 : i1;
+                const float pxFace = ((float)ii + 0.5f) * dx;
+                const float pyFace = ((float)jj + 0.5f) * dx;
+                const float pzFace = (float)kk * dx;
+                value += p.c20 * (pxFace - p.x) + p.c21 * (pyFace - p.y) + p.c22 * (pzFace - p.z);
+            }
+            atomicAdd(w + ids[n], value * ws[n]);
             atomicAdd(wWeight + ids[n], ws[n]);
         }
     }
@@ -619,14 +649,14 @@ __global__ void dilateLiquidKernel(const uint8_t* solid, const uint8_t* liquid, 
     if (solid[idx]) { out[idx] = 0; return; }
     if (liquid[idx]) { out[idx] = 1; return; }
 
-    const bool near =
+    const bool Isnear =
         (i > 0 && liquid[idxCell3D(i - 1, j, k, nx, ny)]) ||
         (i + 1 < nx && liquid[idxCell3D(i + 1, j, k, nx, ny)]) ||
         (j > 0 && liquid[idxCell3D(i, j - 1, k, nx, ny)]) ||
         (j + 1 < ny && liquid[idxCell3D(i, j + 1, k, nx, ny)]) ||
         (k > 0 && liquid[idxCell3D(i, j, k - 1, nx, ny)]) ||
         (k + 1 < nz && liquid[idxCell3D(i, j, k + 1, nx, ny)]);
-    out[idx] = near ? 1 : 0;
+    out[idx] = Isnear ? 1 : 0;
 }
 
 __global__ void applyGravityDampingKernel(float* v, int nx, int ny, int nz, float dt, float gravity,
@@ -1143,7 +1173,7 @@ __global__ void extrapolateWKernel(const float* current, float* next,
 __global__ void gridToParticlesKernel(MACWater3D::Particle* particles, int particleCount,
                                       const float* u, const float* v, const float* w,
                                       const float* uDelta, const float* vDelta, const float* wDelta,
-                                      int nx, int ny, int nz, float dx, float flipBlend) {
+                                      int nx, int ny, int nz, float dx, float flipBlend, bool useAPIC) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= particleCount) return;
 
@@ -1151,9 +1181,9 @@ __global__ void gridToParticlesKernel(MACWater3D::Particle* particles, int parti
     float picU, picV, picW;
     velAtDevice(p.x, p.y, p.z, u, v, w, nx, ny, nz, dx, picU, picV, picW);
 
-    const float blend = clamp013D(flipBlend);
+    const float blend = useAPIC ? 0.0f : clamp013D(flipBlend);
     const float picWeight = 1.0f - blend;
-    if (blend > 0.0f) {
+    if (!useAPIC && blend > 0.0f) {
         const float du = sampleUDevice(uDelta, p.x, p.y, p.z, nx, ny, nz, dx);
         const float dv = sampleVDevice(vDelta, p.x, p.y, p.z, nx, ny, nz, dx);
         const float dw = sampleWDevice(wDelta, p.x, p.y, p.z, nx, ny, nz, dx);
@@ -1165,6 +1195,135 @@ __global__ void gridToParticlesKernel(MACWater3D::Particle* particles, int parti
         p.v = picV;
         p.w = picW;
     }
+
+    if (!useAPIC) {
+        p.c00 = p.c01 = p.c02 = 0.0f;
+        p.c10 = p.c11 = p.c12 = 0.0f;
+        p.c20 = p.c21 = p.c22 = 0.0f;
+        particles[idx] = p;
+        return;
+    }
+
+    const float invDx2 = (dx > 0.0f) ? (1.0f / (dx * dx)) : 0.0f;
+    const float apicScale = 3.0f * invDx2;
+
+    {
+        const float fx = p.x / dx;
+        const float fy = p.y / dx - 0.5f;
+        const float fz = p.z / dx - 0.5f;
+        const int i0 = clampi3D((int)floorf(fx), 0, nx);
+        const int j0 = clampi3D((int)floorf(fy), 0, ny - 1);
+        const int k0 = clampi3D((int)floorf(fz), 0, nz - 1);
+        const int i1 = min(i0 + 1, nx);
+        const int j1 = min(j0 + 1, ny - 1);
+        const int k1 = min(k0 + 1, nz - 1);
+        const float tx = clampf3D(fx - (float)i0, 0.0f, 1.0f);
+        const float ty = clampf3D(fy - (float)j0, 0.0f, 1.0f);
+        const float tz = clampf3D(fz - (float)k0, 0.0f, 1.0f);
+        float sumDx = 0.0f, sumDy = 0.0f, sumDz = 0.0f;
+        for (int dk = 0; dk < 2; ++dk) {
+            const int kk = dk == 0 ? k0 : k1;
+            const float wz = dk == 0 ? (1.0f - tz) : tz;
+            const float pzFace = ((float)kk + 0.5f) * dx;
+            for (int dj = 0; dj < 2; ++dj) {
+                const int jj = dj == 0 ? j0 : j1;
+                const float wy = dj == 0 ? (1.0f - ty) : ty;
+                const float pyFace = ((float)jj + 0.5f) * dx;
+                for (int di = 0; di < 2; ++di) {
+                    const int ii = di == 0 ? i0 : i1;
+                    const float wx = di == 0 ? (1.0f - tx) : tx;
+                    const float pxFace = (float)ii * dx;
+                    const float wght = wx * wy * wz;
+                    const float faceVal = u[idxU3D(ii, jj, kk, nx, ny)];
+                    sumDx += wght * faceVal * (pxFace - p.x);
+                    sumDy += wght * faceVal * (pyFace - p.y);
+                    sumDz += wght * faceVal * (pzFace - p.z);
+                }
+            }
+        }
+        p.c00 = apicScale * sumDx;
+        p.c01 = apicScale * sumDy;
+        p.c02 = apicScale * sumDz;
+    }
+
+    {
+        const float fx = p.x / dx - 0.5f;
+        const float fy = p.y / dx;
+        const float fz = p.z / dx - 0.5f;
+        const int i0 = clampi3D((int)floorf(fx), 0, nx - 1);
+        const int j0 = clampi3D((int)floorf(fy), 0, ny);
+        const int k0 = clampi3D((int)floorf(fz), 0, nz - 1);
+        const int i1 = min(i0 + 1, nx - 1);
+        const int j1 = min(j0 + 1, ny);
+        const int k1 = min(k0 + 1, nz - 1);
+        const float tx = clampf3D(fx - (float)i0, 0.0f, 1.0f);
+        const float ty = clampf3D(fy - (float)j0, 0.0f, 1.0f);
+        const float tz = clampf3D(fz - (float)k0, 0.0f, 1.0f);
+        float sumDx = 0.0f, sumDy = 0.0f, sumDz = 0.0f;
+        for (int dk = 0; dk < 2; ++dk) {
+            const int kk = dk == 0 ? k0 : k1;
+            const float wz = dk == 0 ? (1.0f - tz) : tz;
+            const float pzFace = ((float)kk + 0.5f) * dx;
+            for (int dj = 0; dj < 2; ++dj) {
+                const int jj = dj == 0 ? j0 : j1;
+                const float wy = dj == 0 ? (1.0f - ty) : ty;
+                const float pyFace = (float)jj * dx;
+                for (int di = 0; di < 2; ++di) {
+                    const int ii = di == 0 ? i0 : i1;
+                    const float wx = di == 0 ? (1.0f - tx) : tx;
+                    const float pxFace = ((float)ii + 0.5f) * dx;
+                    const float wght = wx * wy * wz;
+                    const float faceVal = v[idxV3D(ii, jj, kk, nx, ny)];
+                    sumDx += wght * faceVal * (pxFace - p.x);
+                    sumDy += wght * faceVal * (pyFace - p.y);
+                    sumDz += wght * faceVal * (pzFace - p.z);
+                }
+            }
+        }
+        p.c10 = apicScale * sumDx;
+        p.c11 = apicScale * sumDy;
+        p.c12 = apicScale * sumDz;
+    }
+
+    {
+        const float fx = p.x / dx - 0.5f;
+        const float fy = p.y / dx - 0.5f;
+        const float fz = p.z / dx;
+        const int i0 = clampi3D((int)floorf(fx), 0, nx - 1);
+        const int j0 = clampi3D((int)floorf(fy), 0, ny - 1);
+        const int k0 = clampi3D((int)floorf(fz), 0, nz);
+        const int i1 = min(i0 + 1, nx - 1);
+        const int j1 = min(j0 + 1, ny - 1);
+        const int k1 = min(k0 + 1, nz);
+        const float tx = clampf3D(fx - (float)i0, 0.0f, 1.0f);
+        const float ty = clampf3D(fy - (float)j0, 0.0f, 1.0f);
+        const float tz = clampf3D(fz - (float)k0, 0.0f, 1.0f);
+        float sumDx = 0.0f, sumDy = 0.0f, sumDz = 0.0f;
+        for (int dk = 0; dk < 2; ++dk) {
+            const int kk = dk == 0 ? k0 : k1;
+            const float wz = dk == 0 ? (1.0f - tz) : tz;
+            const float pzFace = (float)kk * dx;
+            for (int dj = 0; dj < 2; ++dj) {
+                const int jj = dj == 0 ? j0 : j1;
+                const float wy = dj == 0 ? (1.0f - ty) : ty;
+                const float pyFace = ((float)jj + 0.5f) * dx;
+                for (int di = 0; di < 2; ++di) {
+                    const int ii = di == 0 ? i0 : i1;
+                    const float wx = di == 0 ? (1.0f - tx) : tx;
+                    const float pxFace = ((float)ii + 0.5f) * dx;
+                    const float wght = wx * wy * wz;
+                    const float faceVal = w[idxW3D(ii, jj, kk, nx, ny)];
+                    sumDx += wght * faceVal * (pxFace - p.x);
+                    sumDy += wght * faceVal * (pyFace - p.y);
+                    sumDz += wght * faceVal * (pzFace - p.z);
+                }
+            }
+        }
+        p.c20 = apicScale * sumDx;
+        p.c21 = apicScale * sumDy;
+        p.c22 = apicScale * sumDz;
+    }
+
     particles[idx] = p;
 }
 
@@ -1279,14 +1438,14 @@ __global__ void buildReseedRegionKernel(const uint8_t* solid, const uint8_t* occ
     if (solid[idx]) { region[idx] = 0; return; }
     if (occ[idx]) { region[idx] = 1; return; }
 
-    const bool near =
+    const bool Isnear =
         (i > 0 && occ[idxCell3D(i - 1, j, k, nx, ny)]) ||
         (i + 1 < nx && occ[idxCell3D(i + 1, j, k, nx, ny)]) ||
         (j > 0 && occ[idxCell3D(i, j - 1, k, nx, ny)]) ||
         (j + 1 < ny && occ[idxCell3D(i, j + 1, k, nx, ny)]) ||
         (k > 0 && occ[idxCell3D(i, j, k - 1, nx, ny)]) ||
         (k + 1 < nz && occ[idxCell3D(i, j, k + 1, nx, ny)]);
-    region[idx] = near ? 1 : 0;
+    region[idx] = Isnear ? 1 : 0;
 }
 
 __global__ void spawnReseedParticlesKernel(MACWater3D::Particle* particles, int* particleCount,
@@ -1682,7 +1841,7 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
         b->d_particles, particleCount,
         b->d_u, b->d_v, b->d_w,
         b->d_uWeight, b->d_vWeight, b->d_wWeight,
-        b->nx, b->ny, b->nz, b->dx);
+        b->nx, b->ny, b->nz, b->dx, b->params.useAPIC);
     normalizeKernel<<<(b->uCount + kThreads - 1) / kThreads, kThreads>>>(b->d_u, b->d_uWeight, b->uCount);
     normalizeKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(b->d_v, b->d_vWeight, b->vCount);
     normalizeKernel<<<(b->wCount + kThreads - 1) / kThreads, kThreads>>>(b->d_w, b->d_wWeight, b->wCount);
@@ -1726,25 +1885,10 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
     copyKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(b->d_v, b->d_vPrev, b->vCount);
     copyKernel<<<(b->wCount + kThreads - 1) / kThreads, kThreads>>>(b->d_w, b->d_wPrev, b->wCount);
 
-    buildPressureRhsKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_u, b->d_v, b->d_w, b->d_solid, b->d_liquid, b->d_rhs,
-        b->nx, b->ny, b->nz, 1.0f / b->dx, 1.0f / std::max(1e-8f, b->dt));
-    fillKernel<float><<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(b->d_pressure, b->cellCount, 0.0f);
-    for (int it = 0; it < std::max(1, b->params.pressureIters); ++it) {
-        pressureJacobiKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
-            b->d_pressure, b->d_pressureTmp, b->d_rhs, b->d_solid, b->d_liquid,
-            b->nx, b->ny, b->nz, b->dx * b->dx, b->params.pressureOmega, b->params.openTop);
-        std::swap(b->d_pressure, b->d_pressureTmp);
-    }
-
-    const float scale = b->dt / b->dx;
-    applyPressureUKernel<<<(b->uCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_u, b->d_pressure, b->d_solid, b->d_liquid, b->nx, b->ny, b->nz, scale);
-    applyPressureVKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_v, b->d_pressure, b->d_solid, b->d_liquid, b->nx, b->ny, b->nz, scale, b->params.openTop);
-    applyPressureWKernel<<<(b->wCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_w, b->d_pressure, b->d_solid, b->d_liquid, b->nx, b->ny, b->nz, scale);
-    launchApplyBoundary(b);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    downloadDeviceStateToHost(b, sim);
+    sim.projectLiquidForCudaBridge();
+    uploadHostStateToDevice(b, sim);
 
     computeDeltaKernel<<<(b->uCount + kThreads - 1) / kThreads, kThreads>>>(b->d_u, b->d_uPrev, b->d_uDelta, b->uCount);
     computeDeltaKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(b->d_v, b->d_vPrev, b->d_vDelta, b->vCount);
@@ -1774,7 +1918,7 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
     gridToParticlesKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
         b->d_particles, particleCount, b->d_u, b->d_v, b->d_w,
         b->d_uDelta, b->d_vDelta, b->d_wDelta,
-        b->nx, b->ny, b->nz, b->dx, b->params.flipBlend);
+        b->nx, b->ny, b->nz, b->dx, b->params.flipBlend, b->params.useAPIC);
     advectParticlesKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
         b->d_particles, particleCount, b->d_u, b->d_v, b->d_w, b->d_solid,
         b->nx, b->ny, b->nz, b->dx, b->dt);
@@ -1809,6 +1953,13 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
         b->d_liquid, b->d_solid, b->d_cellCounts,
         b->d_u, b->d_v, b->d_w,
         b->nx, b->ny, b->nz, b->dx, b->params.particlesPerCell, sim.stepCounter, maxParticleCount);
+
+    if (b->params.reseedRelaxIters > 0 && b->params.reseedRelaxStrength > 0.0f) {
+        CUDA_CHECK(cudaDeviceSynchronize());
+        downloadDeviceStateToHost(b, sim);
+        sim.relaxParticlesForCuda(b->params.reseedRelaxIters, b->params.reseedRelaxStrength);
+        uploadHostStateToDevice(b, sim);
+    }
 
     if (b->params.waterDissipation < 0.999999f) {
         particleCount = 0;

@@ -9,12 +9,21 @@
 
 #include "UI/panels.h"
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-
 #ifdef __APPLE__
+  #define GL_SILENCE_DEPRECATION
+  #define GLFW_INCLUDE_NONE
+  #include <GLFW/glfw3.h>
   #include <OpenGL/gl3.h>
+#elif defined(_WIN32)
+  #define WIN32_LEAN_AND_MEAN
+  #define NOMINMAX
+  #include <windows.h>
+  #define GLFW_INCLUDE_NONE
+  #include <GLFW/glfw3.h>
+  #include <GL/gl.h>
 #else
+  #define GLFW_INCLUDE_NONE
+  #include <GLFW/glfw3.h>
   #include <GL/gl.h>
 #endif
 
@@ -303,10 +312,14 @@ int main()
     // internal allocations across both sims.
     PressureSolver sharedPressureSolver;
 
+    auto dxForGrid = [](int gx, int gy, int gz) {
+        return 1.0f / (float)std::max({gx, gy, gz, 1});
+    };
+
     MAC2D sim(NX, NY, dx, dt_initial);
     MACWater waterSim(NX, NY, dx, dt_initial);
-    MACWater3D water3D(NX, NY, NZ, dx, dt_initial);
-    MACSmoke3D smoke3D(NX, NY, NZ, dx, dt_initial);
+    MACWater3D water3D(1, 1, 1, 1.0f, dt_initial);
+    MACSmoke3D smoke3D(1, 1, 1, 1.0f, dt_initial);
     MACCoupledSim coupled(NX, NY, dx, dt_initial);
 
     // Make both sims use the same solver instance.
@@ -328,12 +341,42 @@ int main()
         0.15f   // text height = 15% of grid height
     );
 
-    // Smoke: add text as solid obstacle
-    sim.addSolidText(g_textMask, NX, NY);
+    auto applyIntroText = [&]() {
+        if (g_textMask.empty()) return;
+        sim.addSolidText(g_textMask, NX, NY);
+        waterSim.waterHeld = true;
+        waterSim.addWaterTextParticles(g_textMask, NX, NY, 4);
+        waterSim.syncSolidsFrom(sim);
+    };
 
-    // Water: seed particles in text shape, held in place
-    waterSim.waterHeld = true;
-    waterSim.addWaterTextParticles(g_textMask, NX, NY, 4);
+    auto activateWorkspace = [&](int workspace) {
+        workspace = std::clamp(workspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
+
+        sim.reset();
+        waterSim.reset();
+        coupled.reset();
+        applyIntroText();
+
+        smoke3D.reset(1, 1, 1, 1.0f, smoke3D.dt);
+        water3D.reset(1, 1, 1, 1.0f, water3D.dt);
+
+        if (workspace == UI::kWorkspaceSmoke3D) {
+            const int nx3 = std::max(1, ui.smoke3DNX);
+            const int ny3 = std::max(1, ui.smoke3DNY);
+            const int nz3 = std::max(1, ui.smoke3DNZ);
+            smoke3D.reset(nx3, ny3, nz3, dxForGrid(nx3, ny3, nz3), smoke3D.dt);
+        } else if (workspace == UI::kWorkspaceWater3D) {
+            const int nx3 = std::max(1, ui.water3DNX);
+            const int ny3 = std::max(1, ui.water3DNY);
+            const int nz3 = std::max(1, ui.water3DNZ);
+            water3D.reset(nx3, ny3, nz3, dxForGrid(nx3, ny3, nz3), water3D.dt);
+        }
+
+        accumulator = 0.0;
+    };
+
+    int activeWorkspace = std::clamp(ui.activeWorkspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
+    activateWorkspace(activeWorkspace);
 
     while (!glfwWindowShouldClose(win))
     {
@@ -343,6 +386,12 @@ int main()
             UI::ApplyViziorTheme(ui.themeMode);
             setViziorWindowIcon(win, ui.themeMode);
             appliedTheme = ui.themeMode;
+        }
+
+        const int requestedWorkspace = std::clamp(ui.activeWorkspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
+        if (requestedWorkspace != activeWorkspace) {
+            activeWorkspace = requestedWorkspace;
+            activateWorkspace(activeWorkspace);
         }
 
         // step sim (if playing)
@@ -379,6 +428,16 @@ int main()
         assignFloatW(p3.volumePreserveStrength, ui.water3DVolumePreserveStrength);
         assignIntW(p3.reseedRelaxIters, ui.water3DRelaxIters);
         assignFloatW(p3.reseedRelaxStrength, ui.water3DRelaxStrength);
+
+        MACWater3D::BackendPreference requestedWaterBackend = MACWater3D::BackendPreference::Auto;
+        switch (ui.water3DBackendMode) {
+            case 1: requestedWaterBackend = MACWater3D::BackendPreference::CPU; break;
+            case 2: requestedWaterBackend = MACWater3D::BackendPreference::CUDA; break;
+            default: break;
+        }
+        if (water3D.backendPreferenceMode() != requestedWaterBackend) {
+            water3D.setBackendPreference(requestedWaterBackend);
+        }
 
         if (p3Changed) {
             water3D.setParams(p3);
@@ -434,17 +493,31 @@ int main()
 
             int steps = 0;
             while (accumulator > 0.0 && steps < maxStepsPerFrame) {
-                const float waterSpeed2D = std::max(waterSim.maxFaceSpeed(), waterSim.maxParticleSpeed());
-                float maxSpeed = std::max(sim.maxFaceSpeed(), waterSpeed2D);
+                float maxSpeed = sim.maxFaceSpeed();
                 float cflDx = sim.dx;
 
-                if (ui.useWater3D) {
-                    maxSpeed = std::max(maxSpeed, water3D.stats().maxSpeed);
-                    cflDx = std::min(cflDx, water3D.dx);
-                }
-                if (ui.useSmoke3D) {
-                    maxSpeed = std::max(maxSpeed, smoke3D.stats().maxSpeed);
-                    cflDx = std::min(cflDx, smoke3D.dx);
+                switch (activeWorkspace) {
+                    case UI::kWorkspaceWater2D:
+                        maxSpeed = std::max(waterSim.maxFaceSpeed(), waterSim.maxParticleSpeed());
+                        cflDx = waterSim.dx;
+                        break;
+                    case UI::kWorkspaceSmoke3D:
+                        maxSpeed = smoke3D.stats().maxSpeed;
+                        cflDx = smoke3D.dx;
+                        break;
+                    case UI::kWorkspaceWater3D:
+                        maxSpeed = water3D.stats().maxSpeed;
+                        cflDx = water3D.dx;
+                        break;
+                    case UI::kWorkspaceCoupled:
+                        maxSpeed = std::max(coupled.maxFaceSpeed(), coupled.maxParticleSpeed());
+                        cflDx = coupled.dx;
+                        break;
+                    case UI::kWorkspaceSmoke2D:
+                    default:
+                        maxSpeed = sim.maxFaceSpeed();
+                        cflDx = sim.dx;
+                        break;
                 }
 
                 float dtCFL = ui.cfl * cflDx / (maxSpeed + 1e-6f);
@@ -455,22 +528,29 @@ int main()
                     dt = std::max(dt, ui.dtMin);
                 }
 
-                sim.setDt(dt);
-                sim.step(ui.vortEps);
-
-                waterSim.setDt(dt);
-                waterSim.step();
-
-                coupled.setDt(dt);
-                coupled.stepCoupled(ui.vortEps);
-
-                if (ui.useWater3D) {
-                    water3D.setDt(dt);
-                    water3D.step();
-                }
-                if (ui.useSmoke3D) {
-                    smoke3D.setDt(dt);
-                    smoke3D.step();
+                switch (activeWorkspace) {
+                    case UI::kWorkspaceWater2D:
+                        waterSim.setDt(dt);
+                        waterSim.syncSolidsFrom(sim);
+                        waterSim.step();
+                        break;
+                    case UI::kWorkspaceSmoke3D:
+                        smoke3D.setDt(dt);
+                        smoke3D.step();
+                        break;
+                    case UI::kWorkspaceWater3D:
+                        water3D.setDt(dt);
+                        water3D.step();
+                        break;
+                    case UI::kWorkspaceCoupled:
+                        coupled.setDt(dt);
+                        coupled.stepCoupled(ui.vortEps);
+                        break;
+                    case UI::kWorkspaceSmoke2D:
+                    default:
+                        sim.setDt(dt);
+                        sim.step(ui.vortEps);
+                        break;
                 }
 
                 accumulator -= dt;
@@ -488,15 +568,16 @@ int main()
         WaterRenderSettings wr;
         UI::BuildWaterRenderSettings(ui, wr);
 
-        // update textures for original smoke/water sims (used by Smoke View + Water View)
-        renderer.updateFromSim(sim, rs, ov);
-        renderer.updateWaterFromSim(waterSim, wr);
+        if (activeWorkspace == UI::kWorkspaceSmoke2D) {
+            renderer.updateFromSim(sim, rs, ov);
+        } else if (activeWorkspace == UI::kWorkspaceWater2D) {
+            renderer.updateWaterFromSim(waterSim, wr);
+        } else if (activeWorkspace == UI::kWorkspaceCoupled) {
+            coupledRenderer.updateFromSim(coupled, rs, ov);
+            coupledRenderer.updateWaterFromSim(coupled, wr);
+        }
 
-        // update textures for the coupled sim (used by Combined View)
-        coupledRenderer.updateFromSim(coupled, rs, ov);
-        coupledRenderer.updateWaterFromSim(coupled, wr);
-
-        if (ui.showWater3DView || ui.useWater3D) {
+        if (activeWorkspace == UI::kWorkspaceWater3D) {
             const int viewMode = std::clamp(ui.water3DViewMode, 0, 2);
             if (viewMode == 1) {
                 const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
@@ -535,7 +616,7 @@ int main()
             }
         }
 
-        if (ui.showSmoke3DView || ui.useSmoke3D) {
+        if (activeWorkspace == UI::kWorkspaceSmoke3D) {
             const int viewMode = std::clamp(ui.smoke3DViewMode, 0, 1);
             if (viewMode == 1) {
                 const int axis = std::clamp(ui.smoke3DSliceAxis, 0, 2);
@@ -590,39 +671,13 @@ int main()
             waterSim.waterHeld = false;
         }
         if (actions.resetRequested) {
-            sim.reset();
-            waterSim.reset();
-            water3D.reset();
-            smoke3D.reset();
-            coupled.reset();
+            activateWorkspace(activeWorkspace);
         }
-         // Re-apply text mask after reset
-        if (!g_textMask.empty()) {
-                sim.addSolidText(g_textMask, NX, NY);
-                waterSim.waterHeld = true;
-                waterSim.addWaterTextParticles(g_textMask, NX, NY, 4);
-            }
-        if (actions.applySmoke3DGridRequested) {
-            const int nx3 = std::max(1, ui.smoke3DNX);
-            const int ny3 = std::max(1, ui.smoke3DNY);
-            const int nz3 = std::max(1, ui.smoke3DNZ);
-            const int maxDim = std::max({nx3, ny3, nz3});
-            const float dx3 = 1.0f / (float)maxDim;
-            smoke3D.reset(nx3, ny3, nz3, dx3, smoke3D.dt);
+        if ((actions.applySmoke3DGridRequested || actions.resetSmoke3DRequested) && activeWorkspace == UI::kWorkspaceSmoke3D) {
+            activateWorkspace(activeWorkspace);
         }
-        if (actions.resetSmoke3DRequested) {
-            smoke3D.reset();
-        }
-        if (actions.applyWater3DGridRequested) {
-            const int nx3 = std::max(1, ui.water3DNX);
-            const int ny3 = std::max(1, ui.water3DNY);
-            const int nz3 = std::max(1, ui.water3DNZ);
-            const int maxDim = std::max({nx3, ny3, nz3});
-            const float dx3 = 1.0f / (float)maxDim;
-            water3D.reset(nx3, ny3, nz3, dx3, water3D.dt);
-        }
-        if (actions.resetWater3DRequested) {
-            water3D.reset();
+        if ((actions.applyWater3DGridRequested || actions.resetWater3DRequested) && activeWorkspace == UI::kWorkspaceWater3D) {
+            activateWorkspace(activeWorkspace);
         }
 
         // render GL

@@ -277,14 +277,14 @@ inline void MACWater3D::buildLiquidMask(bool applyDilations) {
                     const int id = idxCell(i, j, k);
                     if (solid[(std::size_t)id] || liquid[(std::size_t)id]) continue;
 
-                    const bool near =
+                    const bool Isnear =
                         (i > 0 && liquid[(std::size_t)idxCell(i - 1, j, k)]) ||
                         (i + 1 < nx && liquid[(std::size_t)idxCell(i + 1, j, k)]) ||
                         (j > 0 && liquid[(std::size_t)idxCell(i, j - 1, k)]) ||
                         (j + 1 < ny && liquid[(std::size_t)idxCell(i, j + 1, k)]) ||
                         (k > 0 && liquid[(std::size_t)idxCell(i, j, k - 1)]) ||
                         (k + 1 < nz && liquid[(std::size_t)idxCell(i, j, k + 1)]);
-                    if (near) next[(std::size_t)id] = (uint8_t)1;
+                    if (Isnear) next[(std::size_t)id] = (uint8_t)1;
                 }
             }
         }
