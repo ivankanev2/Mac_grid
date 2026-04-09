@@ -102,6 +102,8 @@ private:
     void addForces(float buoyancy, float gravity);
     void applyBoundary();
     void coolAndDiffuseTemperature();
+    bool hasDynamicContent(float velEps = 1.0e-6f, float scalarEps = 1.0e-6f) const;
+    void clearDynamicState();
 
     // --- physically-consistent scalar outflow ---
     // Prevent "scalar parking" at an open top boundary by applying a convective

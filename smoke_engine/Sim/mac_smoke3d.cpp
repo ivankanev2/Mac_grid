@@ -69,6 +69,7 @@ void MACSmoke3D::reset() {
     rebuildBorderSolids();
     applyBoundary();
     rasterizeDebugFields();
+    idleStateLatched = false;
     updateStats(0.0f);
 }
 
@@ -86,6 +87,7 @@ void MACSmoke3D::setParams(const Params& newParams) {
     rebuildBorderSolids();
     applyBoundary();
     rasterizeDebugFields();
+    idleStateLatched = false;
     updateStats(0.0f);
 }
 
@@ -1069,6 +1071,63 @@ void MACSmoke3D::rasterizeDebugFields() {
     }
 }
 
+
+bool MACSmoke3D::hasDynamicContent(float velEps, float scalarEps) const {
+    for (float value : u) if (std::fabs(value) > velEps) return true;
+    for (float value : v) if (std::fabs(value) > velEps) return true;
+    for (float value : w) if (std::fabs(value) > velEps) return true;
+    const std::size_t cellCount = smoke.size();
+    for (std::size_t idx = 0; idx < cellCount; ++idx) {
+        if (solid[idx]) continue;
+        if (std::fabs(smoke[idx]) > scalarEps) return true;
+        if (std::fabs(temp[idx]) > scalarEps) return true;
+    }
+    return false;
+}
+
+void MACSmoke3D::clearDynamicState() {
+    std::fill(u.begin(), u.end(), 0.0f);
+    std::fill(v.begin(), v.end(), 0.0f);
+    std::fill(w.begin(), w.end(), 0.0f);
+    std::fill(u0.begin(), u0.end(), 0.0f);
+    std::fill(v0.begin(), v0.end(), 0.0f);
+    std::fill(w0.begin(), w0.end(), 0.0f);
+    std::fill(uTmp.begin(), uTmp.end(), 0.0f);
+    std::fill(vTmp.begin(), vTmp.end(), 0.0f);
+    std::fill(wTmp.begin(), wTmp.end(), 0.0f);
+    std::fill(pressure.begin(), pressure.end(), 0.0f);
+    std::fill(pressureTmp.begin(), pressureTmp.end(), 0.0f);
+    std::fill(rhs.begin(), rhs.end(), 0.0f);
+    std::fill(smoke.begin(), smoke.end(), 0.0f);
+    std::fill(smoke0.begin(), smoke0.end(), 0.0f);
+    std::fill(temp.begin(), temp.end(), 0.0f);
+    std::fill(temp0.begin(), temp0.end(), 0.0f);
+    std::fill(cellTmp.begin(), cellTmp.end(), 0.0f);
+    std::fill(divergence.begin(), divergence.end(), 0.0f);
+    std::fill(speed.begin(), speed.end(), 0.0f);
+}
+
+void MACSmoke3D::updateIdleStats(float stepMs) {
+    lastStats.nx = nx;
+    lastStats.ny = ny;
+    lastStats.nz = nz;
+    lastStats.activeCells = 0;
+    lastStats.maxSpeed = 0.0f;
+    lastStats.maxDivergence = 0.0f;
+    lastStats.dt = dt;
+    lastStats.lastStepMs = stepMs;
+    lastStats.backendName = "CPU Smoke 3D";
+    lastStats.bytesAllocated =
+        u.size() * sizeof(float) + v.size() * sizeof(float) + w.size() * sizeof(float) +
+        u0.size() * sizeof(float) + v0.size() * sizeof(float) + w0.size() * sizeof(float) +
+        uTmp.size() * sizeof(float) + vTmp.size() * sizeof(float) + wTmp.size() * sizeof(float) +
+        pressure.size() * sizeof(float) + pressureTmp.size() * sizeof(float) + rhs.size() * sizeof(float) +
+        smoke.size() * sizeof(float) + smoke0.size() * sizeof(float) +
+        temp.size() * sizeof(float) + temp0.size() * sizeof(float) +
+        cellTmp.size() * sizeof(float) + divergence.size() * sizeof(float) + speed.size() * sizeof(float) +
+        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t);
+}
+
 void MACSmoke3D::updateStats(float stepMs) {
     lastStats.nx = nx;
     lastStats.ny = ny;
@@ -1102,6 +1161,18 @@ void MACSmoke3D::step() {
 
     rebuildBorderSolids();
     applyBoundary();
+
+    if (!hasDynamicContent()) {
+        if (!idleStateLatched) {
+            clearDynamicState();
+            idleStateLatched = true;
+        }
+        const auto end = std::chrono::high_resolution_clock::now();
+        const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
+        updateIdleStats(stepMs);
+        return;
+    }
+    idleStateLatched = false;
 
     advectVelocity();
     applyBoundary();

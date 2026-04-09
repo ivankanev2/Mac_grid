@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <chrono>
 #include <limits>
+#include "smoke_diagnostics.h"
 
 
 
@@ -713,7 +714,7 @@ void MACGridCore::project() {
 
     // before project (after computeDivergence inside project already fills stats)
     // but add explicit print here (place near top of step or after computeDivergence)
-    std::printf("[BEFORE] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
+    SMOKE_DIAG_PRINTF("[BEFORE] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
 
     stats.dt = dt;
     // stats.maxDivBefore = maxAbsDiv();
@@ -733,7 +734,7 @@ void MACGridCore::project() {
     for (int id = 0; id < nx*ny; ++id) {
         if (solid[id] && fluid[id]) bad++;
     }
-    if (bad) printf("[BUG] %d cells are solid AND fluid!\n", bad);
+    if (bad) SMOKE_DIAG_PRINTF("[BUG] %d cells are solid AND fluid!\n", bad);
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
@@ -821,7 +822,7 @@ void MACGridCore::project() {
 
         static int dbgFrame = 0;
         if ((dbgFrame++ & 31) == 0) {
-            std::printf("[TOP ] |p|_max(topCells)=%g at i=%d   |v|_max(topFace)=%g at i=%d\n",
+            SMOKE_DIAG_PRINTF("[TOP ] |p|_max(topCells)=%g at i=%d   |v|_max(topFace)=%g at i=%d\n",
                         pTopMax, pTopMaxI, vTopMax, vTopMaxI);
         }
     }
@@ -884,7 +885,7 @@ void MACGridCore::project() {
             vTopMax2 = std::max(vTopMax2, std::fabs(v[idxV(i, ny)]));
         static int dbg2 = 0;
         if ((dbg2++ & 31) == 0)
-            std::printf("[TOP2] |v|_max(topFace AFTER bc)=%g\n", vTopMax2);
+            SMOKE_DIAG_PRINTF("[TOP2] |v|_max(topFace AFTER bc)=%g\n", vTopMax2);
     }
 }
 
@@ -901,7 +902,7 @@ void MACGridCore::project() {
 
     const float divInf = divLInfFluid();
     const float divL2  = divL2Fluid();
-    std::printf("[AFTER ] divInf=%g divL2=%g maxFace=%g (iters=%d)\n",
+    SMOKE_DIAG_PRINTF("[AFTER ] divInf=%g divL2=%g maxFace=%g (iters=%d)\n",
                 divInf, divL2, maxFaceSpeed(), stats.pressureIters);
 
     // std::printf("[AFTER ] maxDiv=%g maxFace=%g (iters=%d)\n",

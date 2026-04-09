@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm> 
+#include "smoke_diagnostics.h"
 
 void MAC2D::recomputeValveIndices() {
     int w = std::max(2, (int)std::round(0.10f * nx)); // 10% of width, at least 2 cells
@@ -115,7 +116,7 @@ void MAC2D::applyValveSink() {
 
 void MAC2D::setOpenTop(bool on)
 {
-    printf("[setOpenTop] requested=%d current=%d\n", (int)on, (int)getOpenTop());
+    SMOKE_DIAG_PRINTF("[setOpenTop] requested=%d current=%d\n", (int)on, (int)getOpenTop());
     if (getOpenTop() == on) return;
 
     setOpenTopBC(on);
@@ -139,7 +140,7 @@ void MAC2D::setOpenTop(bool on)
 
     int solidTop = 0;
     for (int i = 0; i < nx; ++i) solidTop += (solid[idxP(i, ny-1)] != 0);
-    printf("[setOpenTop] solidTop=%d / %d\n", solidTop, nx);
+    SMOKE_DIAG_PRINTF("[setOpenTop] solidTop=%d / %d\n", solidTop, nx);
 
     // IMPORTANT: make sure the projection domain + operator reflect the new BC immediately
     setFluidMaskAllNonSolid();      // smoke sim should treat all non-solid as fluid
@@ -156,7 +157,7 @@ void MAC2D::setOpenTop(bool on)
 
     enforceBoundaries();
 
-    printf("[setOpenTop] applied. now=%d\n", (int)getOpenTop());
+    SMOKE_DIAG_PRINTF("[setOpenTop] applied. now=%d\n", (int)getOpenTop());
 }
 
 void MAC2D::enforceBoundaries() {

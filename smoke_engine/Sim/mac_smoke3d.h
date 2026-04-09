@@ -87,6 +87,7 @@ struct MACSmoke3D {
 
     Params params;
     Stats lastStats;
+    bool idleStateLatched = false;
 
     PressureSolver3D pressurePoisson;
 
@@ -179,4 +180,7 @@ protected:
     void project();
     void rasterizeDebugFields();
     void updateStats(float stepMs);
+    void updateIdleStats(float stepMs);
+    bool hasDynamicContent(float velEps = 1.0e-6f, float scalarEps = 1.0e-6f) const;
+    void clearDynamicState();
 };

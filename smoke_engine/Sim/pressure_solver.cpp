@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include "smoke_diagnostics.h"
 #include <limits>
 
 void PressureSolver::configure(int nx, int ny, float dx,
@@ -296,7 +297,7 @@ int PressureSolver::solvePCG(std::vector<float>& p,
         const float deltaOld = deltaNew;
         deltaNew = dotFluid(m_r, m_z);
 
-        printf("[PCG] deltaNew=%.6g\n", deltaNew);
+        SMOKE_DIAG_PRINTF("[PCG] deltaNew=%.6g\n", deltaNew);
 
         if (!std::isfinite(deltaNew) || deltaNew <= 1e-30f) break;
 
@@ -755,7 +756,7 @@ void PressureSolver::solveMG(std::vector<float>& p,
         diagMin = std::min(diagMin, d);
         diagMax = std::max(diagMax, d);
     }
-    printf("[MG] fluidCnt=%d bInf=%.6g tol=%.6g diagW[min,max]=[%.6g, %.6g]\n",
+    SMOKE_DIAG_PRINTF("[MG] fluidCnt=%d bInf=%.6g tol=%.6g diagW[min,max]=[%.6g, %.6g]\n",
         fluidCnt, bInf, tolPredDiv, diagMin, diagMax);
 
     if (!(bInf > 0.0f) || bInf <= tolPredDiv) {
