@@ -386,13 +386,15 @@ void SmokeRenderer::uploadWaterRGBA(const std::vector<float>& water,
 
             float r, g, b;
             if (isDarkTheme(wset.themeMode)) {
-                r = 0.08f + 0.08f * d;
-                g = 0.16f + 0.18f * d;
-                b = 0.30f + 0.28f * d;
+                // Deep ocean blue: near-black base → vivid cyan-blue at full depth
+                r = 0.02f + 0.06f * d;
+                g = 0.12f + 0.28f * d;
+                b = 0.32f + 0.45f * d;
             } else {
-                r = 0.18f + 0.08f * d;
-                g = 0.30f + 0.16f * d;
-                b = 0.50f + 0.22f * d;
+                // Clear tropical water: bright sky-blue with a natural teal undertone
+                r = 0.08f + 0.06f * d;
+                g = 0.30f + 0.28f * d;
+                b = 0.62f + 0.28f * d;
             }
 
             img[dstIdx*4 + 0] = (uint8_t)std::lround(r * 255.0f);

@@ -785,9 +785,11 @@ static void DrawSettingsWindow(Settings& ui,
     ImGui::Spacing();
     DrawInspectorSectionLabel("Simulation Grid", "2D workspace resolution (Smoke 2D / Water 2D / Coupled).");
     ImGui::SetNextItemWidth(180.0f);
-    ImGui::SliderInt("Grid width", &ui.sim2DNX, 32, 512);
+    ImGui::InputInt("Grid width",  &ui.sim2DNX, 16, 64);
     ImGui::SetNextItemWidth(180.0f);
-    ImGui::SliderInt("Grid height", &ui.sim2DNY, 32, 512);
+    ImGui::InputInt("Grid height", &ui.sim2DNY, 16, 64);
+    ui.sim2DNX = std::clamp(ui.sim2DNX, 32, 1024);
+    ui.sim2DNY = std::clamp(ui.sim2DNY, 32, 1024);
     if (ImGui::Button("Apply 2D grid resolution", ImVec2(220.0f, 0.0f))) {
         actions.applyGrid2DRequested = true;
     }
@@ -1022,7 +1024,7 @@ static Actions drawControls(MAC2D& sim,
         ImGui::TextDisabled("%s", sim.isValveOpen() ? "OPEN" : "CLOSED");
 
         ImGui::Checkbox("Use MacCormack advection", &sim.useMacCormack);
-        ImGui::SliderFloat("View scale", &ui.viewScale, 1.0f, 12.0f);
+        ImGui::SliderFloat("3D view scale", &ui.viewScale, 1.0f, 12.0f);
         ImGui::SliderFloat("CFL", &ui.cfl, 0.1f, 1.5f);
         ImGui::SliderFloat("dt max", &ui.dtMax, 0.001f, 0.05f);
         ImGui::SliderFloat("dt min", &ui.dtMin, 0.0001f, 0.01f);
@@ -1532,8 +1534,16 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
     ImGui::Begin(kWinSmoke2D);
 
     DrawViewportHeader(ui, "Smoke 2D", "MAC grid | multigrid | solids", ui.playing ? "LIVE" : "PAUSED");
-    const float scale = ui.viewScale;
-    const ImVec2 imageSize(NX * scale, NY * scale);
+    ImVec2 avail2d = ImGui::GetContentRegionAvail();
+    avail2d.y = std::max(avail2d.y, 4.0f);
+    {
+        float aspect = float(NX) / std::max(1.0f, float(NY));
+        float imgW = avail2d.x, imgH = imgW / aspect;
+        if (imgH > avail2d.y) { imgH = avail2d.y; imgW = imgH * aspect; }
+        avail2d = ImVec2(imgW, imgH);
+    }
+    const ImVec2 imageSize = avail2d;
+    const float scale = imageSize.x / std::max(1.0f, float(NX));
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, imageSize);
     ImGui::Image((ImTextureID)(intptr_t)renderer.smokeTex(), imageSize);
@@ -1926,10 +1936,18 @@ static void drawWaterViewAndInteract(MACWater& water,
     ImGui::Begin(kWinWater2D);
 
     DrawViewportHeader(ui, "Water 2D", "Particle / grid liquid", ui.paintWater ? "SOURCE" : "VIEW");
-    const float scale = ui.viewScale;
-    const int texW = std::max(1, renderer.width());
-    const int texH = std::max(1, renderer.height());
-    const ImVec2 imageSize(texW * scale, texH * scale);
+    const int texW2 = std::max(1, renderer.width());
+    const int texH2 = std::max(1, renderer.height());
+    float w2imgW, w2imgH;
+    {
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        avail.y = std::max(avail.y, 4.0f);
+        float aspect = float(texW2) / std::max(1.0f, float(texH2));
+        w2imgW = avail.x; w2imgH = w2imgW / aspect;
+        if (w2imgH > avail.y) { w2imgH = avail.y; w2imgW = w2imgH * aspect; }
+    }
+    const float scale = w2imgW / float(texW2);
+    const ImVec2 imageSize(w2imgW, w2imgH);
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, imageSize);
     ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), imageSize);
@@ -1948,7 +1966,7 @@ static void drawWaterViewAndInteract(MACWater& water,
         const size_t maxDraw = 20000;
         const size_t n = water.particles.size();
         const size_t stride = std::max<size_t>(1, n / maxDraw);
-        const float radiusPx = std::max(2.0f, 0.35f * ui.viewScale);
+        const float radiusPx = std::max(2.0f, 0.35f * scale);
         const ImU32 col = IM_COL32(255, 245, 120, 230);
 
         dl->PushClipRect(p0, p1, true);
@@ -2414,8 +2432,16 @@ static void drawCombinedView(MACCoupledSim& coupled,
     ImGui::Begin(kWinCombined);
 
     DrawViewportHeader(ui, "Coupled", "Smoke + water composite workspace", g_pipeMode ? "PIPE" : "LIVE");
-    const float scale = ui.viewScale;
-    const ImVec2 size(NX * scale, NY * scale);
+    float cpImgW, cpImgH;
+    {
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        avail.y = std::max(avail.y, 4.0f);
+        float aspect = float(NX) / std::max(1.0f, float(NY));
+        cpImgW = avail.x; cpImgH = cpImgW / aspect;
+        if (cpImgH > avail.y) { cpImgH = avail.y; cpImgW = cpImgH * aspect; }
+    }
+    const float scale = cpImgW / std::max(1.0f, float(NX));
+    const ImVec2 size(cpImgW, cpImgH);
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, size);
 
@@ -2446,7 +2472,7 @@ static void drawCombinedView(MACCoupledSim& coupled,
         const size_t n = coupled.particles.size();
         const size_t stride = std::max<size_t>(1, n / maxDraw);
 
-        const float radiusPx = std::max(2.0f, 0.35f * ui.viewScale);
+        const float radiusPx = std::max(2.0f, 0.35f * scale);
         const ImU32 col = IM_COL32(255, 245, 120, 230);
 
         dl->PushClipRect(p0, p1, true);

@@ -48,8 +48,11 @@ static int NX = 256;
 static int NY = 256;
 static const int NZ = 64;
 
-// Persistent text mask (reused across resets)
+// Persistent text mask (reused across resets).
+// Always rasterized at at least 512x512 so the letters stay crisp at any grid resolution.
 static std::vector<uint8_t> g_textMask;
+static int g_textMaskW = 0;
+static int g_textMaskH = 0;
 
 // time variables
 double lastTime = 0.0;
@@ -337,19 +340,22 @@ int main()
         "../external/imgui/misc/fonts/Roboto-Medium.ttf",
         "../../external/imgui/misc/fonts/Roboto-Medium.ttf"
     });
+    // Rasterize at the larger of (grid size, 512) so text stays sharp at any resolution.
+    g_textMaskW = std::max(NX, 512);
+    g_textMaskH = std::max(NY, 512);
     g_textMask = rasterizeTextMask(
         "MBZUAI",
         robotoPath.empty() ? "external/imgui/misc/fonts/Roboto-Medium.ttf" : robotoPath.c_str(),
-        NX, NY,
+        g_textMaskW, g_textMaskH,
         0.5f,   // center vertically
-        0.15f   // text height = 15% of grid height
+        0.15f   // text height = 15% of mask height
     );
 
     auto applyIntroText = [&]() {
         if (g_textMask.empty()) return;
-        sim.addSolidText(g_textMask, NX, NY);
+        sim.addSolidText(g_textMask, g_textMaskW, g_textMaskH);
         waterSim.waterHeld = true;
-        waterSim.addWaterTextParticles(g_textMask, NX, NY, 4);
+        waterSim.addWaterTextParticles(g_textMask, g_textMaskW, g_textMaskH, 4);
         waterSim.syncSolidsFrom(sim);
     };
 
@@ -400,10 +406,12 @@ int main()
         smoke3DRenderer.resize(NX, NY);
         coupledRenderer.resize(NX, NY);
 
+        g_textMaskW = std::max(NX, 512);
+        g_textMaskH = std::max(NY, 512);
         g_textMask = rasterizeTextMask(
             "MBZUAI",
             robotoPath.empty() ? "external/imgui/misc/fonts/Roboto-Medium.ttf" : robotoPath.c_str(),
-            NX, NY, 0.5f, 0.15f);
+            g_textMaskW, g_textMaskH, 0.5f, 0.15f);
 
         // Keep the viewport filling roughly the same screen area after a resize.
         ui.viewScale = std::max(1.0f, std::min(12.0f, (256.0f * 5.0f) / float(NX)));
