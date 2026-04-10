@@ -61,8 +61,15 @@ struct Settings {
     // Advector debug
     float lastAdvectL2 = 0.0f;
 
+    // 2D grid resolution (Smoke 2D / Water 2D / Coupled)
+    int   sim2DNX = 256;
+    int   sim2DNY = 256;
+    int   windowWidth = 1480;
+    int   windowHeight = 920;
+
     // Appearance
     int   themeMode = 0;            // 0=dark, 1=light
+    float uiScale   = 0.80f;        // global UI scale applied via ScaleAllSizes + FontGlobalScale
     bool  showViewportHeaders = true;
     bool  showViewportHints   = true;
 
@@ -177,6 +184,8 @@ struct Actions {
     bool resetWater3DRequested = false;
     bool applyWater3DGridRequested = false;
     bool dropWaterTextRequested = false;
+    bool applyGrid2DRequested = false;
+    bool applyWindowResolutionRequested = false;
 };
 
 void BuildRenderSettings(const Settings& ui,
@@ -197,7 +206,8 @@ Actions DrawAll(MAC2D& sim,
                 SmokeRenderer& coupledRenderer,
                 Settings& ui,
                 Probe& probe,
-                int NX, int NY);
+                int NX, int NY,
+                int windowWidth, int windowHeight);
 
 bool ConsumeSaveLayoutRequest();
 bool ConsumeResetLayoutRequest();

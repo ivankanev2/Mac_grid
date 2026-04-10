@@ -44,8 +44,8 @@
 
 
 // window size and sim resolution
-static const int NX = 256;
-static const int NY = 256;
+static int NX = 256;
+static int NY = 256;
 static const int NZ = 64;
 
 // Persistent text mask (reused across resets)
@@ -263,6 +263,7 @@ int main()
 
     UI::Settings ui;
     UI::Probe probe;
+    glfwGetWindowSize(win, &ui.windowWidth, &ui.windowHeight);
 
     glfwMakeContextCurrent(win);
     glfwSwapInterval(1);
@@ -283,8 +284,11 @@ int main()
     loadViziorFonts(io, std::max(dpiX, dpiY));
 
     UI::ApplyViziorTheme(ui.themeMode);
+    ImGui::GetStyle().ScaleAllSizes(ui.uiScale);
+    io.FontGlobalScale = ui.uiScale;
     setViziorWindowIcon(win, ui.themeMode);
-    int appliedTheme = ui.themeMode;
+    int   appliedTheme   = ui.themeMode;
+    float appliedUiScale = ui.uiScale;
 
     // tweak style when viewports enabled
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
@@ -378,14 +382,46 @@ int main()
     int activeWorkspace = std::clamp(ui.activeWorkspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
     activateWorkspace(activeWorkspace);
 
+    // Reinitialise all 2D sims at a new grid resolution.
+    auto reinit2DGrid = [&]() {
+        NX = std::max(32, ui.sim2DNX);
+        NY = std::max(32, ui.sim2DNY);
+        const float newDX = 1.0f / NX;
+
+        sim      = MAC2D(NX, NY, newDX, dt_initial);
+        waterSim = MACWater(NX, NY, newDX, dt_initial);
+        coupled  = MACCoupledSim(NX, NY, newDX, dt_initial);
+        sim.setSharedPressureSolver(&sharedPressureSolver);
+        waterSim.setSharedPressureSolver(&sharedPressureSolver);
+        coupled.setSharedPressureSolver(&sharedPressureSolver);
+
+        renderer.resize(NX, NY);
+        water3DRenderer.resize(NX, NY);
+        smoke3DRenderer.resize(NX, NY);
+        coupledRenderer.resize(NX, NY);
+
+        g_textMask = rasterizeTextMask(
+            "MBZUAI",
+            robotoPath.empty() ? "external/imgui/misc/fonts/Roboto-Medium.ttf" : robotoPath.c_str(),
+            NX, NY, 0.5f, 0.15f);
+
+        // Keep the viewport filling roughly the same screen area after a resize.
+        ui.viewScale = std::max(1.0f, std::min(12.0f, (256.0f * 5.0f) / float(NX)));
+
+        activateWorkspace(activeWorkspace);
+    };
+
     while (!glfwWindowShouldClose(win))
     {
         glfwPollEvents();
 
-        if (appliedTheme != ui.themeMode) {
+        if (appliedTheme != ui.themeMode || appliedUiScale != ui.uiScale) {
             UI::ApplyViziorTheme(ui.themeMode);
+            ImGui::GetStyle().ScaleAllSizes(ui.uiScale);
+            io.FontGlobalScale = ui.uiScale;
             setViziorWindowIcon(win, ui.themeMode);
-            appliedTheme = ui.themeMode;
+            appliedTheme   = ui.themeMode;
+            appliedUiScale = ui.uiScale;
         }
 
         const int requestedWorkspace = std::clamp(ui.activeWorkspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
@@ -660,7 +696,12 @@ int main()
         ImGui::NewFrame();
 
         // draw UI
-        UI::Actions actions = UI::DrawAll(sim, waterSim, water3D, smoke3D, coupled, renderer, water3DRenderer, smoke3DRenderer, coupledRenderer, ui, probe, NX, NY);
+        int currentWindowW = 0;
+        int currentWindowH = 0;
+        glfwGetWindowSize(win, &currentWindowW, &currentWindowH);
+        UI::Actions actions = UI::DrawAll(sim, waterSim, water3D, smoke3D, coupled,
+                                          renderer, water3DRenderer, smoke3DRenderer, coupledRenderer,
+                                          ui, probe, NX, NY, currentWindowW, currentWindowH);
         if (UI::ConsumeResetLayoutRequest()) {
         // nothing needed here if panels.cpp already deleted ini and rebuilt docks
         // but it's fine to keep for future, you better not delete this >:)
@@ -678,6 +719,14 @@ int main()
         }
         if ((actions.applyWater3DGridRequested || actions.resetWater3DRequested) && activeWorkspace == UI::kWorkspaceWater3D) {
             activateWorkspace(activeWorkspace);
+        }
+        if (actions.applyWindowResolutionRequested) {
+            ui.windowWidth = std::clamp(ui.windowWidth, 960, 7680);
+            ui.windowHeight = std::clamp(ui.windowHeight, 540, 4320);
+            glfwSetWindowSize(win, ui.windowWidth, ui.windowHeight);
+        }
+        if (actions.applyGrid2DRequested) {
+            reinit2DGrid();
         }
 
         // render GL

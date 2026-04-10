@@ -21,8 +21,10 @@ namespace UI {
 static bool g_pipeMode = false;
 static ImGuiID dock_id = 0;
 
-static bool g_requestSaveLayout  = false;
-static bool g_requestResetLayout = false;
+static bool g_requestSaveLayout   = false;
+static bool g_requestResetLayout  = false;
+static bool g_showSettingsWindow = false;
+static bool g_focusSettingsWindow = false;
 
 struct Ring {
     std::vector<float> v;
@@ -113,6 +115,7 @@ static constexpr const char* kWinWater2D    = "Water 2D Viewport";
 static constexpr const char* kWinSmoke3D    = "Smoke 3D Viewport";
 static constexpr const char* kWinWater3D    = "Water 3D Viewport";
 static constexpr const char* kWinCombined   = "Coupled Viewport";
+static constexpr const char* kWinSettings   = "Settings";
 
 static constexpr int kThemeDark = 0;
 static constexpr int kThemeLight = 1;
@@ -449,6 +452,7 @@ static void BuildDefaultDockLayout(const ImGuiViewport* vp)
 
     ImGui::DockBuilderDockWindow(kWinHub, dock_hub);
     ImGui::DockBuilderDockWindow(kWinInspector, dock_inspector);
+    ImGui::DockBuilderDockWindow(kWinSettings, dock_inspector);
     ImGui::DockBuilderDockWindow(kWinTelemetry, dock_telemetry);
 
     ImGui::DockBuilderDockWindow(kWinSmoke2D, dock_main);
@@ -509,12 +513,11 @@ static void BeginDockspaceRoot(Settings& ui)
         if (ImGui::Button("Reset Layout")) g_requestResetLayout = true;
         ImGui::SameLine();
         if (ImGui::Button("Panels")) ImGui::OpenPopup("AddPanelPopup");
-        ImGui::SameLine(0.0f, 10.0f);
-        ImGui::TextDisabled("Theme");
         ImGui::SameLine(0.0f, 6.0f);
-        if (DrawSegmentedToggle("Dark##TopTheme", ui.themeMode == kThemeDark)) ui.themeMode = kThemeDark;
-        ImGui::SameLine(0.0f, 4.0f);
-        if (DrawSegmentedToggle("Light##TopTheme", ui.themeMode == kThemeLight)) ui.themeMode = kThemeLight;
+        if (ImGui::Button("Settings")) {
+            g_showSettingsWindow = true;
+            g_focusSettingsWindow = true;
+        }
 
         const char* tag = IsDarkTheme() ? "Fluid Research Engine | Dark" : "Fluid Research Engine | Light";
         const float tagW = ImGui::CalcTextSize(tag).x;
@@ -540,6 +543,7 @@ static void BeginDockspaceRoot(Settings& ui)
         ImGui::BulletText("%s", kWinCombined);
         ImGui::BulletText("%s", kWinSmoke3D);
         ImGui::BulletText("%s", kWinWater3D);
+        ImGui::BulletText("%s", kWinSettings);
         ImGui::EndPopup();
     }
 
@@ -685,6 +689,104 @@ static void DrawViziorHub(MAC2D& sim,
     ImGui::Separator();
     ImGui::TextDisabled("Workspace note");
     ImGui::TextWrapped("Single active-workspace mode keeps hidden smoke and water solvers from burning CPU and GPU time in the background while preserving the same solver controls for the selected view.");
+
+    ImGui::End();
+}
+
+static void DrawSettingsWindow(Settings& ui,
+                               Actions& actions,
+                               int currentWindowWidth,
+                               int currentWindowHeight)
+{
+    if (!g_showSettingsWindow) return;
+
+    ImGui::SetNextWindowDockID(dock_id, ImGuiCond_FirstUseEver);
+    if (g_focusSettingsWindow) {
+        ImGui::SetNextWindowFocus();
+        g_focusSettingsWindow = false;
+    }
+
+    if (!ImGui::Begin(kWinSettings, &g_showSettingsWindow)) {
+        ImGui::End();
+        return;
+    }
+
+    DrawInspectorSectionLabel("Display", "Window resolution and theme.");
+    ImGui::TextDisabled("Current window");
+    ImGui::Text("%d x %d", currentWindowWidth, currentWindowHeight);
+
+    ImGui::TextDisabled("Theme");
+    if (DrawSegmentedToggle("Dark##SettingsTheme", ui.themeMode == kThemeDark)) ui.themeMode = kThemeDark;
+    ImGui::SameLine();
+    if (DrawSegmentedToggle("Light##SettingsTheme", ui.themeMode == kThemeLight)) ui.themeMode = kThemeLight;
+
+    struct WindowPreset {
+        const char* label;
+        int width;
+        int height;
+    };
+    static const WindowPreset kWindowPresets[] = {
+        {"1280 x 720 (HD)", 1280, 720},
+        {"1366 x 768", 1366, 768},
+        {"1480 x 920 (Default)", 1480, 920},
+        {"1600 x 900", 1600, 900},
+        {"1920 x 1080 (Full HD)", 1920, 1080},
+        {"2560 x 1440 (QHD)", 2560, 1440},
+    };
+
+    int presetIdx = -1;
+    for (int i = 0; i < (int)(sizeof(kWindowPresets) / sizeof(kWindowPresets[0])); ++i) {
+        if (ui.windowWidth == kWindowPresets[i].width &&
+            ui.windowHeight == kWindowPresets[i].height) {
+            presetIdx = i;
+            break;
+        }
+    }
+    const char* preview = (presetIdx >= 0) ? kWindowPresets[presetIdx].label : "Custom";
+    if (ImGui::BeginCombo("Window preset", preview)) {
+        for (int i = 0; i < (int)(sizeof(kWindowPresets) / sizeof(kWindowPresets[0])); ++i) {
+            const bool selected = (presetIdx == i);
+            if (ImGui::Selectable(kWindowPresets[i].label, selected)) {
+                ui.windowWidth = kWindowPresets[i].width;
+                ui.windowHeight = kWindowPresets[i].height;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Window width", &ui.windowWidth, 16, 128);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Window height", &ui.windowHeight, 16, 128);
+    ui.windowWidth = std::clamp(ui.windowWidth, 960, 7680);
+    ui.windowHeight = std::clamp(ui.windowHeight, 540, 4320);
+
+    const bool windowSizeIsCurrent = (ui.windowWidth == currentWindowWidth &&
+                                      ui.windowHeight == currentWindowHeight);
+    ImGui::BeginDisabled(windowSizeIsCurrent);
+    if (ImGui::Button("Apply window resolution", ImVec2(220.0f, 0.0f))) {
+        actions.applyWindowResolutionRequested = true;
+    }
+    ImGui::EndDisabled();
+    if (windowSizeIsCurrent) {
+        ImGui::TextDisabled("Current size already applied.");
+    }
+
+    ImGui::Spacing();
+    DrawInspectorSectionLabel("UI Scale", "Scales all panels, widgets and text. Takes effect immediately.");
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderFloat("Scale##uiscale", &ui.uiScale, 0.50f, 1.20f, "%.2f");
+
+    ImGui::Spacing();
+    DrawInspectorSectionLabel("Simulation Grid", "2D workspace resolution (Smoke 2D / Water 2D / Coupled).");
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::SliderInt("Grid width", &ui.sim2DNX, 32, 512);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::SliderInt("Grid height", &ui.sim2DNY, 32, 512);
+    if (ImGui::Button("Apply 2D grid resolution", ImVec2(220.0f, 0.0f))) {
+        actions.applyGrid2DRequested = true;
+    }
 
     ImGui::End();
 }
@@ -894,11 +996,8 @@ static Actions drawControls(MAC2D& sim,
     ImGui::Begin(kWinInspector);
 
     if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
-        DrawInspectorSectionLabel("Appearance", "Theme, branding and viewport presentation.");
-        ImGui::TextDisabled("Theme");
-        if (DrawSegmentedToggle("Dark", ui.themeMode == kThemeDark)) ui.themeMode = kThemeDark;
-        ImGui::SameLine();
-        if (DrawSegmentedToggle("Light", ui.themeMode == kThemeLight)) ui.themeMode = kThemeLight;
+        DrawInspectorSectionLabel("Appearance", "Branding and viewport presentation.");
+        ImGui::TextDisabled("Theme switch moved to Settings.");
         ImGui::Checkbox("Viewport headers", &ui.showViewportHeaders);
         ImGui::Checkbox("Viewport hints", &ui.showViewportHints);
         ImGui::TextDisabled("Roboto is loaded at startup so text stays cleaner and less pixelated.");
@@ -2486,7 +2585,8 @@ Actions DrawAll(MAC2D& sim,
                 SmokeRenderer& coupledRenderer,
                 Settings& ui,
                 Probe& probe,
-                int NX, int NY)
+                int NX, int NY,
+                int windowWidth, int windowHeight)
 {
     // Dockspace root must be drawn BEFORE your windows
     BeginDockspaceRoot(ui);
@@ -2522,6 +2622,7 @@ Actions DrawAll(MAC2D& sim,
 
     Actions a;
     DrawViziorHub(sim, water, water3D, smoke3D, ui, a);
+    DrawSettingsWindow(ui, a, windowWidth, windowHeight);
     {
         Actions inspectorActions = drawControls(sim, water, water3D, smoke3D, coupled, ui);
         a.resetRequested = a.resetRequested || inspectorActions.resetRequested;
@@ -2529,6 +2630,9 @@ Actions DrawAll(MAC2D& sim,
         a.applySmoke3DGridRequested = inspectorActions.applySmoke3DGridRequested;
         a.resetWater3DRequested = inspectorActions.resetWater3DRequested;
         a.applyWater3DGridRequested = inspectorActions.applyWater3DGridRequested;
+        a.dropWaterTextRequested = a.dropWaterTextRequested || inspectorActions.dropWaterTextRequested;
+        a.applyGrid2DRequested = a.applyGrid2DRequested || inspectorActions.applyGrid2DRequested;
+        a.applyWindowResolutionRequested = a.applyWindowResolutionRequested || inspectorActions.applyWindowResolutionRequested;
     }
 
     ui.activeWorkspace = std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
