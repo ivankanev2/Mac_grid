@@ -519,7 +519,11 @@ static void BeginDockspaceRoot(Settings& ui)
             g_focusSettingsWindow = true;
         }
 
-        const char* tag = IsDarkTheme() ? "Fluid Research Engine | Dark" : "Fluid Research Engine | Light";
+        char tag[64];
+        std::snprintf(tag, sizeof(tag),
+            "%.0f FPS  |  Fluid Research Engine  |  %s",
+            ImGui::GetIO().Framerate,
+            IsDarkTheme() ? "Dark" : "Light");
         const float tagW = ImGui::CalcTextSize(tag).x;
         const float availW = ImGui::GetContentRegionAvail().x;
         if (availW > tagW + 8.0f) {
