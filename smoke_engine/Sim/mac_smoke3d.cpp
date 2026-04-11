@@ -2,6 +2,8 @@
 
 #include <chrono>
 #include <cmath>
+#include <thread>
+
 
 namespace {
 
@@ -23,6 +25,32 @@ inline float dissipationStep(float base, float dt) {
     if (b >= 0.999999f) return 1.0f;
     const float dtRef = 0.02f;
     return std::pow(b, dt / std::max(1e-6f, dtRef));
+}
+
+template <typename Fn>
+inline void parallelForChunks(int count, int minChunk, Fn&& fn) {
+    if (count <= 0) return;
+
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    int taskCount = (int)std::min<unsigned>(hw, (unsigned)std::max(1, count / std::max(1, minChunk)));
+    if (taskCount <= 1) {
+        fn(0, count);
+        return;
+    }
+
+    const int chunk = (count + taskCount - 1) / taskCount;
+    std::vector<std::thread> workers;
+    workers.reserve((std::size_t)taskCount - 1u);
+
+    for (int task = 1; task < taskCount; ++task) {
+        const int begin = task * chunk;
+        if (begin >= count) break;
+        const int end = std::min(count, begin + chunk);
+        workers.emplace_back([&, begin, end]() { fn(begin, end); });
+    }
+
+    fn(0, std::min(count, chunk));
+    for (auto& worker : workers) worker.join();
 }
 
 } // namespace
@@ -65,6 +93,8 @@ void MACSmoke3D::reset() {
 
     solid.assign((std::size_t)cellCount, (uint8_t)0);
     solidUser.assign((std::size_t)cellCount, (uint8_t)0);
+    fluidMask.assign((std::size_t)cellCount, (uint8_t)0);
+    fluidCellCount = 0;
 
     rebuildBorderSolids();
     applyBoundary();
@@ -132,6 +162,15 @@ void MACSmoke3D::rebuildBorderSolids() {
                 setSolid(i, j, nz - 1 - t);
             }
         }
+    }
+
+    fluidCellCount = 0;
+    if ((int)fluidMask.size() != cellCount) {
+        fluidMask.assign((std::size_t)cellCount, (uint8_t)0);
+    }
+    for (int id = 0; id < cellCount; ++id) {
+        fluidMask[(std::size_t)id] = solid[(std::size_t)id] ? (uint8_t)0 : (uint8_t)1;
+        if (!solid[(std::size_t)id]) ++fluidCellCount;
     }
 }
 
@@ -403,107 +442,113 @@ void MACSmoke3D::advectVelocity() {
         z = clampf(z, 0.0f, domainZ);
     };
 
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i <= nx; ++i) {
-                const int id = idxU(i, j, k);
-                const bool leftSolid = (i - 1 >= 0) ? isSolidCell(i - 1, j, k) : true;
-                const bool rightSolid = (i < nx) ? isSolidCell(i, j, k) : true;
-                if (leftSolid || rightSolid) {
-                    uTmp[(std::size_t)id] = 0.0f;
-                    continue;
+    parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i <= nx; ++i) {
+                    const int id = idxU(i, j, k);
+                    const bool leftSolid = (i - 1 >= 0) ? isSolidCell(i - 1, j, k) : true;
+                    const bool rightSolid = (i < nx) ? isSolidCell(i, j, k) : true;
+                    if (leftSolid || rightSolid) {
+                        uTmp[(std::size_t)id] = 0.0f;
+                        continue;
+                    }
+
+                    float x = i * dx;
+                    float y = (j + 0.5f) * dx;
+                    float z = (k + 0.5f) * dx;
+                    float ux, uy, uz;
+                    velAt(x, y, z, u0, v0, w0, ux, uy, uz);
+
+                    float midX = x - 0.5f * dt * ux;
+                    float midY = y - 0.5f * dt * uy;
+                    float midZ = z - 0.5f * dt * uz;
+                    clampPos(midX, midY, midZ);
+
+                    float mx, my, mz;
+                    velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
+
+                    float backX = x - dt * mx;
+                    float backY = y - dt * my;
+                    float backZ = z - dt * mz;
+                    clampPos(backX, backY, backZ);
+                    uTmp[(std::size_t)id] = sampleU(u0, backX, backY, backZ);
                 }
-
-                float x = i * dx;
-                float y = (j + 0.5f) * dx;
-                float z = (k + 0.5f) * dx;
-                float ux, uy, uz;
-                velAt(x, y, z, u0, v0, w0, ux, uy, uz);
-
-                float midX = x - 0.5f * dt * ux;
-                float midY = y - 0.5f * dt * uy;
-                float midZ = z - 0.5f * dt * uz;
-                clampPos(midX, midY, midZ);
-
-                float mx, my, mz;
-                velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
-
-                float backX = x - dt * mx;
-                float backY = y - dt * my;
-                float backZ = z - dt * mz;
-                clampPos(backX, backY, backZ);
-                uTmp[(std::size_t)id] = sampleU(u0, backX, backY, backZ);
             }
         }
-    }
+    });
 
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j <= ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxV(i, j, k);
-                const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
-                const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
-                if (botSolid || topSolid) {
-                    vTmp[(std::size_t)id] = 0.0f;
-                    continue;
+    parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int j = 0; j <= ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int id = idxV(i, j, k);
+                    const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
+                    const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
+                    if (botSolid || topSolid) {
+                        vTmp[(std::size_t)id] = 0.0f;
+                        continue;
+                    }
+
+                    float x = (i + 0.5f) * dx;
+                    float y = j * dx;
+                    float z = (k + 0.5f) * dx;
+                    float ux, uy, uz;
+                    velAt(x, y, z, u0, v0, w0, ux, uy, uz);
+
+                    float midX = x - 0.5f * dt * ux;
+                    float midY = y - 0.5f * dt * uy;
+                    float midZ = z - 0.5f * dt * uz;
+                    clampPos(midX, midY, midZ);
+
+                    float mx, my, mz;
+                    velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
+
+                    float backX = x - dt * mx;
+                    float backY = y - dt * my;
+                    float backZ = z - dt * mz;
+                    clampPos(backX, backY, backZ);
+                    vTmp[(std::size_t)id] = sampleV(v0, backX, backY, backZ);
                 }
-
-                float x = (i + 0.5f) * dx;
-                float y = j * dx;
-                float z = (k + 0.5f) * dx;
-                float ux, uy, uz;
-                velAt(x, y, z, u0, v0, w0, ux, uy, uz);
-
-                float midX = x - 0.5f * dt * ux;
-                float midY = y - 0.5f * dt * uy;
-                float midZ = z - 0.5f * dt * uz;
-                clampPos(midX, midY, midZ);
-
-                float mx, my, mz;
-                velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
-
-                float backX = x - dt * mx;
-                float backY = y - dt * my;
-                float backZ = z - dt * mz;
-                clampPos(backX, backY, backZ);
-                vTmp[(std::size_t)id] = sampleV(v0, backX, backY, backZ);
             }
         }
-    }
+    });
 
-    for (int k = 0; k <= nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxW(i, j, k);
-                const bool backSolid = (k - 1 >= 0) ? isSolidCell(i, j, k - 1) : true;
-                const bool frontSolid = (k < nz) ? isSolidCell(i, j, k) : true;
-                if (backSolid || frontSolid) {
-                    wTmp[(std::size_t)id] = 0.0f;
-                    continue;
+    parallelForChunks(nz + 1, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int id = idxW(i, j, k);
+                    const bool backSolid = (k - 1 >= 0) ? isSolidCell(i, j, k - 1) : true;
+                    const bool frontSolid = (k < nz) ? isSolidCell(i, j, k) : true;
+                    if (backSolid || frontSolid) {
+                        wTmp[(std::size_t)id] = 0.0f;
+                        continue;
+                    }
+
+                    float x = (i + 0.5f) * dx;
+                    float y = (j + 0.5f) * dx;
+                    float z = k * dx;
+                    float ux, uy, uz;
+                    velAt(x, y, z, u0, v0, w0, ux, uy, uz);
+
+                    float midX = x - 0.5f * dt * ux;
+                    float midY = y - 0.5f * dt * uy;
+                    float midZ = z - 0.5f * dt * uz;
+                    clampPos(midX, midY, midZ);
+
+                    float mx, my, mz;
+                    velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
+
+                    float backX = x - dt * mx;
+                    float backY = y - dt * my;
+                    float backZ = z - dt * mz;
+                    clampPos(backX, backY, backZ);
+                    wTmp[(std::size_t)id] = sampleW(w0, backX, backY, backZ);
                 }
-
-                float x = (i + 0.5f) * dx;
-                float y = (j + 0.5f) * dx;
-                float z = k * dx;
-                float ux, uy, uz;
-                velAt(x, y, z, u0, v0, w0, ux, uy, uz);
-
-                float midX = x - 0.5f * dt * ux;
-                float midY = y - 0.5f * dt * uy;
-                float midZ = z - 0.5f * dt * uz;
-                clampPos(midX, midY, midZ);
-
-                float mx, my, mz;
-                velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
-
-                float backX = x - dt * mx;
-                float backY = y - dt * my;
-                float backZ = z - dt * mz;
-                clampPos(backX, backY, backZ);
-                wTmp[(std::size_t)id] = sampleW(w0, backX, backY, backZ);
             }
         }
-    }
+    });
 
     u.swap(uTmp);
     v.swap(vTmp);
@@ -513,30 +558,32 @@ void MACSmoke3D::advectVelocity() {
 void MACSmoke3D::addBuoyancy() {
     const float T0 = std::max(1e-3f, params.ambientTempK);
 
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j <= ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxV(i, j, k);
-                const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
-                const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
-                if (botSolid || topSolid) continue;
+    parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int j = 0; j <= ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int id = idxV(i, j, k);
+                    const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
+                    const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
+                    if (botSolid || topSolid) continue;
 
-                float tAvg = 0.0f;
-                int count = 0;
-                if (j - 1 >= 0 && !isSolidCell(i, j - 1, k)) {
-                    tAvg += temp[(std::size_t)idxCell(i, j - 1, k)];
-                    count++;
+                    float tAvg = 0.0f;
+                    int count = 0;
+                    if (j - 1 >= 0 && !isSolidCell(i, j - 1, k)) {
+                        tAvg += temp[(std::size_t)idxCell(i, j - 1, k)];
+                        count++;
+                    }
+                    if (j < ny && !isSolidCell(i, j, k)) {
+                        tAvg += temp[(std::size_t)idxCell(i, j, k)];
+                        count++;
+                    }
+                    if (count == 0) continue;
+                    tAvg /= (float)count;
+                    v[(std::size_t)id] += dt * params.gravity * (tAvg / T0) * params.buoyancyScale;
                 }
-                if (j < ny && !isSolidCell(i, j, k)) {
-                    tAvg += temp[(std::size_t)idxCell(i, j, k)];
-                    count++;
-                }
-                if (count == 0) continue;
-                tAvg /= (float)count;
-                v[(std::size_t)id] += dt * params.gravity * (tAvg / T0) * params.buoyancyScale;
             }
         }
-    }
+    });
 
     if (params.velDamping > 0.0f) {
         const float damp = std::exp(-params.velDamping * dt);
@@ -691,33 +738,35 @@ void MACSmoke3D::diffuseScalarImplicit(std::vector<float>& phi,
     if (alpha <= 0.0f) return;
 
     for (int it = 0; it < params.diffuseIters; ++it) {
-        for (int k = 0; k < nz; ++k) {
-            for (int j = 0; j < ny; ++j) {
-                for (int i = 0; i < nx; ++i) {
-                    const int id = idxCell(i, j, k);
-                    if (solid[(std::size_t)id]) {
-                        cellTmp[(std::size_t)id] = 0.0f;
-                        continue;
+        parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+            for (int k = kBegin; k < kEnd; ++k) {
+                for (int j = 0; j < ny; ++j) {
+                    for (int i = 0; i < nx; ++i) {
+                        const int id = idxCell(i, j, k);
+                        if (solid[(std::size_t)id]) {
+                            cellTmp[(std::size_t)id] = 0.0f;
+                            continue;
+                        }
+
+                        float sum = 0.0f;
+                        int count = 0;
+
+                        if (i > 0 && !isSolidCell(i - 1, j, k)) { sum += phi[(std::size_t)idxCell(i - 1, j, k)]; count++; }
+                        if (i + 1 < nx && !isSolidCell(i + 1, j, k)) { sum += phi[(std::size_t)idxCell(i + 1, j, k)]; count++; }
+                        if (j > 0 && !isSolidCell(i, j - 1, k)) { sum += phi[(std::size_t)idxCell(i, j - 1, k)]; count++; }
+                        if (j + 1 < ny && !isSolidCell(i, j + 1, k)) { sum += phi[(std::size_t)idxCell(i, j + 1, k)]; count++; }
+                        if (k > 0 && !isSolidCell(i, j, k - 1)) { sum += phi[(std::size_t)idxCell(i, j, k - 1)]; count++; }
+                        if (k + 1 < nz && !isSolidCell(i, j, k + 1)) { sum += phi[(std::size_t)idxCell(i, j, k + 1)]; count++; }
+
+                        const float denom = 1.0f + alpha * (float)count;
+                        const float xNew = (phi0[(std::size_t)id] + alpha * sum) / std::max(1e-6f, denom);
+                        cellTmp[(std::size_t)id] =
+                            (1.0f - params.diffuseOmega) * phi[(std::size_t)id] +
+                            params.diffuseOmega * xNew;
                     }
-
-                    float sum = 0.0f;
-                    int count = 0;
-
-                    if (i > 0 && !isSolidCell(i - 1, j, k)) { sum += phi[(std::size_t)idxCell(i - 1, j, k)]; count++; }
-                    if (i + 1 < nx && !isSolidCell(i + 1, j, k)) { sum += phi[(std::size_t)idxCell(i + 1, j, k)]; count++; }
-                    if (j > 0 && !isSolidCell(i, j - 1, k)) { sum += phi[(std::size_t)idxCell(i, j - 1, k)]; count++; }
-                    if (j + 1 < ny && !isSolidCell(i, j + 1, k)) { sum += phi[(std::size_t)idxCell(i, j + 1, k)]; count++; }
-                    if (k > 0 && !isSolidCell(i, j, k - 1)) { sum += phi[(std::size_t)idxCell(i, j, k - 1)]; count++; }
-                    if (k + 1 < nz && !isSolidCell(i, j, k + 1)) { sum += phi[(std::size_t)idxCell(i, j, k + 1)]; count++; }
-
-                    const float denom = 1.0f + alpha * (float)count;
-                    const float xNew = (phi0[(std::size_t)id] + alpha * sum) / std::max(1e-6f, denom);
-                    cellTmp[(std::size_t)id] =
-                        (1.0f - params.diffuseOmega) * phi[(std::size_t)id] +
-                        params.diffuseOmega * xNew;
                 }
             }
-        }
+        });
         phi.swap(cellTmp);
     }
 
@@ -736,7 +785,8 @@ void MACSmoke3D::project() {
     const float invDt = 1.0f / std::max(1e-8f, dt);
     const float dx2 = dx * dx;
 
-    std::vector<uint8_t> fluidMask((std::size_t)cellCount, (uint8_t)0);
+    if ((int)fluidMask.size() != cellCount) fluidMask.assign((std::size_t)cellCount, (uint8_t)0);
+    std::fill(fluidMask.begin(), fluidMask.end(), (uint8_t)0);
     bool hasDirichletReference = false;
 
     auto isFluidCell = [&](int i, int j, int k) -> bool {
@@ -998,37 +1048,39 @@ void MACSmoke3D::advectScalars() {
     const float domainY = ny * dx;
     const float domainZ = nz * dx;
 
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxCell(i, j, k);
-                if (solid[(std::size_t)id]) {
-                    smoke[(std::size_t)id] = 0.0f;
-                    temp[(std::size_t)id] = 0.0f;
-                    continue;
+    parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int id = idxCell(i, j, k);
+                    if (solid[(std::size_t)id]) {
+                        smoke[(std::size_t)id] = 0.0f;
+                        temp[(std::size_t)id] = 0.0f;
+                        continue;
+                    }
+
+                    const float x = (i + 0.5f) * dx;
+                    const float y = (j + 0.5f) * dx;
+                    const float z = (k + 0.5f) * dx;
+
+                    float u1, v1, w1;
+                    velAt(x, y, z, u, v, w, u1, v1, w1);
+                    float midX = clampf(x - 0.5f * dt * u1, 0.0f, domainX);
+                    float midY = clampf(y - 0.5f * dt * v1, 0.0f, domainY + (params.openTop ? dx : 0.0f));
+                    float midZ = clampf(z - 0.5f * dt * w1, 0.0f, domainZ);
+
+                    float u2, v2, w2;
+                    velAt(midX, midY, midZ, u, v, w, u2, v2, w2);
+                    float backX = clampf(x - dt * u2, 0.0f, domainX);
+                    float backY = clampf(y - dt * v2, 0.0f, domainY + (params.openTop ? dx : 0.0f));
+                    float backZ = clampf(z - dt * w2, 0.0f, domainZ);
+
+                    smoke[(std::size_t)id] = keepSmoke * sampleCellCenteredOpenTop(smoke0, backX, backY, backZ, 0.0f);
+                    temp[(std::size_t)id] = keepTemp * sampleCellCenteredOpenTop(temp0, backX, backY, backZ, 0.0f);
                 }
-
-                const float x = (i + 0.5f) * dx;
-                const float y = (j + 0.5f) * dx;
-                const float z = (k + 0.5f) * dx;
-
-                float u1, v1, w1;
-                velAt(x, y, z, u, v, w, u1, v1, w1);
-                float midX = clampf(x - 0.5f * dt * u1, 0.0f, domainX);
-                float midY = clampf(y - 0.5f * dt * v1, 0.0f, domainY + (params.openTop ? dx : 0.0f));
-                float midZ = clampf(z - 0.5f * dt * w1, 0.0f, domainZ);
-
-                float u2, v2, w2;
-                velAt(midX, midY, midZ, u, v, w, u2, v2, w2);
-                float backX = clampf(x - dt * u2, 0.0f, domainX);
-                float backY = clampf(y - dt * v2, 0.0f, domainY + (params.openTop ? dx : 0.0f));
-                float backZ = clampf(z - dt * w2, 0.0f, domainZ);
-
-                smoke[(std::size_t)id] = keepSmoke * sampleCellCenteredOpenTop(smoke0, backX, backY, backZ, 0.0f);
-                temp[(std::size_t)id] = keepTemp * sampleCellCenteredOpenTop(temp0, backX, backY, backZ, 0.0f);
             }
         }
-    }
+    });
 }
 
 void MACSmoke3D::ensureDerivedDebugFields() {
@@ -1036,44 +1088,107 @@ void MACSmoke3D::ensureDerivedDebugFields() {
     rasterizeDebugFields();
 }
 
+bool MACSmoke3D::hasActiveVelocity(float eps) const {
+    for (float value : u) if (std::fabs(value) > eps) return true;
+    for (float value : v) if (std::fabs(value) > eps) return true;
+    for (float value : w) if (std::fabs(value) > eps) return true;
+    return false;
+}
+
+bool MACSmoke3D::hasActiveScalar(const std::vector<float>& field, float eps) const {
+    const std::size_t count = std::min(field.size(), solid.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!solid[i] && std::fabs(field[i]) > eps) return true;
+    }
+    return false;
+}
+
+void MACSmoke3D::clearVelocityState() {
+    std::fill(u.begin(), u.end(), 0.0f);
+    std::fill(v.begin(), v.end(), 0.0f);
+    std::fill(w.begin(), w.end(), 0.0f);
+    std::fill(u0.begin(), u0.end(), 0.0f);
+    std::fill(v0.begin(), v0.end(), 0.0f);
+    std::fill(w0.begin(), w0.end(), 0.0f);
+    std::fill(uTmp.begin(), uTmp.end(), 0.0f);
+    std::fill(vTmp.begin(), vTmp.end(), 0.0f);
+    std::fill(wTmp.begin(), wTmp.end(), 0.0f);
+    std::fill(pressure.begin(), pressure.end(), 0.0f);
+    std::fill(pressureTmp.begin(), pressureTmp.end(), 0.0f);
+    std::fill(rhs.begin(), rhs.end(), 0.0f);
+}
+
+void MACSmoke3D::clearScalarState(std::vector<float>& field) {
+    std::fill(field.begin(), field.end(), 0.0f);
+}
+
+void MACSmoke3D::clearDerivedDebugFields() {
+    std::fill(divergence.begin(), divergence.end(), 0.0f);
+    std::fill(speed.begin(), speed.end(), 0.0f);
+    derivedFieldsDirty = false;
+}
+
 void MACSmoke3D::rasterizeDebugFields() {
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxCell(i, j, k);
-                if (solid[(std::size_t)id]) {
-                    divergence[(std::size_t)id] = 0.0f;
-                    speed[(std::size_t)id] = 0.0f;
-                    continue;
+    parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int id = idxCell(i, j, k);
+                    if (solid[(std::size_t)id]) {
+                        divergence[(std::size_t)id] = 0.0f;
+                        speed[(std::size_t)id] = 0.0f;
+                        continue;
+                    }
+
+                    float uL = u[(std::size_t)idxU(i, j, k)];
+                    float uR = u[(std::size_t)idxU(i + 1, j, k)];
+                    float vB = v[(std::size_t)idxV(i, j, k)];
+                    float vT = v[(std::size_t)idxV(i, j + 1, k)];
+                    float wBk = w[(std::size_t)idxW(i, j, k)];
+                    float wFr = w[(std::size_t)idxW(i, j, k + 1)];
+
+                    if (i - 1 >= 0 && solid[(std::size_t)idxCell(i - 1, j, k)]) uL = 0.0f;
+                    if (i + 1 < nx && solid[(std::size_t)idxCell(i + 1, j, k)]) uR = 0.0f;
+                    if (j - 1 >= 0 && solid[(std::size_t)idxCell(i, j - 1, k)]) vB = 0.0f;
+                    if (j + 1 < ny && solid[(std::size_t)idxCell(i, j + 1, k)]) vT = 0.0f;
+                    if (k - 1 >= 0 && solid[(std::size_t)idxCell(i, j, k - 1)]) wBk = 0.0f;
+                    if (k + 1 < nz && solid[(std::size_t)idxCell(i, j, k + 1)]) wFr = 0.0f;
+
+                    divergence[(std::size_t)id] = (uR - uL + vT - vB + wFr - wBk) / dx;
+
+                    const float cx = (i + 0.5f) * dx;
+                    const float cy = (j + 0.5f) * dx;
+                    const float cz = (k + 0.5f) * dx;
+                    float uc, vc, wc;
+                    velAt(cx, cy, cz, u, v, w, uc, vc, wc);
+                    speed[(std::size_t)id] = std::sqrt(uc * uc + vc * vc + wc * wc);
                 }
-
-                float uL = u[(std::size_t)idxU(i, j, k)];
-                float uR = u[(std::size_t)idxU(i + 1, j, k)];
-                float vB = v[(std::size_t)idxV(i, j, k)];
-                float vT = v[(std::size_t)idxV(i, j + 1, k)];
-                float wBk = w[(std::size_t)idxW(i, j, k)];
-                float wFr = w[(std::size_t)idxW(i, j, k + 1)];
-
-                if (i - 1 >= 0 && solid[(std::size_t)idxCell(i - 1, j, k)]) uL = 0.0f;
-                if (i + 1 < nx && solid[(std::size_t)idxCell(i + 1, j, k)]) uR = 0.0f;
-                if (j - 1 >= 0 && solid[(std::size_t)idxCell(i, j - 1, k)]) vB = 0.0f;
-                if (j + 1 < ny && solid[(std::size_t)idxCell(i, j + 1, k)]) vT = 0.0f;
-                if (k - 1 >= 0 && solid[(std::size_t)idxCell(i, j, k - 1)]) wBk = 0.0f;
-                if (k + 1 < nz && solid[(std::size_t)idxCell(i, j, k + 1)]) wFr = 0.0f;
-
-                divergence[(std::size_t)id] = (uR - uL + vT - vB + wFr - wBk) / dx;
-
-                const float cx = (i + 0.5f) * dx;
-                const float cy = (j + 0.5f) * dx;
-                const float cz = (k + 0.5f) * dx;
-                float uc, vc, wc;
-                velAt(cx, cy, cz, u, v, w, uc, vc, wc);
-                speed[(std::size_t)id] = std::sqrt(uc * uc + vc * vc + wc * wc);
             }
         }
-    }
+    });
 
     derivedFieldsDirty = false;
+}
+
+void MACSmoke3D::updateIdleStats(float stepMs) {
+    lastStats.nx = nx;
+    lastStats.ny = ny;
+    lastStats.nz = nz;
+    lastStats.activeCells = fluidCellCount;
+    lastStats.maxSpeed = 0.0f;
+    lastStats.maxDivergence = 0.0f;
+    lastStats.dt = dt;
+    lastStats.lastStepMs = stepMs;
+    lastStats.backendName = "CPU Smoke 3D";
+    lastStats.bytesAllocated =
+        u.size() * sizeof(float) + v.size() * sizeof(float) + w.size() * sizeof(float) +
+        u0.size() * sizeof(float) + v0.size() * sizeof(float) + w0.size() * sizeof(float) +
+        uTmp.size() * sizeof(float) + vTmp.size() * sizeof(float) + wTmp.size() * sizeof(float) +
+        pressure.size() * sizeof(float) + pressureTmp.size() * sizeof(float) + rhs.size() * sizeof(float) +
+        smoke.size() * sizeof(float) + smoke0.size() * sizeof(float) +
+        temp.size() * sizeof(float) + temp0.size() * sizeof(float) +
+        cellTmp.size() * sizeof(float) + divergence.size() * sizeof(float) + speed.size() * sizeof(float) +
+        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t) + fluidMask.size() * sizeof(uint8_t);
 }
 
 void MACSmoke3D::updateStats(float stepMs) {
@@ -1094,7 +1209,7 @@ void MACSmoke3D::updateStats(float stepMs) {
         smoke.size() * sizeof(float) + smoke0.size() * sizeof(float) +
         temp.size() * sizeof(float) + temp0.size() * sizeof(float) +
         cellTmp.size() * sizeof(float) + divergence.size() * sizeof(float) + speed.size() * sizeof(float) +
-        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t);
+        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t) + fluidMask.size() * sizeof(uint8_t);
 
     for (float value : u) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
     for (float value : v) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
@@ -1134,22 +1249,56 @@ void MACSmoke3D::step() {
     rebuildBorderSolids();
     applyBoundary();
 
-    advectVelocity();
-    applyBoundary();
+    const bool smokeActive = hasActiveScalar(smoke, 1.0e-5f);
+    const bool tempActive = hasActiveScalar(temp, 1.0e-5f);
+    const bool velocityActive = hasActiveVelocity(1.0e-6f);
 
-    addBuoyancy();
-    applyBoundary();
+    if (!smokeActive) {
+        clearScalarState(smoke);
+        clearScalarState(smoke0);
+    }
+    if (!tempActive) {
+        clearScalarState(temp);
+        clearScalarState(temp0);
+    }
 
-    diffuseVelocityImplicit();
-    applyBoundary();
+    if (!smokeActive && !tempActive && !velocityActive) {
+        clearVelocityState();
+        clearDerivedDebugFields();
 
-    project();
-    applyBoundary();
+        const auto end = std::chrono::high_resolution_clock::now();
+        const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
+        updateIdleStats(stepMs);
+        return;
+    }
 
-    advectScalars();
-    diffuseScalarImplicit(smoke, smoke0, params.smokeDiffusivity, 1.0f);
-    diffuseScalarImplicit(temp, temp0, params.tempDiffusivity, 1.0f);
-    applyBoundary();
+    if (velocityActive || tempActive) {
+        advectVelocity();
+        applyBoundary();
+
+        addBuoyancy();
+        applyBoundary();
+
+        diffuseVelocityImplicit();
+        applyBoundary();
+
+        project();
+        applyBoundary();
+    } else {
+        clearVelocityState();
+    }
+
+    if (smokeActive || tempActive) {
+        advectScalars();
+        diffuseScalarImplicit(smoke, smoke0, params.smokeDiffusivity, 1.0f);
+        diffuseScalarImplicit(temp, temp0, params.tempDiffusivity, 1.0f);
+        applyBoundary();
+    } else {
+        clearScalarState(smoke);
+        clearScalarState(smoke0);
+        clearScalarState(temp);
+        clearScalarState(temp0);
+    }
 
     derivedFieldsDirty = true;
 

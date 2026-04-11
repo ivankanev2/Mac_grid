@@ -259,6 +259,130 @@ static void parallelForRows(int rowCount, Fn&& fn) {
     for (auto& worker : workers) worker.join();
 }
 
+struct VolumeActiveBounds {
+    bool hasData = false;
+    int i0 = 0;
+    int j0 = 0;
+    int k0 = 0;
+    int i1 = 0;
+    int j1 = 0;
+    int k1 = 0;
+};
+
+static VolumeActiveBounds findActiveBounds(const std::vector<float>& values,
+                                           const std::vector<uint8_t>& solid,
+                                           int nx,
+                                           int ny,
+                                           int nz,
+                                           float threshold)
+{
+    VolumeActiveBounds bounds;
+    int minI = nx, minJ = ny, minK = nz;
+    int maxI = -1, maxJ = -1, maxK = -1;
+    const std::size_t cellCount = (std::size_t)nx * (std::size_t)ny * (std::size_t)nz;
+    for (std::size_t idx = 0; idx < cellCount; ++idx) {
+        if (solid[idx]) continue;
+        if (values[idx] <= threshold) continue;
+        const int k = (int)(idx / ((std::size_t)nx * (std::size_t)ny));
+        const std::size_t rem = idx - (std::size_t)k * (std::size_t)nx * (std::size_t)ny;
+        const int j = (int)(rem / (std::size_t)nx);
+        const int i = (int)(rem - (std::size_t)j * (std::size_t)nx);
+        minI = std::min(minI, i); minJ = std::min(minJ, j); minK = std::min(minK, k);
+        maxI = std::max(maxI, i); maxJ = std::max(maxJ, j); maxK = std::max(maxK, k);
+    }
+
+    if (maxI < minI || maxJ < minJ || maxK < minK) {
+        return bounds;
+    }
+
+    bounds.hasData = true;
+    bounds.i0 = std::max(0, minI - 1);
+    bounds.j0 = std::max(0, minJ - 1);
+    bounds.k0 = std::max(0, minK - 1);
+    bounds.i1 = std::min(nx - 1, maxI + 1);
+    bounds.j1 = std::min(ny - 1, maxJ + 1);
+    bounds.k1 = std::min(nz - 1, maxK + 1);
+    return bounds;
+}
+
+static bool intersectAabb(const Vec3f& o,
+                          const Vec3f& d,
+                          const Vec3f& bmin,
+                          const Vec3f& bmax,
+                          float& tminOut,
+                          float& tmaxOut)
+{
+    float tmin = 0.0f;
+    float tmax = std::numeric_limits<float>::infinity();
+    auto updateAxis = [&](float oAxis, float dAxis, float lo, float hi) -> bool {
+        if (std::fabs(dAxis) < 1e-8f) {
+            return (oAxis >= lo && oAxis <= hi);
+        }
+        float t0 = (lo - oAxis) / dAxis;
+        float t1 = (hi - oAxis) / dAxis;
+        if (t0 > t1) std::swap(t0, t1);
+        tmin = std::max(tmin, t0);
+        tmax = std::min(tmax, t1);
+        return tmax >= tmin;
+    };
+
+    if (!updateAxis(o.x, d.x, bmin.x, bmax.x)) return false;
+    if (!updateAxis(o.y, d.y, bmin.y, bmax.y)) return false;
+    if (!updateAxis(o.z, d.z, bmin.z, bmax.z)) return false;
+
+    tminOut = tmin;
+    tmaxOut = tmax;
+    return tmaxOut > tminOut;
+}
+
+static Vec3f activeBoundsMinLocal(const VolumeActiveBounds& bounds, const WaterViewBox& box, int nx, int ny, int nz) {
+    return Vec3f{
+        -box.hx + (2.0f * box.hx) * ((float)bounds.i0 / (float)std::max(1, nx)),
+        -box.hy + (2.0f * box.hy) * ((float)bounds.j0 / (float)std::max(1, ny)),
+        -box.hz + (2.0f * box.hz) * ((float)bounds.k0 / (float)std::max(1, nz))
+    };
+}
+
+static Vec3f activeBoundsMaxLocal(const VolumeActiveBounds& bounds, const WaterViewBox& box, int nx, int ny, int nz) {
+    return Vec3f{
+        -box.hx + (2.0f * box.hx) * ((float)(bounds.i1 + 1) / (float)std::max(1, nx)),
+        -box.hy + (2.0f * box.hy) * ((float)(bounds.j1 + 1) / (float)std::max(1, ny)),
+        -box.hz + (2.0f * box.hz) * ((float)(bounds.k1 + 1) / (float)std::max(1, nz))
+    };
+}
+
+static void fillVerticalGradientBackground(std::vector<uint8_t>& img,
+                                           int w,
+                                           int h,
+                                           Vec3f bgA,
+                                           Vec3f bgB)
+{
+    img.assign((std::size_t)w * (std::size_t)h * 4u, 0u);
+    auto clamp01f = [](float x) {
+        return std::clamp(x, 0.0f, 1.0f);
+    };
+    parallelForRows(h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const float t = (float)j / (float)std::max(1, h - 1);
+            const Vec3f color{
+                bgA.x * (1.0f - t) + bgB.x * t,
+                bgA.y * (1.0f - t) + bgB.y * t,
+                bgA.z * (1.0f - t) + bgB.z * t
+            };
+            const uint8_t r = (uint8_t)std::lround(clamp01f(color.x) * 255.0f);
+            const uint8_t g = (uint8_t)std::lround(clamp01f(color.y) * 255.0f);
+            const uint8_t b = (uint8_t)std::lround(clamp01f(color.z) * 255.0f);
+            for (int i = 0; i < w; ++i) {
+                const std::size_t dst = ((std::size_t)(h - 1 - j) * (std::size_t)w + (std::size_t)i) * 4u;
+                img[dst + 0] = r;
+                img[dst + 1] = g;
+                img[dst + 2] = b;
+                img[dst + 3] = 255;
+            }
+        }
+    });
+}
+
 }
 
 unsigned int SmokeRenderer::makeTexture(int w, int h) {
@@ -726,8 +850,20 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
     const Vec3f bgA = themedSmokeBgA(smoke.themeMode);
     const Vec3f bgB = themedSmokeBgB(smoke.themeMode);
 
+    const VolumeActiveBounds activeBounds = findActiveBounds(smokeValues, solid, nx, ny, nz, 1.0e-4f);
     m_rgbaScratch.assign((std::size_t)m_w * (std::size_t)m_h * 4u, 0u);
     auto& img = m_rgbaScratch;
+
+    if (!activeBounds.hasData) {
+        fillVerticalGradientBackground(img, m_w, m_h, bgA, bgB);
+        glBindTexture(GL_TEXTURE_2D, m_smokeTex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_w, m_h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
+        return;
+    }
+
+    const Vec3f activeMin = activeBoundsMinLocal(activeBounds, box, nx, ny, nz);
+    const Vec3f activeMax = activeBoundsMaxLocal(activeBounds, box, nx, ny, nz);
 
     auto clamp01 = [](float x) {
         if (x < 0.0f) return 0.0f;
@@ -755,7 +891,7 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
 
                 float tmin = 0.0f;
                 float tmax = 0.0f;
-                if (intersectBox(o, d, box, tmin, tmax)) {
+                if (intersectAabb(o, d, activeMin, activeMax, tmin, tmax)) {
                     float t = std::max(0.0f, tmin);
                     float accumR = 0.0f;
                     float accumG = 0.0f;
@@ -778,16 +914,18 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
                             float cg = 0.0f;
                             float cb = 0.0f;
                             if (!smoke.useColor) {
-                                const float gray = 0.22f + 0.68f * std::pow(clamp01(density), 0.55f);
+                                const float gray = 0.22f + 0.68f * std::pow(clamp01(density), 0.60f);
                                 cr = gray;
                                 cg = gray;
                                 cb = gray;
                             } else {
-                                const float tHeat = clamp01(temp * smoke.tempStrength);
-                                cr = (1.0f - tHeat) * 0.24f + tHeat * 0.98f;
-                                cg = (1.0f - tHeat) * 0.28f + tHeat * 0.56f;
-                                cb = (1.0f - tHeat) * 0.32f + tHeat * 0.12f;
-                                const float core = 1.0f - smoke.coreDark * std::pow(clamp01(density), 0.5f);
+                                const float tCol = clamp01(std::pow(temp, 0.55f));
+                                const float gray = 0.10f + 0.90f * std::pow(clamp01(density), 0.55f);
+                                cr = gray + smoke.tempStrength * tCol * 0.55f;
+                                cg = gray + smoke.tempStrength * tCol * 0.12f;
+                                cb = gray * (1.0f - 0.35f * tCol);
+                                const float ageDark = smoke.coreDark * clamp01(density * density);
+                                const float core = 1.0f - ageDark;
                                 cr *= 0.35f + 0.65f * core;
                                 cg *= 0.35f + 0.65f * core;
                                 cb *= 0.35f + 0.65f * core;
@@ -877,8 +1015,20 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
     const Vec3f bgA = themedWaterBgA(water.themeMode);
     const Vec3f bgB = themedWaterBgB(water.themeMode);
 
+    const VolumeActiveBounds activeBounds = findActiveBounds(values, solid, nx, ny, nz, 1.0e-4f);
     m_rgbaScratch.assign((std::size_t)m_w * (std::size_t)m_h * 4u, 0u);
     auto& img = m_rgbaScratch;
+
+    if (!activeBounds.hasData) {
+        fillVerticalGradientBackground(img, m_w, m_h, bgA, bgB);
+        glBindTexture(GL_TEXTURE_2D, m_waterTex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_w, m_h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
+        return;
+    }
+
+    const Vec3f activeMin = activeBoundsMinLocal(activeBounds, box, nx, ny, nz);
+    const Vec3f activeMax = activeBoundsMaxLocal(activeBounds, box, nx, ny, nz);
 
     parallelForRows(m_h, [&](int rowBegin, int rowEnd) {
         for (int j = rowBegin; j < rowEnd; ++j) {
@@ -900,7 +1050,7 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
 
                 float tmin = 0.0f;
                 float tmax = 0.0f;
-                if (intersectBox(o, d, box, tmin, tmax)) {
+                if (intersectAabb(o, d, activeMin, activeMax, tmin, tmax)) {
                     float t = std::max(0.0f, tmin);
                     if (surfaceMode) {
                         float prevT = t;
@@ -980,22 +1130,22 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
                                 grad.z /= std::max(1e-6f, box.hz * 2.0f);
                                 Vec3f normal = normalize3(grad);
                                 if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
+
                                 const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
                                 const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
-                                const float shade = 0.35f + 0.55f * ndl + 0.25f * rim;
+                                const float depthFade = (firstSurfaceT < 0.0f)
+                                    ? 1.0f
+                                    : (0.92f - 0.20f * std::clamp((t - firstSurfaceT) / std::max(1e-6f, tmax - firstSurfaceT), 0.0f, 1.0f));
 
-                                const float depthFade = 0.85f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
-                                float cr = 0.0f;
-                                float cg = 0.0f;
-                                float cb = 0.0f;
+                                float cr, cg, cb;
                                 if (isDarkTheme(water.themeMode)) {
-                                    cr = (0.05f + 0.10f * raw) * depthFade * shade;
-                                    cg = (0.18f + 0.28f * raw) * depthFade * shade;
-                                    cb = (0.48f + 0.38f * raw) * depthFade * (0.85f + 0.25f * shade);
+                                    cr = (0.07f + 0.10f * ndl + 0.08f * rim) * depthFade;
+                                    cg = (0.22f + 0.24f * ndl + 0.10f * rim) * depthFade;
+                                    cb = (0.44f + 0.30f * ndl + 0.12f * rim) * depthFade;
                                 } else {
-                                    cr = (0.20f + 0.12f * raw) * depthFade * (0.90f + 0.15f * shade);
-                                    cg = (0.34f + 0.20f * raw) * depthFade * shade;
-                                    cb = (0.58f + 0.28f * raw) * depthFade * (0.88f + 0.18f * shade);
+                                    cr = (0.34f + 0.10f * ndl + 0.06f * rim) * depthFade;
+                                    cg = (0.50f + 0.12f * ndl + 0.06f * rim) * depthFade;
+                                    cb = (0.70f + 0.12f * ndl + 0.08f * rim) * depthFade;
                                 }
 
                                 const float oneMinusA = 1.0f - accumA;
@@ -1011,27 +1161,6 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
                             color.x = color.x * (1.0f - accumA) + accumR;
                             color.y = color.y * (1.0f - accumA) + accumG;
                             color.z = color.z * (1.0f - accumA) + accumB;
-                        }
-
-                        if (firstSurfaceT >= 0.0f) {
-                            const Vec3f q = localToUnit(o + d * firstSurfaceT, box);
-                            Vec3f grad = sampleGradient(values, nx, ny, nz, q);
-                            grad.x /= std::max(1e-6f, box.hx * 2.0f);
-                            grad.y /= std::max(1e-6f, box.hy * 2.0f);
-                            grad.z /= std::max(1e-6f, box.hz * 2.0f);
-                            Vec3f normal = normalize3(grad);
-                            if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
-                            const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
-                            const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 3.0f);
-                            if (isDarkTheme(water.themeMode)) {
-                                color.x += 0.05f * ndl + 0.04f * rim;
-                                color.y += 0.07f * ndl + 0.05f * rim;
-                                color.z += 0.10f * ndl + 0.06f * rim;
-                            } else {
-                                color.x += 0.04f * ndl + 0.03f * rim;
-                                color.y += 0.05f * ndl + 0.04f * rim;
-                                color.z += 0.06f * ndl + 0.05f * rim;
-                            }
                         }
                     }
                 }

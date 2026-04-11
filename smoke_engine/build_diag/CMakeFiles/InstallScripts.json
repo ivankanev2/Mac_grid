@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build_diag/cmake_install.cmake",
+		"/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build_diag/glfw_local/cmake_install.cmake",
+		"/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build_diag/glfw_local/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

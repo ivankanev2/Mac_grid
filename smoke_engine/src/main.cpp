@@ -248,6 +248,34 @@ static void setViziorWindowIcon(GLFWwindow* win, int themeMode) {
     glfwSetWindowIcon(win, 2, images);
 }
 
+struct StartupWindowConfig {
+    int width = 1480;
+    int height = 920;
+    int posX = 0;
+    int posY = 0;
+    float uiScale = 0.80f;
+    bool hasPosition = false;
+};
+
+static StartupWindowConfig computeStartupWindowConfig() {
+    StartupWindowConfig cfg;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    if (!monitor) return cfg;
+
+    int workX = 0, workY = 0, workW = 0, workH = 0;
+    glfwGetMonitorWorkarea(monitor, &workX, &workY, &workW, &workH);
+    if (workW <= 0 || workH <= 0) return cfg;
+
+    const float fit = std::clamp(std::min((float)workW / 1480.0f, (float)workH / 920.0f), 0.72f, 1.18f);
+    cfg.width = std::clamp((int)std::lround(1480.0f * fit), 960, std::max(960, workW));
+    cfg.height = std::clamp((int)std::lround(920.0f * fit), 640, std::max(640, workH));
+    cfg.posX = workX + std::max(0, (workW - cfg.width) / 2);
+    cfg.posY = workY + std::max(0, (workH - cfg.height) / 2);
+    cfg.uiScale = std::clamp(0.80f * std::sqrt(std::max(0.55f, fit)), 0.65f, 0.95f);
+    cfg.hasPosition = true;
+    return cfg;
+}
+
 struct VolumeRenderTargetSize {
     int width = 0;
     int height = 0;
@@ -297,10 +325,17 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
-    GLFWwindow* win = glfwCreateWindow(1480, 920, "Vizior | Fluid Research Engine", nullptr, nullptr);
+    const StartupWindowConfig startupWindow = computeStartupWindowConfig();
+    GLFWwindow* win = glfwCreateWindow(startupWindow.width, startupWindow.height, "Vizior | Fluid Research Engine", nullptr, nullptr);
     if (!win) return 1;
+    if (startupWindow.hasPosition) {
+        glfwSetWindowPos(win, startupWindow.posX, startupWindow.posY);
+    }
 
     UI::Settings ui;
+    ui.windowWidth = startupWindow.width;
+    ui.windowHeight = startupWindow.height;
+    ui.uiScale = startupWindow.uiScale;
     UI::Probe probe;
     glfwGetWindowSize(win, &ui.windowWidth, &ui.windowHeight);
 

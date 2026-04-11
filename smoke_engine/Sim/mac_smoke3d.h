@@ -118,6 +118,8 @@ struct MACSmoke3D {
 
     std::vector<uint8_t> solid;
     std::vector<uint8_t> solidUser;
+    std::vector<uint8_t> fluidMask;
+    int fluidCellCount = 0;
 
     MACSmoke3D(int NX, int NY, int NZ, float DX, float DT);
 
@@ -180,5 +182,11 @@ protected:
     void project();
     void rasterizeDebugFields();
     void ensureDerivedDebugFields();
+    bool hasActiveVelocity(float eps = 1.0e-6f) const;
+    bool hasActiveScalar(const std::vector<float>& field, float eps = 1.0e-6f) const;
+    void clearVelocityState();
+    void clearScalarState(std::vector<float>& field);
+    void clearDerivedDebugFields();
+    void updateIdleStats(float stepMs);
     void updateStats(float stepMs);
 };
