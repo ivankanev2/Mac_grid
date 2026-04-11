@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "pressure_solver3d.h"
+#include "sim_stage_timing.h"
 
 struct MACSmoke3D {
     struct Vec3 {
@@ -49,11 +50,15 @@ struct MACSmoke3D {
 
         int borderThickness = 1;
         int pressureIters = 120;
+        int pressureMGVCycles = 16;
+        int pressureMGCoarseIters = 80;
         int diffuseIters = 16;
         int pressureSolverMode = (int)PressureSolverMode::Multigrid;
 
         float pressureTol = 1e-6f;
         float pressureOmega = 1.7f;
+        float pressureMGOmega = 1.4f;
+        float pressureMGRelativeTol = 1.0e-5f;
         float diffuseOmega = 0.8f;
 
         bool openTop = true;
@@ -75,8 +80,11 @@ struct MACSmoke3D {
         float maxDivergence = 0.0f;
         float dt = 0.0f;
         float lastStepMs = 0.0f;
+        float pressureMs = 0.0f;
+        int pressureIters = 0;
         std::size_t bytesAllocated = 0;
         const char* backendName = "CPU Smoke 3D";
+        SimStageTimings timings;
     };
 
     int nx = 0;
@@ -122,6 +130,8 @@ struct MACSmoke3D {
     int fluidCellCount = 0;
     bool topologyDirty = true;
     bool pressureOperatorDirty = true;
+    float lastPressureSolveMs = 0.0f;
+    int lastPressureIterations = 0;
 
     MACSmoke3D(int NX, int NY, int NZ, float DX, float DT);
 

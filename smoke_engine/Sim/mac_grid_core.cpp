@@ -811,8 +811,9 @@ void MACGridCore::project() {
     }
 
     stats.pressureSolver = SOLVER_MG;
-    ps().solveMG(p, rhs, 20, divTol, dt);
-
+    ps().setMGControls(pressureMGCoarseIters, pressureMGRelativeTol);
+    ps().solveMG(p, rhs, std::max(1, pressureMGVCycles), divTol, dt);
+    stats.pressureIters = ps().lastIterations();
 
     auto t1 = std::chrono::high_resolution_clock::now();
     stats.pressureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();

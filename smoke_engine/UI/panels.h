@@ -85,6 +85,8 @@ struct Settings {
     // Dissipation
     float smokeDissipation = 1.000f;
     float tempDissipation  = 0.990f;
+    int   smoke2DPressureMGVCycles = 20;
+    int   smoke2DPressureMGCoarseIters = 200;
 
     // Water
     bool  paintWater      = false;
@@ -104,6 +106,10 @@ struct Settings {
     float smoke3DViewportHeight = 0.0f;
     float water3DViewportWidth = 0.0f;
     float water3DViewportHeight = 0.0f;
+    bool  smoke3DThrottleRendering = true;
+    float smoke3DRenderFPS = 12.0f;
+    bool  water3DThrottleRendering = true;
+    float water3DRenderFPS = 15.0f;
 
     bool  showCombinedView = true;
     float combinedWaterAlpha = 0.5f;   // water overlay strength
@@ -126,8 +132,11 @@ struct Settings {
     int   smoke3DSliceIndex = 0;
     int   smoke3DDebugField = 0;   // 0=smoke,1=temp,2=pressure,3=divergence,4=speed
     int   smoke3DPressureIters = 120;
+    int   smoke3DPressureMGVCycles = 16;
+    int   smoke3DPressureMGCoarseIters = 80;
     int   smoke3DPressureSolverMode = 0; // 0=Multigrid, 1=RBGS, 2=Jacobi
     float smoke3DPressureOmega = 1.70f;
+    float smoke3DPressureMGOmega = 1.40f;
     float smoke3DBuoyancyScale = 1.0f;
     float smoke3DGravity = 9.81f;
     float smoke3DVelDamping = 0.5f;
@@ -158,11 +167,14 @@ struct Settings {
     int   water3DSliceIndex = 0;
     int   water3DDebugField = 0;   // 0=water,1=pressure,2=divergence,3=speed
     int   water3DPressureIters = 200;
+    int   water3DPressureMGVCycles = 200;
+    int   water3DPressureMGCoarseIters = 80;
     int   water3DPressureSolverMode = 0; // 0=Multigrid, 1=RBGS, 2=Jacobi
     int   water3DBackendMode = 0;        // 0=Auto, 1=CPU, 2=CUDA
     bool  water3DUseAPIC = true;
     float water3DFlipBlend = 0.10f;
     float water3DPressureOmega = 1.70f;
+    float water3DPressureMGOmega = 1.40f;
     bool  water3DVolumePreserve = true;
     float water3DVolumePreserveStrength = 0.05f;
     int   water3DRelaxIters = 2;

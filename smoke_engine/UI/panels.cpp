@@ -609,6 +609,33 @@ static void drawArrow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col) {
     dl->AddLine(b, p2, col, 1.0f);
 }
 
+static void DrawTimingLine(const char* label, float ms, float totalMs) {
+    if (ms <= 0.0005f) return;
+    const float pct = (totalMs > 0.0f) ? (100.0f * ms / totalMs) : 0.0f;
+    ImGui::BulletText("%s: %.3f ms (%.1f%%)", label, ms, pct);
+}
+
+static void DrawStageTimings(const SimStageTimings& timings) {
+    const float totalMs = timings.totalMs;
+    DrawTimingLine("setup / housekeeping", timings.setupMs, totalMs);
+    DrawTimingLine("advect velocity", timings.advectVelocityMs, totalMs);
+    DrawTimingLine("forces", timings.forcesMs, totalMs);
+    DrawTimingLine("diffuse velocity", timings.diffuseVelocityMs, totalMs);
+    DrawTimingLine("vorticity", timings.vorticityMs, totalMs);
+    DrawTimingLine("project", timings.projectMs, totalMs);
+    DrawTimingLine("advect scalars", timings.advectScalarsMs, totalMs);
+    DrawTimingLine("diffuse scalars", timings.diffuseScalarsMs, totalMs);
+    DrawTimingLine("particle to grid", timings.particleToGridMs, totalMs);
+    DrawTimingLine("liquid mask", timings.liquidMaskMs, totalMs);
+    DrawTimingLine("extrapolate", timings.extrapolateMs, totalMs);
+    DrawTimingLine("grid to particles", timings.gridToParticlesMs, totalMs);
+    DrawTimingLine("advect particles", timings.advectParticlesMs, totalMs);
+    DrawTimingLine("reseed / relax", timings.reseedMs, totalMs);
+    DrawTimingLine("rasterize", timings.rasterizeMs, totalMs);
+    DrawTimingLine("boundary", timings.boundaryMs, totalMs);
+    DrawTimingLine("stats", timings.statsMs, totalMs);
+}
+
 static void DrawInspectorSectionLabel(const char* title, const char* subtitle = nullptr)
 {
     ImGui::PushStyleColor(ImGuiCol_Text, kVizText);
@@ -1044,6 +1071,8 @@ static Actions drawControls(MAC2D& sim,
         ImGui::TextDisabled("%s", sim.isValveOpen() ? "OPEN" : "CLOSED");
 
         ImGui::Checkbox("Use MacCormack advection", &sim.useMacCormack);
+        ImGui::SliderInt("2D smoke MG V-cycles", &ui.smoke2DPressureMGVCycles, 2, 64);
+        ImGui::SliderInt("2D smoke MG coarse iters", &ui.smoke2DPressureMGCoarseIters, 8, 256);
 
         ImGui::SliderFloat("View zoom", &ui.viewScale, 0.5f, 4.0f);
         ImGui::SliderFloat("3D render scale", &ui.volumeRenderScale, 0.50f, 1.50f);
@@ -1156,8 +1185,14 @@ static Actions drawControls(MAC2D& sim,
         const char* solverItems[] = { "Multigrid", "RBGS", "Jacobi" };
         ui.smoke3DPressureSolverMode = std::clamp(ui.smoke3DPressureSolverMode, 0, 2);
         ImGui::Combo("Smoke 3D pressure solver", &ui.smoke3DPressureSolverMode, solverItems, 3);
-        ImGui::SliderInt("Smoke 3D pressure iters", &ui.smoke3DPressureIters, 20, 1200);
-        ImGui::SliderFloat("Smoke 3D pressure omega", &ui.smoke3DPressureOmega, 0.1f, 1.95f);
+        if (ui.smoke3DPressureSolverMode == 0) {
+            ImGui::SliderInt("Smoke 3D MG V-cycles", &ui.smoke3DPressureMGVCycles, 2, 128);
+            ImGui::SliderInt("Smoke 3D MG coarse iters", &ui.smoke3DPressureMGCoarseIters, 8, 256);
+            ImGui::SliderFloat("Smoke 3D MG omega", &ui.smoke3DPressureMGOmega, 0.1f, 1.95f);
+        } else {
+            ImGui::SliderInt("Smoke 3D pressure iters", &ui.smoke3DPressureIters, 20, 1200);
+            ImGui::SliderFloat("Smoke 3D pressure omega", &ui.smoke3DPressureOmega, 0.1f, 1.95f);
+        }
         ImGui::SliderFloat("Smoke 3D buoyancy", &ui.smoke3DBuoyancyScale, 0.0f, 5.0f);
         ImGui::SliderFloat("Smoke 3D gravity", &ui.smoke3DGravity, 0.0f, 20.0f);
         ImGui::SliderFloat("Smoke 3D velocity damping", &ui.smoke3DVelDamping, 0.0f, 5.0f);
@@ -1199,6 +1234,11 @@ static Actions drawControls(MAC2D& sim,
             }
             ImGui::SliderFloat("Smoke 3D density scale", &ui.smoke3DVolumeDensity, 0.2f, 8.0f);
             ImGui::SliderFloat("Smoke 3D source depth", &ui.smoke3DSourceDepth, 0.0f, 1.0f);
+            ImGui::Checkbox("Throttle Smoke 3D volume render", &ui.smoke3DThrottleRendering);
+            ImGui::BeginDisabled(!ui.smoke3DThrottleRendering);
+            ImGui::SliderFloat("Smoke 3D render FPS", &ui.smoke3DRenderFPS, 4.0f, 60.0f, "%.0f fps");
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("Volume mode can reuse the last texture between updates so the sim keeps stepping at full speed.");
         }
     }
 
@@ -1224,8 +1264,14 @@ static Actions drawControls(MAC2D& sim,
         const char* solverItems[] = { "Multigrid", "RBGS", "Jacobi" };
         ui.water3DPressureSolverMode = std::clamp(ui.water3DPressureSolverMode, 0, 2);
         ImGui::Combo("Water 3D pressure solver", &ui.water3DPressureSolverMode, solverItems, 3);
-        ImGui::SliderInt("Water 3D pressure iters", &ui.water3DPressureIters, 20, 2000);
-        ImGui::SliderFloat("Water 3D pressure omega", &ui.water3DPressureOmega, 0.1f, 1.95f);
+        if (ui.water3DPressureSolverMode == 0) {
+            ImGui::SliderInt("Water 3D MG V-cycles", &ui.water3DPressureMGVCycles, 2, 160);
+            ImGui::SliderInt("Water 3D MG coarse iters", &ui.water3DPressureMGCoarseIters, 8, 320);
+            ImGui::SliderFloat("Water 3D MG omega", &ui.water3DPressureMGOmega, 0.1f, 1.95f);
+        } else {
+            ImGui::SliderInt("Water 3D pressure iters", &ui.water3DPressureIters, 20, 2000);
+            ImGui::SliderFloat("Water 3D pressure omega", &ui.water3DPressureOmega, 0.1f, 1.95f);
+        }
         ImGui::Checkbox("Water 3D APIC", &ui.water3DUseAPIC);
         ImGui::BeginDisabled(ui.water3DUseAPIC);
         ImGui::SliderFloat("Water 3D FLIP blend", &ui.water3DFlipBlend, 0.0f, 1.0f);
@@ -1267,6 +1313,11 @@ static Actions drawControls(MAC2D& sim,
             ImGui::SliderFloat("Water 3D density scale", &ui.water3DVolumeDensity, 0.2f, 8.0f);
             ImGui::SliderFloat("Water 3D surface threshold", &ui.water3DSurfaceThreshold, 0.01f, 0.75f);
             ImGui::SliderFloat("Water 3D source depth", &ui.water3DSourceDepth, 0.0f, 1.0f);
+            ImGui::Checkbox("Throttle Water 3D render", &ui.water3DThrottleRendering);
+            ImGui::BeginDisabled(!ui.water3DThrottleRendering);
+            ImGui::SliderFloat("Water 3D render FPS", &ui.water3DRenderFPS, 4.0f, 60.0f, "%.0f fps");
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("Volume and surface modes can skip intermediate uploads while the sim continues to advance.");
         }
     }
 
@@ -1349,6 +1400,13 @@ static void drawDebugTabs(MAC2D& sim,
             ImGui::Text("max |div|: %.6e", maxDiv);
             ImGui::Text("avg |div|: %.6e", avgAbsDiv);
             ImGui::Text("max speed: %.6f", maxSpeed);
+            const auto& smoke2DStats = sim.getStats();
+            ImGui::Text("2D smoke step ms: %.3f   pressure ms: %.3f   pressure cycles: %d",
+                        smoke2DStats.stepMs, smoke2DStats.pressureMs, smoke2DStats.pressureIters);
+            if (ImGui::TreeNode("2D smoke stage timings")) {
+                DrawStageTimings(smoke2DStats.timings);
+                ImGui::TreePop();
+            }
 
             ImGui::Separator();
             ImGui::TextUnformatted("Water (2D)");
@@ -1370,8 +1428,12 @@ static void drawDebugTabs(MAC2D& sim,
                 ImGui::Text("backend: %s", st3.backendName);
                 ImGui::Text("particles: %d   liquid cells: %d", st3.particleCount, st3.liquidCells);
                 ImGui::Text("max speed: %.6f   max |div|: %.6e", st3.maxSpeed, st3.maxDivergence);
-                ImGui::Text("step ms: %.3f", st3.lastStepMs);
+                ImGui::Text("step ms: %.3f   pressure ms: %.3f   pressure cycles: %d", st3.lastStepMs, st3.pressureMs, st3.pressureIters);
                 ImGui::Text("cuda enabled: %s", st3.cudaEnabled ? "true" : "false");
+                if (ImGui::TreeNode("Water 3D stage timings")) {
+                    DrawStageTimings(st3.timings);
+                    ImGui::TreePop();
+                }
                 ImGui::Text("feature parity with 2D: %s", water3D.hasFeatureParityWith2D() ? "true" : "false");
             }
 
@@ -1383,8 +1445,12 @@ static void drawDebugTabs(MAC2D& sim,
                 ImGui::Text("backend: %s", s3.backendName);
                 ImGui::Text("active cells: %d", s3.activeCells);
                 ImGui::Text("max speed: %.6f   max |div|: %.6e", s3.maxSpeed, s3.maxDivergence);
-                ImGui::Text("step ms: %.3f", s3.lastStepMs);
+                ImGui::Text("step ms: %.3f   pressure ms: %.3f   pressure cycles: %d", s3.lastStepMs, s3.pressureMs, s3.pressureIters);
                 ImGui::Text("bytes: %zu", s3.bytesAllocated);
+                if (ImGui::TreeNode("Smoke 3D stage timings")) {
+                    DrawStageTimings(s3.timings);
+                    ImGui::TreePop();
+                }
             }
 
             ImGui::Separator();

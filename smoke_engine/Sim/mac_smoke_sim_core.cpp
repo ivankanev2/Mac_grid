@@ -1,6 +1,7 @@
 #include "mac_smoke_sim.h"
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include "smoke_diag.h"
 
@@ -33,6 +34,9 @@ inline void clampFaceSpeeds(std::vector<float>& u, std::vector<float>& v, float 
 MAC2D::MAC2D(int NX, int NY, float DX, float DT)
     : MACGridCore(NX, NY, DX, DT)
 {
+    pressureMGVCycles = 20;
+    pressureMGCoarseIters = 200;
+    pressureMGRelativeTol = 1.0e-4f;
     recomputeValveIndices();
     reset();
 }
@@ -162,25 +166,44 @@ void MAC2D::removeSolidText(const std::vector<uint8_t>& textMask, int maskW, int
 }
 
 void MAC2D::step(float vortEps) {
+    using clock = std::chrono::high_resolution_clock;
+    const auto frameStart = clock::now();
+    auto stageStart = frameStart;
+    auto& st = mutableStats();
+    st.timings.reset();
+    st.stepMs = 0.0f;
+
+    auto markStage = [&](float& bucket) {
+        const auto now = clock::now();
+        bucket += std::chrono::duration<float, std::milli>(now - stageStart).count();
+        stageStart = now;
+    };
+
     SMOKE_DIAG_LOG("[step] openTop=%d\n", (int)getOpenTop());
+
     // Velocity BC only (don’t inject scalars here)
     applyValveVelocityBC();
     applyBoundary();
+    markStage(st.timings.setupMs);
 
     // Velocity sim
     advectVelocity();
     applyBoundary();
+    markStage(st.timings.advectVelocityMs);
 
     addForces(1.5f, 0.0f);
     applyBoundary();
     clampFaceSpeeds(u, v, 50.0f);
+    markStage(st.timings.forcesMs);
 
     diffuseVelocityImplicit();
+    markStage(st.timings.diffuseVelocityMs);
 
     addVorticityConfinement(vortEps);
+    markStage(st.timings.vorticityMs);
 
-    // setOpenTop(openTop);
     project();
+    markStage(st.timings.projectMs);
 
 #if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
     computeDivergence();
@@ -195,28 +218,31 @@ void MAC2D::step(float vortEps) {
     setPostBCStats(maxDivAfterBC, maxFaceAfterBC);
 
     SMOKE_DIAG_LOG("[POST-BC] maxDiv=%g maxFace=%g\n", maxDivAfterBC, maxFaceAfterBC);
+    markStage(st.timings.boundaryMs);
 
     // Scalars
     advectScalar(temp,  temp0,  tempDissipation);
     advectScalar(smoke, smoke0, smokeDissipation);
     advectScalar(age,   age0,   1.0f);
-
     addValveScalars();
+    markStage(st.timings.advectScalarsMs);
+
     diffuseScalarImplicit(smoke, smoke0, smokeDiffusivity, 0.0f);
     clampFaceSpeeds(u, v, 50.0f);
     coolAndDiffuseTemperature();
     updateAge(dt);
-
+    markStage(st.timings.diffuseScalarsMs);
 
     // top outflow (now it won’t fight your injection timing)
     if (getOpenTop()) {
         applyScalarOutflowTop(smoke, 0.0f,        4);
-        applyScalarOutflowTop(temp,  0.0f, 4);
+        applyScalarOutflowTop(temp,  0.0f,        4);
         applyScalarOutflowTop(age,   0.0f,        4);
     }
 
     applyValveSink();
     applyBoundary();
+    markStage(st.timings.boundaryMs);
 
     float maxT = -1e9f, minT = 1e9f;
     for (float T : temp) { maxT = std::max(maxT, T); minT = std::min(minT, T); }
@@ -235,4 +261,11 @@ void MAC2D::step(float vortEps) {
                        minT, maxT, (maxT - ambientTempK), maxFace);
     }
 #endif
+
+    markStage(st.timings.statsMs);
+
+    const auto frameEnd = clock::now();
+    st.stepMs = std::chrono::duration<float, std::milli>(frameEnd - frameStart).count();
+    st.timings.totalMs = st.stepMs;
 }
+

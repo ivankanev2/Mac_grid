@@ -1,0 +1,146 @@
+[
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Renderer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/UI -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/PipeEngine.dir/src/main.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_engine/src/main.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/src/main.cpp",
+  "output": "CMakeFiles/PipeEngine.dir/src/main.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp",
+  "output": "CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_demo.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_demo.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_demo.cpp",
+  "output": "CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_demo.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp",
+  "output": "CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp",
+  "output": "CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp",
+  "output": "CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp",
+  "output": "CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp",
+  "output": "CMakeFiles/pipe_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui",
+  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/Renderer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/UI -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O2 -g -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/PipeEngineGUI.dir/src/main_gui.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_engine/src/main_gui.cpp",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/src/main_gui.cpp",
+  "output": "CMakeFiles/PipeEngineGUI.dir/src/main_gui.cpp.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/context.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/context.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/context.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/context.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/init.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/init.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/init.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/init.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/input.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/input.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/input.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/input.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/monitor.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/monitor.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/monitor.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/monitor.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/vulkan.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/vulkan.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/vulkan.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/vulkan.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/window.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/window.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/window.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/window.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_init.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_init.m",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_init.m",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_init.m.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_joystick.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_joystick.m",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_joystick.m",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_joystick.m.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_monitor.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_monitor.m",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_monitor.m",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_monitor.m.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_window.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_window.m",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_window.m",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_window.m.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_time.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_time.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_time.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_time.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_thread.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/posix_thread.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/posix_thread.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/posix_thread.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/nsgl_context.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/nsgl_context.m",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/nsgl_context.m",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/nsgl_context.m.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/egl_context.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/egl_context.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/egl_context.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/egl_context.c.o"
+},
+{
+  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src",
+  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/src -O2 -g -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/osmesa_context.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/osmesa_context.c",
+  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/osmesa_context.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/osmesa_context.c.o"
+}
+]

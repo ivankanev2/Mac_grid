@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <algorithm>
 #include <cstdint>
 
 // Structured Poisson pressure solve on a 2D cell grid.
@@ -33,6 +34,16 @@ public:
                  float dtForPredDiv);
 
     int lastIterations() const { return m_lastIters; }
+
+    void setMGControls(int coarseIters, float relativeTol) {
+        mgCoarseIters = std::max(1, coarseIters);
+        mgRelativeTol = std::max(0.0f, relativeTol);
+    }
+
+    void setMGSmoother(bool useSOR, float omega) {
+        mgUseSOR = useSOR;
+        mgSORomega = omega;
+    }
 
     // Full MG solve (like smoke's solvePressureMG)
     void solveMG(std::vector<float>& p,
@@ -94,6 +105,14 @@ private:
         std::vector<float> diagInv;         // 1 / (diagW * invDx2)
 
         std::vector<float> x, b, Ax, r;
+
+        bool directSolveValid = false;
+        bool directSolveAnchorsGauge = false;
+        std::vector<int> directSolveCells;
+        std::vector<int> directSolveCompactIndex;
+        std::vector<float> directSolveCholesky;
+        std::vector<float> directSolveScratch0;
+        std::vector<float> directSolveScratch1;
     };
 
       static inline int mgIdx(int i, int j, int nx) { return i + nx * j; }
@@ -106,6 +125,7 @@ private:
     int   mgVcyclesPerApply = 1;
     bool  mgUseSOR = true;
     float mgSORomega = 1.4f;
+    float mgRelativeTol = 1.0e-4f;
 
     bool mgDirty = true;
     bool mgBuiltValid = false;
@@ -115,6 +135,8 @@ private:
     std::vector<MGLevel> mgLevels;
 
     void ensureMultigrid();
+    void buildDirectCoarseSolve(MGLevel& level) const;
+    bool mgDirectSolve(int lev);
     void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
     void mgSmoothRBGS(int lev, int iters);
     void mgComputeResidual(int lev);

@@ -260,13 +260,14 @@ void MACSmoke3D::applyBoundary() {
 float MACSmoke3D::sampleCellCentered(const std::vector<float>& field, float x, float y, float z) const {
     if (field.empty() || nx <= 0 || ny <= 0 || nz <= 0) return 0.0f;
 
-    const float fx = x / dx - 0.5f;
-    const float fy = y / dx - 0.5f;
-    const float fz = z / dx - 0.5f;
+    const float invDx = 1.0f / dx;
+    const float fx = x * invDx - 0.5f;
+    const float fy = y * invDx - 0.5f;
+    const float fz = z * invDx - 0.5f;
 
-    int i0 = clampi((int)std::floor(fx), 0, nx - 1);
-    int j0 = clampi((int)std::floor(fy), 0, ny - 1);
-    int k0 = clampi((int)std::floor(fz), 0, nz - 1);
+    const int i0 = clampi((int)std::floor(fx), 0, nx - 1);
+    const int j0 = clampi((int)std::floor(fy), 0, ny - 1);
+    const int k0 = clampi((int)std::floor(fz), 0, nz - 1);
 
     const int i1 = std::min(i0 + 1, nx - 1);
     const int j1 = std::min(j0 + 1, ny - 1);
@@ -275,22 +276,27 @@ float MACSmoke3D::sampleCellCentered(const std::vector<float>& field, float x, f
     const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
     const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
     const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
 
-    float value = 0.0f;
-    for (int dk = 0; dk < 2; ++dk) {
-        const int kk = (dk == 0) ? k0 : k1;
-        const float wz = (dk == 0) ? (1.0f - tz) : tz;
-        for (int dj = 0; dj < 2; ++dj) {
-            const int jj = (dj == 0) ? j0 : j1;
-            const float wy = (dj == 0) ? (1.0f - ty) : ty;
-            for (int di = 0; di < 2; ++di) {
-                const int ii = (di == 0) ? i0 : i1;
-                const float wx = (di == 0) ? (1.0f - tx) : tx;
-                value += wx * wy * wz * field[(std::size_t)idxCell(ii, jj, kk)];
-            }
-        }
-    }
-    return value;
+    const int sliceStride = nx * ny;
+    const int row00 = j0 * nx + k0 * sliceStride;
+    const int row10 = j1 * nx + k0 * sliceStride;
+    const int row01 = j0 * nx + k1 * sliceStride;
+    const int row11 = j1 * nx + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
 }
 
 float MACSmoke3D::sampleCellCenteredOpenTop(const std::vector<float>& field, float x, float y, float z, float outsideValue) const {
@@ -300,11 +306,8 @@ float MACSmoke3D::sampleCellCenteredOpenTop(const std::vector<float>& field, flo
     const float domainY = ny * dx;
     const float domainZ = nz * dx;
 
-    if (x < 0.0f) x = 0.0f;
-    if (x > domainX) x = domainX;
-    if (z < 0.0f) z = 0.0f;
-    if (z > domainZ) z = domainZ;
-
+    x = clampf(x, 0.0f, domainX);
+    z = clampf(z, 0.0f, domainZ);
     if (y < 0.0f) y = 0.0f;
     if (y > domainY) {
         if (params.openTop) return outsideValue;
@@ -317,13 +320,14 @@ float MACSmoke3D::sampleCellCenteredOpenTop(const std::vector<float>& field, flo
 float MACSmoke3D::sampleU(const std::vector<float>& field, float x, float y, float z) const {
     if (field.empty()) return 0.0f;
 
-    const float fx = x / dx;
-    const float fy = y / dx - 0.5f;
-    const float fz = z / dx - 0.5f;
+    const float invDx = 1.0f / dx;
+    const float fx = x * invDx;
+    const float fy = y * invDx - 0.5f;
+    const float fz = z * invDx - 0.5f;
 
-    int i0 = clampi((int)std::floor(fx), 0, nx);
-    int j0 = clampi((int)std::floor(fy), 0, ny - 1);
-    int k0 = clampi((int)std::floor(fz), 0, nz - 1);
+    const int i0 = clampi((int)std::floor(fx), 0, nx);
+    const int j0 = clampi((int)std::floor(fy), 0, ny - 1);
+    const int k0 = clampi((int)std::floor(fz), 0, nz - 1);
 
     const int i1 = std::min(i0 + 1, nx);
     const int j1 = std::min(j0 + 1, ny - 1);
@@ -332,34 +336,41 @@ float MACSmoke3D::sampleU(const std::vector<float>& field, float x, float y, flo
     const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
     const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
     const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
 
-    float value = 0.0f;
-    for (int dk = 0; dk < 2; ++dk) {
-        const int kk = (dk == 0) ? k0 : k1;
-        const float wz = (dk == 0) ? (1.0f - tz) : tz;
-        for (int dj = 0; dj < 2; ++dj) {
-            const int jj = (dj == 0) ? j0 : j1;
-            const float wy = (dj == 0) ? (1.0f - ty) : ty;
-            for (int di = 0; di < 2; ++di) {
-                const int ii = (di == 0) ? i0 : i1;
-                const float wx = (di == 0) ? (1.0f - tx) : tx;
-                value += wx * wy * wz * field[(std::size_t)idxU(ii, jj, kk)];
-            }
-        }
-    }
-    return value;
+    const int strideX = nx + 1;
+    const int sliceStride = strideX * ny;
+    const int row00 = j0 * strideX + k0 * sliceStride;
+    const int row10 = j1 * strideX + k0 * sliceStride;
+    const int row01 = j0 * strideX + k1 * sliceStride;
+    const int row11 = j1 * strideX + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
 }
 
 float MACSmoke3D::sampleV(const std::vector<float>& field, float x, float y, float z) const {
     if (field.empty()) return 0.0f;
 
-    const float fx = x / dx - 0.5f;
-    const float fy = y / dx;
-    const float fz = z / dx - 0.5f;
+    const float invDx = 1.0f / dx;
+    const float fx = x * invDx - 0.5f;
+    const float fy = y * invDx;
+    const float fz = z * invDx - 0.5f;
 
-    int i0 = clampi((int)std::floor(fx), 0, nx - 1);
-    int j0 = clampi((int)std::floor(fy), 0, ny);
-    int k0 = clampi((int)std::floor(fz), 0, nz - 1);
+    const int i0 = clampi((int)std::floor(fx), 0, nx - 1);
+    const int j0 = clampi((int)std::floor(fy), 0, ny);
+    const int k0 = clampi((int)std::floor(fz), 0, nz - 1);
 
     const int i1 = std::min(i0 + 1, nx - 1);
     const int j1 = std::min(j0 + 1, ny);
@@ -368,34 +379,41 @@ float MACSmoke3D::sampleV(const std::vector<float>& field, float x, float y, flo
     const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
     const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
     const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
 
-    float value = 0.0f;
-    for (int dk = 0; dk < 2; ++dk) {
-        const int kk = (dk == 0) ? k0 : k1;
-        const float wz = (dk == 0) ? (1.0f - tz) : tz;
-        for (int dj = 0; dj < 2; ++dj) {
-            const int jj = (dj == 0) ? j0 : j1;
-            const float wy = (dj == 0) ? (1.0f - ty) : ty;
-            for (int di = 0; di < 2; ++di) {
-                const int ii = (di == 0) ? i0 : i1;
-                const float wx = (di == 0) ? (1.0f - tx) : tx;
-                value += wx * wy * wz * field[(std::size_t)idxV(ii, jj, kk)];
-            }
-        }
-    }
-    return value;
+    const int strideX = nx;
+    const int sliceStride = strideX * (ny + 1);
+    const int row00 = j0 * strideX + k0 * sliceStride;
+    const int row10 = j1 * strideX + k0 * sliceStride;
+    const int row01 = j0 * strideX + k1 * sliceStride;
+    const int row11 = j1 * strideX + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
 }
 
 float MACSmoke3D::sampleW(const std::vector<float>& field, float x, float y, float z) const {
     if (field.empty()) return 0.0f;
 
-    const float fx = x / dx - 0.5f;
-    const float fy = y / dx - 0.5f;
-    const float fz = z / dx;
+    const float invDx = 1.0f / dx;
+    const float fx = x * invDx - 0.5f;
+    const float fy = y * invDx - 0.5f;
+    const float fz = z * invDx;
 
-    int i0 = clampi((int)std::floor(fx), 0, nx - 1);
-    int j0 = clampi((int)std::floor(fy), 0, ny - 1);
-    int k0 = clampi((int)std::floor(fz), 0, nz);
+    const int i0 = clampi((int)std::floor(fx), 0, nx - 1);
+    const int j0 = clampi((int)std::floor(fy), 0, ny - 1);
+    const int k0 = clampi((int)std::floor(fz), 0, nz);
 
     const int i1 = std::min(i0 + 1, nx - 1);
     const int j1 = std::min(j0 + 1, ny - 1);
@@ -404,22 +422,28 @@ float MACSmoke3D::sampleW(const std::vector<float>& field, float x, float y, flo
     const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
     const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
     const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
 
-    float value = 0.0f;
-    for (int dk = 0; dk < 2; ++dk) {
-        const int kk = (dk == 0) ? k0 : k1;
-        const float wz = (dk == 0) ? (1.0f - tz) : tz;
-        for (int dj = 0; dj < 2; ++dj) {
-            const int jj = (dj == 0) ? j0 : j1;
-            const float wy = (dj == 0) ? (1.0f - ty) : ty;
-            for (int di = 0; di < 2; ++di) {
-                const int ii = (di == 0) ? i0 : i1;
-                const float wx = (di == 0) ? (1.0f - tx) : tx;
-                value += wx * wy * wz * field[(std::size_t)idxW(ii, jj, kk)];
-            }
-        }
-    }
-    return value;
+    const int strideX = nx;
+    const int sliceStride = strideX * ny;
+    const int row00 = j0 * strideX + k0 * sliceStride;
+    const int row10 = j1 * strideX + k0 * sliceStride;
+    const int row01 = j0 * strideX + k1 * sliceStride;
+    const int row11 = j1 * strideX + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
 }
 
 void MACSmoke3D::velAt(float x, float y, float z,
@@ -783,6 +807,9 @@ void MACSmoke3D::diffuseScalarImplicit(std::vector<float>& phi,
 }
 
 void MACSmoke3D::project() {
+    lastPressureSolveMs = 0.0f;
+    lastPressureIterations = 0;
+
     const int cellCount = nx * ny * nz;
     if (cellCount <= 0) return;
 
@@ -834,6 +861,7 @@ void MACSmoke3D::project() {
     }
 
     const auto solverMode = static_cast<PressureSolverMode>(params.pressureSolverMode);
+    const auto solveStart = std::chrono::high_resolution_clock::now();
     if (solverMode == PressureSolverMode::Multigrid) {
         if (pressureOperatorDirty) {
             pressurePoisson.configure(
@@ -845,12 +873,15 @@ void MACSmoke3D::project() {
             pressureOperatorDirty = false;
         }
 
+        pressurePoisson.setMGControls(params.pressureMGCoarseIters, params.pressureMGRelativeTol);
+        pressurePoisson.setMGSmoother(true, clampf(params.pressureMGOmega, 0.1f, 1.95f));
         pressurePoisson.solveMG(
             pressure,
             rhs,
-            std::max(1, params.pressureIters),
+            std::max(1, params.pressureMGVCycles),
             std::max(0.0f, params.pressureTol),
             dt);
+        lastPressureIterations = pressurePoisson.lastIterations();
     } else {
         auto neighborContribution = [&](int ni, int nj, int nk, bool openTopOutside,
                                         float& sum, int& diag) {
@@ -899,8 +930,11 @@ void MACSmoke3D::project() {
         const float rbgsOmega = clampf(params.pressureOmega, 0.0f, 1.95f);
         const float jacobiOmega = clampf(params.pressureOmega, 0.0f, 1.0f);
 
+        int itersUsed = 0;
+
         if (useJacobi) {
             for (int it = 0; it < maxIters; ++it) {
+                itersUsed = it + 1;
                 for (int k3 = 0; k3 < nz; ++k3) {
                     for (int j3 = 0; j3 < ny; ++j3) {
                         for (int i3 = 0; i3 < nx; ++i3) {
@@ -935,6 +969,7 @@ void MACSmoke3D::project() {
             }
         } else {
             for (int it = 0; it < maxIters; ++it) {
+                itersUsed = it + 1;
                 for (int color = 0; color < 2; ++color) {
                     for (int k3 = 0; k3 < nz; ++k3) {
                         for (int j3 = 0; j3 < ny; ++j3) {
@@ -969,7 +1004,12 @@ void MACSmoke3D::project() {
                 if (computeResidual() * dt <= params.pressureTol) break;
             }
         }
+
+        lastPressureIterations = itersUsed;
     }
+
+    const auto solveEnd = std::chrono::high_resolution_clock::now();
+    lastPressureSolveMs = std::chrono::duration<float, std::milli>(solveEnd - solveStart).count();
 
     const float scale = dt / dx;
 
@@ -1052,6 +1092,9 @@ void MACSmoke3D::advectScalars() {
     const float domainX = nx * dx;
     const float domainY = ny * dx;
     const float domainZ = nz * dx;
+    const float domainYSampleMax = domainY + (params.openTop ? dx : 0.0f);
+    const float invDx = 1.0f / dx;
+    const int sliceStride = nx * ny;
 
     parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
         for (int k = kBegin; k < kEnd; ++k) {
@@ -1070,18 +1113,68 @@ void MACSmoke3D::advectScalars() {
 
                     float u1, v1, w1;
                     velAt(x, y, z, u, v, w, u1, v1, w1);
-                    float midX = clampf(x - 0.5f * dt * u1, 0.0f, domainX);
-                    float midY = clampf(y - 0.5f * dt * v1, 0.0f, domainY + (params.openTop ? dx : 0.0f));
-                    float midZ = clampf(z - 0.5f * dt * w1, 0.0f, domainZ);
+                    const float midX = clampf(x - 0.5f * dt * u1, 0.0f, domainX);
+                    const float midY = clampf(y - 0.5f * dt * v1, 0.0f, domainYSampleMax);
+                    const float midZ = clampf(z - 0.5f * dt * w1, 0.0f, domainZ);
 
                     float u2, v2, w2;
                     velAt(midX, midY, midZ, u, v, w, u2, v2, w2);
-                    float backX = clampf(x - dt * u2, 0.0f, domainX);
-                    float backY = clampf(y - dt * v2, 0.0f, domainY + (params.openTop ? dx : 0.0f));
-                    float backZ = clampf(z - dt * w2, 0.0f, domainZ);
+                    const float backX = clampf(x - dt * u2, 0.0f, domainX);
+                    float backY = clampf(y - dt * v2, 0.0f, domainYSampleMax);
+                    const float backZ = clampf(z - dt * w2, 0.0f, domainZ);
 
-                    smoke[(std::size_t)id] = keepSmoke * sampleCellCenteredOpenTop(smoke0, backX, backY, backZ, 0.0f);
-                    temp[(std::size_t)id] = keepTemp * sampleCellCenteredOpenTop(temp0, backX, backY, backZ, 0.0f);
+                    if (backY > domainY) {
+                        if (params.openTop) {
+                            smoke[(std::size_t)id] = 0.0f;
+                            temp[(std::size_t)id] = 0.0f;
+                            continue;
+                        }
+                        backY = domainY;
+                    }
+
+                    const float fx = backX * invDx - 0.5f;
+                    const float fy = backY * invDx - 0.5f;
+                    const float fz = backZ * invDx - 0.5f;
+
+                    const int i0 = clampi((int)std::floor(fx), 0, nx - 1);
+                    const int j0 = clampi((int)std::floor(fy), 0, ny - 1);
+                    const int k0 = clampi((int)std::floor(fz), 0, nz - 1);
+                    const int i1 = std::min(i0 + 1, nx - 1);
+                    const int j1 = std::min(j0 + 1, ny - 1);
+                    const int k1 = std::min(k0 + 1, nz - 1);
+
+                    const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
+                    const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
+                    const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+                    const float wx0 = 1.0f - tx;
+                    const float wx1 = tx;
+                    const float wy0 = 1.0f - ty;
+                    const float wy1 = ty;
+                    const float wz0 = 1.0f - tz;
+                    const float wz1 = tz;
+
+                    const int row00 = j0 * nx + k0 * sliceStride;
+                    const int row10 = j1 * nx + k0 * sliceStride;
+                    const int row01 = j0 * nx + k1 * sliceStride;
+                    const int row11 = j1 * nx + k1 * sliceStride;
+
+                    const float s00 = wx0 * smoke0[(std::size_t)(row00 + i0)] + wx1 * smoke0[(std::size_t)(row00 + i1)];
+                    const float s10 = wx0 * smoke0[(std::size_t)(row10 + i0)] + wx1 * smoke0[(std::size_t)(row10 + i1)];
+                    const float s01 = wx0 * smoke0[(std::size_t)(row01 + i0)] + wx1 * smoke0[(std::size_t)(row01 + i1)];
+                    const float s11 = wx0 * smoke0[(std::size_t)(row11 + i0)] + wx1 * smoke0[(std::size_t)(row11 + i1)];
+
+                    const float t00 = wx0 * temp0[(std::size_t)(row00 + i0)] + wx1 * temp0[(std::size_t)(row00 + i1)];
+                    const float t10 = wx0 * temp0[(std::size_t)(row10 + i0)] + wx1 * temp0[(std::size_t)(row10 + i1)];
+                    const float t01 = wx0 * temp0[(std::size_t)(row01 + i0)] + wx1 * temp0[(std::size_t)(row01 + i1)];
+                    const float t11 = wx0 * temp0[(std::size_t)(row11 + i0)] + wx1 * temp0[(std::size_t)(row11 + i1)];
+
+                    const float smokeY0 = wy0 * s00 + wy1 * s10;
+                    const float smokeY1 = wy0 * s01 + wy1 * s11;
+                    const float tempY0 = wy0 * t00 + wy1 * t10;
+                    const float tempY1 = wy0 * t01 + wy1 * t11;
+
+                    smoke[(std::size_t)id] = keepSmoke * (wz0 * smokeY0 + wz1 * smokeY1);
+                    temp[(std::size_t)id] = keepTemp * (wz0 * tempY0 + wz1 * tempY1);
                 }
             }
         }
@@ -1184,6 +1277,10 @@ void MACSmoke3D::updateIdleStats(float stepMs) {
     lastStats.maxDivergence = 0.0f;
     lastStats.dt = dt;
     lastStats.lastStepMs = stepMs;
+    lastStats.pressureMs = 0.0f;
+    lastStats.pressureIters = 0;
+    lastStats.timings.reset();
+    lastStats.timings.totalMs = stepMs;
     lastStats.backendName = "CPU Smoke 3D";
     lastStats.bytesAllocated =
         u.size() * sizeof(float) + v.size() * sizeof(float) + w.size() * sizeof(float) +
@@ -1205,6 +1302,10 @@ void MACSmoke3D::updateStats(float stepMs) {
     lastStats.maxDivergence = 0.0f;
     lastStats.dt = dt;
     lastStats.lastStepMs = stepMs;
+    lastStats.pressureMs = 0.0f;
+    lastStats.pressureIters = 0;
+    lastStats.timings.reset();
+    lastStats.timings.totalMs = stepMs;
     lastStats.backendName = "CPU Smoke 3D";
     lastStats.bytesAllocated =
         u.size() * sizeof(float) + v.size() * sizeof(float) + w.size() * sizeof(float) +
@@ -1249,10 +1350,22 @@ void MACSmoke3D::updateStats(float stepMs) {
 }
 
 void MACSmoke3D::step() {
-    const auto start = std::chrono::high_resolution_clock::now();
+    using clock = std::chrono::high_resolution_clock;
+    const auto frameStart = clock::now();
+    auto stageStart = frameStart;
+    SimStageTimings timings;
+    lastPressureSolveMs = 0.0f;
+    lastPressureIterations = 0;
+
+    auto markStage = [&](float& bucket) {
+        const auto now = clock::now();
+        bucket += std::chrono::duration<float, std::milli>(now - stageStart).count();
+        stageStart = now;
+    };
 
     if (topologyDirty) rebuildBorderSolids();
     applyBoundary();
+    markStage(timings.setupMs);
 
     const bool smokeActive = hasActiveScalar(smoke, 1.0e-5f);
     const bool tempActive = hasActiveScalar(temp, 1.0e-5f);
@@ -1271,44 +1384,70 @@ void MACSmoke3D::step() {
         clearVelocityState();
         clearDerivedDebugFields();
 
-        const auto end = std::chrono::high_resolution_clock::now();
-        const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
-        updateIdleStats(stepMs);
+        auto statsStart = clock::now();
+        updateIdleStats(0.0f);
+        auto statsEnd = clock::now();
+        timings.statsMs += std::chrono::duration<float, std::milli>(statsEnd - statsStart).count();
+
+        const float stepMs = std::chrono::duration<float, std::milli>(statsEnd - frameStart).count();
+        lastStats.lastStepMs = stepMs;
+        lastStats.pressureMs = 0.0f;
+        lastStats.pressureIters = 0;
+        lastStats.timings = timings;
+        lastStats.timings.totalMs = stepMs;
         return;
     }
 
     if (velocityActive || tempActive) {
         advectVelocity();
         applyBoundary();
+        markStage(timings.advectVelocityMs);
 
         addBuoyancy();
         applyBoundary();
+        markStage(timings.forcesMs);
 
         diffuseVelocityImplicit();
+        markStage(timings.diffuseVelocityMs);
 
         project();
+        markStage(timings.projectMs);
     } else {
         clearVelocityState();
+        markStage(timings.setupMs);
     }
 
     if (smokeActive || tempActive) {
         advectScalars();
+        markStage(timings.advectScalarsMs);
+
         diffuseScalarImplicit(smoke, smoke0, params.smokeDiffusivity, 1.0f);
         diffuseScalarImplicit(temp, temp0, params.tempDiffusivity, 1.0f);
         applyBoundary();
+        markStage(timings.diffuseScalarsMs);
     } else {
         clearScalarState(smoke);
         clearScalarState(smoke0);
         clearScalarState(temp);
         clearScalarState(temp0);
+        markStage(timings.setupMs);
     }
 
     derivedFieldsDirty = true;
 
-    const auto end = std::chrono::high_resolution_clock::now();
-    const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
-    updateStats(stepMs);
+    auto statsStart = clock::now();
+    updateStats(0.0f);
+    auto statsEnd = clock::now();
+    timings.statsMs += std::chrono::duration<float, std::milli>(statsEnd - statsStart).count();
+
+    const float stepMs = std::chrono::duration<float, std::milli>(statsEnd - frameStart).count();
+    lastStats.lastStepMs = stepMs;
+    lastStats.pressureMs = lastPressureSolveMs;
+    lastStats.pressureIters = lastPressureIterations;
+    lastStats.timings = timings;
+    lastStats.timings.totalMs = stepMs;
 }
+
 
 void MACSmoke3D::addSmokeSourceSphere(const Vec3& center, float radius, float amount, const Vec3& velocity) {
     const float r = std::max(0.0f, radius);

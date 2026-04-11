@@ -238,9 +238,11 @@ int PressureSolver::solvePCG(std::vector<float>& p,
     if ((int)p.size()   != N) p.assign(N, 0.0f);
     if ((int)rhs.size() != N) { m_lastIters = 0; return 0; }
 
-    // Early out: RHS tiny in predDiv units
+    const float tolRhs = tolPredDiv / std::max(1e-8f, dtForPredDiv);
+
+    // Early out: RHS tiny in predicted-divergence units
     const float bInf = maxAbsFluid(rhs);
-    if (!std::isfinite(bInf) || bInf <= tolPredDiv) {
+    if (!std::isfinite(bInf) || bInf <= tolRhs) {
         m_lastIters = 0;
         removeMean(p);
         return 0;
@@ -286,7 +288,7 @@ int PressureSolver::solvePCG(std::vector<float>& p,
         if (!std::isfinite(rInf)) break;
 
         // Stop in RHS units
-        if (rInf <= tolPredDiv) break;
+        if (rInf <= tolRhs) break;
 
         // Also stop relative to initial residual (cheap + robust)
         if (rInf <= relTol * rInf0) break;
@@ -532,6 +534,10 @@ void PressureSolver::ensureMultigrid()
 
         mgLevels.push_back(std::move(C));
     }
+
+    if (!mgLevels.empty()) {
+        buildDirectCoarseSolve(mgLevels.back());
+    }
 }
 
 void PressureSolver::mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const
@@ -554,33 +560,194 @@ void PressureSolver::mgApplyA(int lev, const std::vector<float>& x, std::vector<
     }
 }
 
+bool PressureSolver::mgDirectSolve(int lev)
+{
+    MGLevel& L = mgLevels[(size_t)lev];
+    if (!L.directSolveValid) return false;
+
+    const int n = (int)L.directSolveCells.size();
+    if (n <= 0) {
+        std::fill(L.x.begin(), L.x.end(), 0.0f);
+        return true;
+    }
+
+    if ((int)L.directSolveScratch0.size() != n) L.directSolveScratch0.assign((size_t)n, 0.0f);
+    if ((int)L.directSolveScratch1.size() != n) L.directSolveScratch1.assign((size_t)n, 0.0f);
+
+    std::fill(L.x.begin(), L.x.end(), 0.0f);
+
+    float* const y = L.directSolveScratch0.data();
+    float* const xCompact = L.directSolveScratch1.data();
+    const float* const chol = L.directSolveCholesky.data();
+
+    for (int row = 0; row < n; ++row) {
+        const int cell = L.directSolveCells[(size_t)row];
+        y[row] = L.b[(size_t)cell];
+        xCompact[row] = 0.0f;
+    }
+    if (L.directSolveAnchorsGauge && n > 0) y[0] = 0.0f;
+
+    for (int row = 0; row < n; ++row) {
+        float sum = y[row];
+        const size_t rowBase = (size_t)row * (size_t)n;
+        for (int col = 0; col < row; ++col) {
+            sum -= chol[rowBase + (size_t)col] * y[col];
+        }
+        const float diag = chol[rowBase + (size_t)row];
+        if (!(diag > 0.0f) || !std::isfinite(diag)) return false;
+        y[row] = sum / diag;
+    }
+
+    for (int row = n - 1; row >= 0; --row) {
+        float sum = y[row];
+        for (int col = row + 1; col < n; ++col) {
+            sum -= chol[(size_t)col * (size_t)n + (size_t)row] * xCompact[col];
+        }
+        const float diag = chol[(size_t)row * (size_t)n + (size_t)row];
+        if (!(diag > 0.0f) || !std::isfinite(diag)) return false;
+        xCompact[row] = sum / diag;
+    }
+
+    if (L.directSolveAnchorsGauge && n > 0) xCompact[0] = 0.0f;
+
+    for (int row = 0; row < n; ++row) {
+        const int cell = L.directSolveCells[(size_t)row];
+        L.x[(size_t)cell] = xCompact[row];
+    }
+
+    return true;
+}
+
+void PressureSolver::buildDirectCoarseSolve(MGLevel& L) const
+{
+    L.directSolveValid = false;
+    L.directSolveAnchorsGauge = false;
+    L.directSolveCells.clear();
+    L.directSolveCompactIndex.clear();
+    L.directSolveCholesky.clear();
+    L.directSolveScratch0.clear();
+    L.directSolveScratch1.clear();
+
+    const int totalCells = L.nx * L.ny;
+    if (totalCells <= 0) return;
+
+    int n = 0;
+    for (int id = 0; id < totalCells; ++id) {
+        if (L.fluid[(size_t)id]) ++n;
+    }
+    if (n <= 0) return;
+
+    L.directSolveCells.resize((size_t)n);
+    L.directSolveCompactIndex.assign((size_t)totalCells, -1);
+    int row = 0;
+    for (int id = 0; id < totalCells; ++id) {
+        if (!L.fluid[(size_t)id]) continue;
+        L.directSolveCells[(size_t)row] = id;
+        L.directSolveCompactIndex[(size_t)id] = row;
+        ++row;
+    }
+
+    std::vector<float> dense((size_t)n * (size_t)n, 0.0f);
+    auto addNbr = [&](int rowIndex, int nbrCell, float weight) {
+        if (weight <= 0.0f || nbrCell < 0 || nbrCell >= totalCells) return;
+        const int col = L.directSolveCompactIndex[(size_t)nbrCell];
+        if (col < 0) return;
+        dense[(size_t)rowIndex * (size_t)n + (size_t)col] -= weight * L.invDx2;
+    };
+
+    for (int rowIndex = 0; rowIndex < n; ++rowIndex) {
+        const int cell = L.directSolveCells[(size_t)rowIndex];
+        dense[(size_t)rowIndex * (size_t)n + (size_t)rowIndex] = L.diagW[(size_t)cell] * L.invDx2;
+        addNbr(rowIndex, L.L[(size_t)cell], L.wL[(size_t)cell]);
+        addNbr(rowIndex, L.R[(size_t)cell], L.wR[(size_t)cell]);
+        addNbr(rowIndex, L.B[(size_t)cell], L.wB[(size_t)cell]);
+        addNbr(rowIndex, L.T[(size_t)cell], L.wT[(size_t)cell]);
+    }
+
+    const bool anchorGauge = (!m_openTopBC && m_removeMean);
+    if (anchorGauge && n > 0) {
+        for (int j = 0; j < n; ++j) {
+            dense[(size_t)j] = 0.0f;
+            dense[(size_t)j * (size_t)n] = 0.0f;
+        }
+        dense[0] = 1.0f;
+    }
+
+    L.directSolveCholesky = dense;
+    for (int rowIndex = 0; rowIndex < n; ++rowIndex) {
+        const size_t rowBase = (size_t)rowIndex * (size_t)n;
+        for (int col = 0; col <= rowIndex; ++col) {
+            float sum = L.directSolveCholesky[rowBase + (size_t)col];
+            for (int k = 0; k < col; ++k) {
+                sum -= L.directSolveCholesky[rowBase + (size_t)k] *
+                       L.directSolveCholesky[(size_t)col * (size_t)n + (size_t)k];
+            }
+            if (rowIndex == col) {
+                if (!(sum > 1.0e-9f) || !std::isfinite(sum)) {
+                    L.directSolveCholesky.clear();
+                    return;
+                }
+                L.directSolveCholesky[rowBase + (size_t)col] = std::sqrt(sum);
+            } else {
+                const float diag = L.directSolveCholesky[(size_t)col * (size_t)n + (size_t)col];
+                if (!(diag > 0.0f) || !std::isfinite(diag)) {
+                    L.directSolveCholesky.clear();
+                    return;
+                }
+                L.directSolveCholesky[rowBase + (size_t)col] = sum / diag;
+            }
+        }
+    }
+
+    L.directSolveScratch0.assign((size_t)n, 0.0f);
+    L.directSolveScratch1.assign((size_t)n, 0.0f);
+    L.directSolveAnchorsGauge = anchorGauge;
+    L.directSolveValid = true;
+}
+
 void PressureSolver::mgSmoothRBGS(int lev, int iters)
 {
     MGLevel& L = mgLevels[(size_t)lev];
-    const int nx = L.nx, ny = L.ny;
+    const int nx = L.nx;
+    const int ny = L.ny;
 
     float omega = 1.0f;
     if (mgUseSOR) omega = std::max(1.0f, std::min(mgSORomega, 1.9f));
+    const float oneMinusOmega = 1.0f - omega;
+    const float invDx2 = L.invDx2;
+
+    float* const x = L.x.data();
+    const float* const b = L.b.data();
+    const uint8_t* const fluid = L.fluid.data();
+    const int* const left = L.L.data();
+    const int* const right = L.R.data();
+    const int* const bottom = L.B.data();
+    const int* const top = L.T.data();
+    const float* const wL = L.wL.data();
+    const float* const wR = L.wR.data();
+    const float* const wB = L.wB.data();
+    const float* const wT = L.wT.data();
+    const float* const diagInv = L.diagInv.data();
 
     for (int it = 0; it < iters; ++it) {
         for (int color = 0; color < 2; ++color) {
             for (int j = 0; j < ny; ++j) {
-                for (int i = 0; i < nx; ++i) {
-                    if (((i + j) & 1) != color) continue;
+                const int i0 = (color - (j & 1)) & 1;
+                for (int i = i0; i < nx; i += 2) {
                     const int id = mgIdx(i, j, nx);
-                    if (!L.fluid[(size_t)id]) continue;
+                    if (!fluid[(size_t)id]) continue;
 
                     float sum = 0.0f;
-                    int n = L.L[(size_t)id]; if (n >= 0) sum += L.wL[(size_t)id] * L.x[(size_t)n];
-                    n = L.R[(size_t)id];     if (n >= 0) sum += L.wR[(size_t)id] * L.x[(size_t)n];
-                    n = L.B[(size_t)id];     if (n >= 0) sum += L.wB[(size_t)id] * L.x[(size_t)n];
-                    n = L.T[(size_t)id];     if (n >= 0) sum += L.wT[(size_t)id] * L.x[(size_t)n];
+                    int n = left[(size_t)id];   if (n >= 0) sum += wL[(size_t)id] * x[(size_t)n];
+                    n = right[(size_t)id];      if (n >= 0) sum += wR[(size_t)id] * x[(size_t)n];
+                    n = bottom[(size_t)id];     if (n >= 0) sum += wB[(size_t)id] * x[(size_t)n];
+                    n = top[(size_t)id];        if (n >= 0) sum += wT[(size_t)id] * x[(size_t)n];
 
-                    const float diagW = L.diagW[(size_t)id];
-                    if (diagW <= 0.0f) continue;
+                    const float invDiag = diagInv[(size_t)id];
+                    if (invDiag <= 0.0f) continue;
 
-                    const float x_gs = (sum + L.b[(size_t)id] / L.invDx2) / diagW;
-                    L.x[(size_t)id] = (1.0f - omega) * L.x[(size_t)id] + omega * x_gs;
+                    const float xGs = invDiag * (b[(size_t)id] + sum * invDx2);
+                    x[(size_t)id] = oneMinusOmega * x[(size_t)id] + omega * xGs;
                 }
             }
         }
@@ -590,12 +757,33 @@ void PressureSolver::mgSmoothRBGS(int lev, int iters)
 void PressureSolver::mgComputeResidual(int lev)
 {
     MGLevel& L = mgLevels[(size_t)lev];
-    mgApplyA(lev, L.x, L.Ax);
     const int N = L.nx * L.ny;
+    const float invDx2 = L.invDx2;
+
+    const float* const x = L.x.data();
+    const float* const b = L.b.data();
+    const uint8_t* const fluid = L.fluid.data();
+    const int* const left = L.L.data();
+    const int* const right = L.R.data();
+    const int* const bottom = L.B.data();
+    const int* const top = L.T.data();
+    const float* const wL = L.wL.data();
+    const float* const wR = L.wR.data();
+    const float* const wB = L.wB.data();
+    const float* const wT = L.wT.data();
+    const float* const diagW = L.diagW.data();
+    float* const r = L.r.data();
 
     for (int id = 0; id < N; ++id) {
-        if (!L.fluid[(size_t)id]) { L.r[(size_t)id] = 0.0f; continue; }
-        L.r[(size_t)id] = L.b[(size_t)id] - L.Ax[(size_t)id];
+        if (!fluid[(size_t)id]) { r[(size_t)id] = 0.0f; continue; }
+
+        float sum = 0.0f;
+        int n = left[(size_t)id];   if (n >= 0) sum += wL[(size_t)id] * x[(size_t)n];
+        n = right[(size_t)id];      if (n >= 0) sum += wR[(size_t)id] * x[(size_t)n];
+        n = bottom[(size_t)id];     if (n >= 0) sum += wB[(size_t)id] * x[(size_t)n];
+        n = top[(size_t)id];        if (n >= 0) sum += wT[(size_t)id] * x[(size_t)n];
+
+        r[(size_t)id] = b[(size_t)id] - (diagW[(size_t)id] * x[(size_t)id] - sum) * invDx2;
     }
 }
 
@@ -676,7 +864,9 @@ void PressureSolver::mgProlongateAndAdd(int coarseLev)
 void PressureSolver::mgVCycle(int lev)
 {
     if (lev == (int)mgLevels.size() - 1) {
-        mgSmoothRBGS(lev, mgCoarseIters);
+        if (!mgDirectSolve(lev)) {
+            mgSmoothRBGS(lev, mgCoarseIters);
+        }
         return;
     }
 
@@ -706,6 +896,7 @@ void PressureSolver::applyMGPrecond(const std::vector<float>& r, std::vector<flo
         mgVCycle(0);
 
     z = F.x;
+    if (m_removeMean && !m_openTopBC) removeMean(z);
 }
 
 void PressureSolver::solveMG(std::vector<float>& p,
@@ -720,83 +911,106 @@ void PressureSolver::solveMG(std::vector<float>& p,
         return;
     }
 
+    if (m_dirty) rebuildOperator();
+    ensurePCGBuffers();
+
     MGLevel& F = mgLevels[0];
     const int N = F.nx * F.ny;
-
     if ((int)p.size() != N) p.assign((size_t)N, 0.0f);
-    if ((int)F.x.size() != N) F.x.assign((size_t)N, 0.0f);
-    if ((int)F.b.size() != N) F.b.assign((size_t)N, 0.0f);
-
-    // Warm start
-    F.x = p;
-    F.b = rhs;
-
-    auto maxAbsB = [&]() -> float {
-        float m = 0.0f;
-        for (int id = 0; id < N; ++id) if (F.fluid[(size_t)id])
-            m = std::max(m, std::fabs(F.b[(size_t)id]));
-        return m;
-    };
-    auto maxAbsR = [&]() -> float {
-        float m = 0.0f;
-        for (int id = 0; id < N; ++id) if (F.fluid[(size_t)id])
-            m = std::max(m, std::fabs(F.r[(size_t)id]));
-        return m;
-    };
-
-    // early-out if RHS tiny in predDiv space
-    const float bInf = maxAbsB();
-
-    int fluidCnt = 0;
-    float diagMin = 1e30f, diagMax = 0.0f;
-    for (int id = 0; id < N; ++id) {
-        if (!F.fluid[(size_t)id]) continue;
-        fluidCnt++;
-        float d = F.diagW[(size_t)id];
-        diagMin = std::min(diagMin, d);
-        diagMax = std::max(diagMax, d);
-    }
-    SMOKE_DIAG_PRINTF("[MG] fluidCnt=%d bInf=%.6g tol=%.6g diagW[min,max]=[%.6g, %.6g]\n",
-        fluidCnt, bInf, tolPredDiv, diagMin, diagMax);
-
-    if (!(bInf > 0.0f) || bInf <= tolPredDiv) {
-        p = F.x;
-        if (m_removeMean && !m_openTopBC) removeMean(p);
+    if ((int)rhs.size() != N) {
+        m_lastIters = 0;
         return;
     }
 
-    mgComputeResidual(0);
-    float rInf = maxAbsR();
-    if (!(rInf > 0.0f) || rInf <= tolPredDiv) {
-        p = F.x;
+    const float tolRhs = tolPredDiv / std::max(1e-8f, dt);
+    const float relTol = std::max(0.0f, mgRelativeTol);
+
+    auto maxAbsOnFluid = [&](const std::vector<float>& values) -> float {
+        float m = 0.0f;
+        for (int id = 0; id < N; ++id) {
+            if (!F.fluid[(size_t)id]) continue;
+            const float a = std::fabs(values[(size_t)id]);
+            if (!std::isfinite(a)) return std::numeric_limits<float>::infinity();
+            m = std::max(m, a);
+        }
+        return m;
+    };
+
+    const float bInf = maxAbsOnFluid(rhs);
+    if (!(bInf > 0.0f) || bInf <= tolRhs) {
         if (m_removeMean && !m_openTopBC) removeMean(p);
+        m_lastIters = 0;
+        return;
+    }
+
+    applyA(p, m_Ap);
+    for (int id = 0; id < N; ++id) {
+        m_r[(size_t)id] = rhs[(size_t)id] - m_Ap[(size_t)id];
+    }
+
+    float rInf = maxAbsOnFluid(m_r);
+    if (!(rInf > 0.0f) || rInf <= tolRhs) {
+        if (m_removeMean && !m_openTopBC) removeMean(p);
+        m_lastIters = 0;
+        return;
+    }
+
+    const float rInf0 = std::max(rInf, 1.0e-30f);
+
+    applyMGPrecond(m_r, m_z);
+    m_d = m_z;
+
+    float deltaNew = dotFluid(m_r, m_z);
+    if (!std::isfinite(deltaNew) || deltaNew <= 1.0e-30f) {
+        solvePCG(p, rhs, 80, tolPredDiv, dt);
         return;
     }
 
     bool fallbackPCG = false;
+    int itUsed = 0;
+    for (int it = 0; it < std::max(1, maxVCycles); ++it) {
+        itUsed = it + 1;
 
-    for (int v = 0; v < maxVCycles; ++v) {
-        const float prev = rInf;
+        applyA(m_d, m_q);
+        const float dq = dotFluid(m_d, m_q);
+        if (!std::isfinite(dq) || std::fabs(dq) < 1.0e-30f) {
+            fallbackPCG = true;
+            break;
+        }
 
-        mgVCycle(0);
+        const float alpha = deltaNew / dq;
+        for (int id = 0; id < N; ++id) {
+            p[(size_t)id] += alpha * m_d[(size_t)id];
+            m_r[(size_t)id] -= alpha * m_q[(size_t)id];
+        }
 
-        if (m_removeMean && !m_openTopBC)
-            removeMean(F.x);
+        rInf = maxAbsOnFluid(m_r);
+        if (!std::isfinite(rInf)) {
+            fallbackPCG = true;
+            break;
+        }
+        if (rInf <= tolRhs) break;
+        if (relTol > 0.0f && rInf <= relTol * rInf0) break;
 
-        mgComputeResidual(0);
-        rInf = maxAbsR();
+        applyMGPrecond(m_r, m_z);
+        const float deltaOld = deltaNew;
+        deltaNew = dotFluid(m_r, m_z);
+        if (!std::isfinite(deltaNew) || deltaNew <= 1.0e-30f) {
+            fallbackPCG = true;
+            break;
+        }
 
-        if (!std::isfinite(rInf)) { fallbackPCG = true; break; }
-        if (rInf > prev * 1.2f)   { fallbackPCG = true; break; }
-
-        if (rInf <= tolPredDiv) break;
+        const float beta = deltaNew / (deltaOld + 1.0e-30f);
+        for (int id = 0; id < N; ++id) {
+            m_d[(size_t)id] = m_z[(size_t)id] + beta * m_d[(size_t)id];
+        }
     }
 
-    p = F.x;
     if (m_removeMean && !m_openTopBC) removeMean(p);
+    m_lastIters = itUsed;
 
     if (fallbackPCG) {
-        // Warm-start PCG from current MG x
         solvePCG(p, rhs, 80, tolPredDiv, dt);
     }
 }
+

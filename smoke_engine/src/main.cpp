@@ -281,6 +281,27 @@ struct VolumeRenderTargetSize {
     int height = 0;
 };
 
+static bool nearlyEqual(float a, float b, float eps = 1.0e-4f) {
+    return std::fabs(a - b) <= eps;
+}
+
+struct VolumeRenderCacheState {
+    bool valid = false;
+    double lastRenderTime = 0.0;
+    unsigned long long lastSimVersion = 0;
+    int lastWidth = 0;
+    int lastHeight = 0;
+    int lastViewMode = -1;
+    int lastSliceAxis = -1;
+    int lastSliceIndex = -1;
+    int lastDebugField = -1;
+    float lastYaw = 0.0f;
+    float lastPitch = 0.0f;
+    float lastZoom = 0.0f;
+    float lastDensity = 0.0f;
+    float lastSurfaceThreshold = 0.0f;
+};
+
 static VolumeRenderTargetSize computeVolumeRenderTargetSize(GLFWwindow* win,
                                                             float logicalWidth,
                                                             float logicalHeight,
@@ -380,6 +401,15 @@ int main()
     SmokeRenderer smoke3DRenderer(NX, NY);
     SmokeRenderer coupledRenderer(NX, NY);
 
+    VolumeRenderCacheState smoke3DRenderCache;
+    VolumeRenderCacheState water3DRenderCache;
+    unsigned long long smoke3DSimVersion = 1;
+    unsigned long long water3DSimVersion = 1;
+    auto invalidate3DRenderCaches = [&]() {
+        smoke3DRenderCache = {};
+        water3DRenderCache = {};
+    };
+
     // Simulator
     float dx = 1.0f / NX;
     float dt_initial = 0.02f;
@@ -453,6 +483,9 @@ int main()
             water3D.reset(nx3, ny3, nz3, dxForGrid(nx3, ny3, nz3), water3D.dt);
         }
 
+        ++smoke3DSimVersion;
+        ++water3DSimVersion;
+        invalidate3DRenderCaches();
         accumulator = 0.0;
     };
 
@@ -476,6 +509,7 @@ int main()
         water3DRenderer.resize(NX, NY);
         smoke3DRenderer.resize(NX, NY);
         coupledRenderer.resize(NX, NY);
+        invalidate3DRenderCaches();
 
         g_textMaskW = std::max(NX, 512);
         g_textMaskH = std::max(NY, 512);
@@ -539,6 +573,9 @@ int main()
         assignBoolW(p3.useAPIC, ui.water3DUseAPIC);
         assignFloatW(p3.flipBlend, ui.water3DFlipBlend);
         assignFloatW(p3.pressureOmega, ui.water3DPressureOmega);
+        assignFloatW(p3.pressureMGOmega, ui.water3DPressureMGOmega);
+        assignIntW(p3.pressureMGVCycles, ui.water3DPressureMGVCycles);
+        assignIntW(p3.pressureMGCoarseIters, ui.water3DPressureMGCoarseIters);
         assignBoolW(p3.volumePreserveRhsMean, ui.water3DVolumePreserve);
         assignFloatW(p3.volumePreserveStrength, ui.water3DVolumePreserveStrength);
         assignIntW(p3.reseedRelaxIters, ui.water3DRelaxIters);
@@ -552,10 +589,14 @@ int main()
         }
         if (water3D.backendPreferenceMode() != requestedWaterBackend) {
             water3D.setBackendPreference(requestedWaterBackend);
+            ++water3DSimVersion;
+            water3DRenderCache = {};
         }
 
         if (p3Changed) {
             water3D.setParams(p3);
+            ++water3DSimVersion;
+            water3DRenderCache = {};
         }
 
         MACSmoke3D::Params s3 = smoke3D.params;
@@ -582,15 +623,25 @@ int main()
         assignIntS(s3.pressureIters, ui.smoke3DPressureIters);
         assignIntS(s3.pressureSolverMode, ui.smoke3DPressureSolverMode);
         assignFloatS(s3.pressureOmega, ui.smoke3DPressureOmega);
+        assignFloatS(s3.pressureMGOmega, ui.smoke3DPressureMGOmega);
+        assignIntS(s3.pressureMGVCycles, ui.smoke3DPressureMGVCycles);
+        assignIntS(s3.pressureMGCoarseIters, ui.smoke3DPressureMGCoarseIters);
 
         if (s3Changed) {
             smoke3D.setParams(s3);
+            ++smoke3DSimVersion;
+            smoke3DRenderCache = {};
         }
 
         coupled.waterDissipation = ui.waterDissipation;
         coupled.waterGravity     = ui.waterGravity;
         coupled.velDamping       = ui.waterVelDamping;
         coupled.setOpenTop(false);  // Combined view: closed top for now
+
+        sim.pressureMGVCycles = ui.smoke2DPressureMGVCycles;
+        sim.pressureMGCoarseIters = ui.smoke2DPressureMGCoarseIters;
+        coupled.pressureMGVCycles = ui.smoke2DPressureMGVCycles;
+        coupled.pressureMGCoarseIters = ui.smoke2DPressureMGCoarseIters;
 
         coupled.smokeDissipation = ui.smokeDissipation;
         coupled.tempDissipation  = ui.tempDissipation;
@@ -652,10 +703,12 @@ int main()
                     case UI::kWorkspaceSmoke3D:
                         smoke3D.setDt(dt);
                         smoke3D.step();
+                        ++smoke3DSimVersion;
                         break;
                     case UI::kWorkspaceWater3D:
                         water3D.setDt(dt);
                         water3D.step();
+                        ++water3DSimVersion;
                         break;
                     case UI::kWorkspaceCoupled:
                         coupled.setDt(dt);
@@ -709,28 +762,70 @@ int main()
                     ui.water3DSliceIndex,
                     static_cast<MACWater3D::DebugField>(field));
                 water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
+                water3DRenderCache = {};
             } else {
                 const auto target = computeVolumeRenderTargetSize(
                     win,
                     ui.water3DViewportWidth,
                     ui.water3DViewportHeight,
                     ui.volumeRenderScale);
-                if (water3DRenderer.width() != target.width || water3DRenderer.height() != target.height) {
+                const bool sizeChanged =
+                    water3DRenderer.width() != target.width || water3DRenderer.height() != target.height;
+                if (sizeChanged) {
                     water3DRenderer.resize(target.width, target.height);
                 }
-                water3DRenderer.updateWaterFromVolume(
-                    water3D.water,
-                    water3D.solid,
-                    water3D.nx,
-                    water3D.ny,
-                    water3D.nz,
-                    viewMode,
-                    ui.water3DViewYawDeg,
-                    ui.water3DViewPitchDeg,
-                    ui.water3DViewZoom,
-                    ui.water3DVolumeDensity,
-                    ui.water3DSurfaceThreshold,
-                    wr);
+
+                const bool viewChanged =
+                    !water3DRenderCache.valid ||
+                    water3DRenderCache.lastWidth != target.width ||
+                    water3DRenderCache.lastHeight != target.height ||
+                    water3DRenderCache.lastViewMode != viewMode ||
+                    !nearlyEqual(water3DRenderCache.lastYaw, ui.water3DViewYawDeg) ||
+                    !nearlyEqual(water3DRenderCache.lastPitch, ui.water3DViewPitchDeg) ||
+                    !nearlyEqual(water3DRenderCache.lastZoom, ui.water3DViewZoom) ||
+                    !nearlyEqual(water3DRenderCache.lastDensity, ui.water3DVolumeDensity) ||
+                    !nearlyEqual(water3DRenderCache.lastSurfaceThreshold, ui.water3DSurfaceThreshold);
+                const bool simChanged =
+                    !water3DRenderCache.valid || water3DRenderCache.lastSimVersion != water3DSimVersion;
+
+                bool needUpdate = false;
+                if (!water3DRenderCache.valid || sizeChanged || viewChanged) {
+                    needUpdate = true;
+                } else if (!ui.playing) {
+                    needUpdate = true;
+                } else if (!ui.water3DThrottleRendering) {
+                    needUpdate = simChanged;
+                } else if (simChanged) {
+                    const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
+                    needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
+                }
+
+                if (needUpdate) {
+                    water3DRenderer.updateWaterFromVolume(
+                        water3D.water,
+                        water3D.solid,
+                        water3D.nx,
+                        water3D.ny,
+                        water3D.nz,
+                        viewMode,
+                        ui.water3DViewYawDeg,
+                        ui.water3DViewPitchDeg,
+                        ui.water3DViewZoom,
+                        ui.water3DVolumeDensity,
+                        ui.water3DSurfaceThreshold,
+                        wr);
+                    water3DRenderCache.valid = true;
+                    water3DRenderCache.lastRenderTime = now;
+                    water3DRenderCache.lastSimVersion = water3DSimVersion;
+                    water3DRenderCache.lastWidth = target.width;
+                    water3DRenderCache.lastHeight = target.height;
+                    water3DRenderCache.lastViewMode = viewMode;
+                    water3DRenderCache.lastYaw = ui.water3DViewYawDeg;
+                    water3DRenderCache.lastPitch = ui.water3DViewPitchDeg;
+                    water3DRenderCache.lastZoom = ui.water3DViewZoom;
+                    water3DRenderCache.lastDensity = ui.water3DVolumeDensity;
+                    water3DRenderCache.lastSurfaceThreshold = ui.water3DSurfaceThreshold;
+                }
             }
         }
 
@@ -751,27 +846,67 @@ int main()
                     ui.smoke3DSliceIndex,
                     static_cast<MACSmoke3D::DebugField>(field));
                 smoke3DRenderer.updateSmokeFromSlice(slice.values, slice.solid, slice.width, slice.height, field, rs);
+                smoke3DRenderCache = {};
             } else {
                 const auto target = computeVolumeRenderTargetSize(
                     win,
                     ui.smoke3DViewportWidth,
                     ui.smoke3DViewportHeight,
                     ui.volumeRenderScale);
-                if (smoke3DRenderer.width() != target.width || smoke3DRenderer.height() != target.height) {
+                const bool sizeChanged =
+                    smoke3DRenderer.width() != target.width || smoke3DRenderer.height() != target.height;
+                if (sizeChanged) {
                     smoke3DRenderer.resize(target.width, target.height);
                 }
-                smoke3DRenderer.updateSmokeFromVolume(
-                    smoke3D.smoke,
-                    smoke3D.temp,
-                    smoke3D.solid,
-                    smoke3D.nx,
-                    smoke3D.ny,
-                    smoke3D.nz,
-                    ui.smoke3DViewYawDeg,
-                    ui.smoke3DViewPitchDeg,
-                    ui.smoke3DViewZoom,
-                    ui.smoke3DVolumeDensity,
-                    rs);
+
+                const bool viewChanged =
+                    !smoke3DRenderCache.valid ||
+                    smoke3DRenderCache.lastWidth != target.width ||
+                    smoke3DRenderCache.lastHeight != target.height ||
+                    smoke3DRenderCache.lastViewMode != viewMode ||
+                    !nearlyEqual(smoke3DRenderCache.lastYaw, ui.smoke3DViewYawDeg) ||
+                    !nearlyEqual(smoke3DRenderCache.lastPitch, ui.smoke3DViewPitchDeg) ||
+                    !nearlyEqual(smoke3DRenderCache.lastZoom, ui.smoke3DViewZoom) ||
+                    !nearlyEqual(smoke3DRenderCache.lastDensity, ui.smoke3DVolumeDensity);
+                const bool simChanged =
+                    !smoke3DRenderCache.valid || smoke3DRenderCache.lastSimVersion != smoke3DSimVersion;
+
+                bool needUpdate = false;
+                if (!smoke3DRenderCache.valid || sizeChanged || viewChanged) {
+                    needUpdate = true;
+                } else if (!ui.playing) {
+                    needUpdate = true;
+                } else if (!ui.smoke3DThrottleRendering) {
+                    needUpdate = simChanged;
+                } else if (simChanged) {
+                    const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
+                    needUpdate = (now - smoke3DRenderCache.lastRenderTime) >= interval;
+                }
+
+                if (needUpdate) {
+                    smoke3DRenderer.updateSmokeFromVolume(
+                        smoke3D.smoke,
+                        smoke3D.temp,
+                        smoke3D.solid,
+                        smoke3D.nx,
+                        smoke3D.ny,
+                        smoke3D.nz,
+                        ui.smoke3DViewYawDeg,
+                        ui.smoke3DViewPitchDeg,
+                        ui.smoke3DViewZoom,
+                        ui.smoke3DVolumeDensity,
+                        rs);
+                    smoke3DRenderCache.valid = true;
+                    smoke3DRenderCache.lastRenderTime = now;
+                    smoke3DRenderCache.lastSimVersion = smoke3DSimVersion;
+                    smoke3DRenderCache.lastWidth = target.width;
+                    smoke3DRenderCache.lastHeight = target.height;
+                    smoke3DRenderCache.lastViewMode = viewMode;
+                    smoke3DRenderCache.lastYaw = ui.smoke3DViewYawDeg;
+                    smoke3DRenderCache.lastPitch = ui.smoke3DViewPitchDeg;
+                    smoke3DRenderCache.lastZoom = ui.smoke3DViewZoom;
+                    smoke3DRenderCache.lastDensity = ui.smoke3DVolumeDensity;
+                }
             }
         }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -40,6 +42,16 @@ public:
                  float dtForPredDiv);
 
     int lastIterations() const { return m_lastIters; }
+
+    void setMGControls(int coarseIters, float relativeTol) {
+        mgCoarseIters = std::max(1, coarseIters);
+        mgRelativeTol = std::max(0.0f, relativeTol);
+    }
+
+    void setMGSmoother(bool useSOR, float omega) {
+        mgUseSOR = useSOR;
+        mgSORomega = omega;
+    }
 
 private:
     static inline int idx(int i, int j, int k, int nx, int ny) {
@@ -91,6 +103,27 @@ private:
 
     int m_lastIters = 0;
 
+    struct MGCellStencil {
+        int cell = 0;
+        int xm = 0;
+        int xp = 0;
+        int ym = 0;
+        int yp = 0;
+        int zm = 0;
+        int zp = 0;
+
+        float wXm = 0.0f;
+        float wXp = 0.0f;
+        float wYm = 0.0f;
+        float wYp = 0.0f;
+        float wZm = 0.0f;
+        float wZp = 0.0f;
+
+        float diagW = 0.0f;
+        float invDiagW = 0.0f;
+        float diagInv = 0.0f;
+    };
+
     struct MGLevel {
         int nx = 0;
         int ny = 0;
@@ -104,12 +137,42 @@ private:
         std::vector<float> faceOpenV;
         std::vector<float> faceOpenW;
 
-        std::vector<int> xm, xp, ym, yp, zm, zp;
-        std::vector<float> wXm, wXp, wYm, wYp, wZm, wZp;
-        std::vector<float> diagW;
-        std::vector<float> diagInv;
+        // Compact fluid-only stencils in color-major order:
+        // [0, redStencilCount) are red cells, [redStencilCount, end) are black.
+        std::vector<MGCellStencil> stencils;
+        std::size_t redStencilCount = 0;
 
-        std::vector<float> x, b, Ax, r;
+        std::vector<float> x;
+        std::vector<float> b;
+        std::vector<float> r;
+
+        // Optional dense direct solve for the coarsest grid.
+        bool directSolveValid = false;
+        bool directSolveAnchorsGauge = false;
+        std::vector<int> directSolveCells;
+        std::vector<int> directSolveCompactIndex;
+        std::vector<float> directSolveCholesky;
+        std::vector<float> directSolveScratch0;
+        std::vector<float> directSolveScratch1;
+    };
+
+    struct MGRestrictEntry {
+        int coarseCell = 0;
+        uint8_t count = 0;
+        std::array<int, 27> ids{};
+        std::array<float, 27> weights{};
+    };
+
+    struct MGProlongEntry {
+        int fineCell = 0;
+        uint8_t count = 0;
+        std::array<int, 8> ids{};
+        std::array<float, 8> weights{};
+    };
+
+    struct MGTransfer {
+        std::vector<MGRestrictEntry> restrictEntries;
+        std::vector<MGProlongEntry> prolongEntries;
     };
 
     // Multigrid settings.
@@ -119,6 +182,7 @@ private:
     int mgCoarseIters = 80;
     bool mgUseSOR = true;
     float mgSORomega = 1.4f;
+    float mgRelativeTol = 1.0e-4f;
 
     bool mgDirty = true;
     bool mgBuiltValid = false;
@@ -128,10 +192,13 @@ private:
     bool mgBuiltOpenTop = false;
 
     std::vector<MGLevel> mgLevels;
+    std::vector<MGTransfer> mgTransfers;
 
     void ensureMultigrid();
     void buildLevelStencil(MGLevel& level) const;
-    void mgApplyA(int lev, const std::vector<float>& x, std::vector<float>& Ax) const;
+    void buildTransfer(int fineLev, MGTransfer& transfer) const;
+    void buildDirectCoarseSolve(MGLevel& level) const;
+    bool mgDirectSolve(int lev);
     void mgSmoothRBGS(int lev, int iters);
     void mgComputeResidual(int lev);
     void mgRestrictResidual(int fineLev);

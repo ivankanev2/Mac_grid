@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "pressure_solver3d.h"
+#include "sim_stage_timing.h"
 
 struct MACWater3DCudaBackend;
 
@@ -70,12 +71,16 @@ struct MACWater3D {
         int maskDilations = 0;
         int extrapolationIters = 10;
         int pressureIters = 200;
+        int pressureMGVCycles = 200;
+        int pressureMGCoarseIters = 80;
         int diffuseIters = 20;
         int pressureSolverMode = (int)PressureSolverMode::Multigrid;
         int reseedRelaxIters = 2;
 
         float pressureTol = 1e-10f;
         float pressureOmega = 1.7f;
+        float pressureMGOmega = 1.4f;
+        float pressureMGRelativeTol = 1.0e-5f;
         float diffuseOmega = 0.8f;
         float reseedRelaxStrength = 0.45f;
         float volumePreserveStrength = 0.05f;
@@ -104,10 +109,13 @@ struct MACWater3D {
         float maxDivergence = 0.0f;
         float dt = 0.0f;
         float lastStepMs = 0.0f;
+        float pressureMs = 0.0f;
+        int pressureIters = 0;
         float targetMass = 0.0f;
         float desiredMass = -1.0f;
         std::size_t bytesAllocated = 0;
         const char* backendName = "CPU MAC 3D";
+        SimStageTimings timings;
     };
 
     int nx = 0;
@@ -135,6 +143,8 @@ struct MACWater3D {
     std::vector<uint8_t> liquid;
     std::vector<uint8_t> solid;
     bool topologyDirty = true;
+    float lastPressureSolveMs = 0.0f;
+    int lastPressureIterations = 0;
 
     std::vector<Particle> particles;
 

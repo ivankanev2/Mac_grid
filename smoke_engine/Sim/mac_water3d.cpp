@@ -120,6 +120,10 @@ void MACWater3D::setParams(const Params& newParams) {
 void MACWater3D::refreshStats(float stepMs) {
     derivedFieldsDirty = false;
     updateStats(stepMs);
+    lastStats.pressureMs = 0.0f;
+    lastStats.pressureIters = 0;
+    lastStats.timings.reset();
+    lastStats.timings.totalMs = stepMs;
 }
 
 void MACWater3D::setBackendPreference(BackendPreference newPreference) {
@@ -136,68 +140,134 @@ void MACWater3D::step() {
     if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
         water3dCudaStep(backend, *this);
         derivedFieldsDirty = false;
+        lastStats.pressureMs = 0.0f;
+        lastStats.pressureIters = 0;
+        lastStats.timings.reset();
+        lastStats.timings.totalMs = lastStats.lastStepMs;
         return;
     }
 
-    const auto start = std::chrono::high_resolution_clock::now();
+    using clock = std::chrono::high_resolution_clock;
+    const auto frameStart = clock::now();
+    auto stageStart = frameStart;
+    SimStageTimings timings;
+    lastPressureSolveMs = 0.0f;
+    lastPressureIterations = 0;
     ++stepCounter;
+
+    auto markStage = [&](float& bucket) {
+        const auto now = clock::now();
+        bucket += std::chrono::duration<float, std::milli>(now - stageStart).count();
+        stageStart = now;
+    };
 
     if (topologyDirty) rebuildBorderSolids();
     removeParticlesInSolids();
     enforceParticleBounds();
+    markStage(timings.setupMs);
 
     if (particles.empty()) {
         std::fill(u.begin(), u.end(), 0.0f);
         std::fill(v.begin(), v.end(), 0.0f);
         std::fill(w.begin(), w.end(), 0.0f);
         buildLiquidMask();
+        markStage(timings.liquidMaskMs);
         applyBoundary();
+        markStage(timings.boundaryMs);
         rasterizeWaterField();
-        const auto end = std::chrono::high_resolution_clock::now();
-        const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
-        updateStats(stepMs);
+        markStage(timings.rasterizeMs);
+
+        auto statsStart = clock::now();
+        updateStats(0.0f);
+        auto statsEnd = clock::now();
+        timings.statsMs += std::chrono::duration<float, std::milli>(statsEnd - statsStart).count();
+
+        const float stepMs = std::chrono::duration<float, std::milli>(statsEnd - frameStart).count();
+        lastStats.lastStepMs = stepMs;
+        lastStats.pressureMs = 0.0f;
+        lastStats.pressureIters = 0;
+        lastStats.timings = timings;
+        lastStats.timings.totalMs = stepMs;
         return;
     }
 
     particleToGrid();
+    markStage(timings.particleToGridMs);
+
     buildLiquidMask();
-//gravity
+    markStage(timings.liquidMaskMs);
+
     applyExternalForces();
+    markStage(timings.forcesMs);
+
     applyBoundary();
-// viscosity
+    markStage(timings.boundaryMs);
+
     diffuseVelocityImplicit();
+    markStage(timings.diffuseVelocityMs);
+
+    applyBoundary();
+    markStage(timings.boundaryMs);
 
     uPrev = u;
     vPrev = v;
     wPrev = w;
+    markStage(timings.setupMs);
 
     projectLiquid();
+    markStage(timings.projectMs);
+
+    applyBoundary();
+    markStage(timings.boundaryMs);
 
     for (std::size_t i = 0; i < u.size(); ++i) uDelta[i] = u[i] - uPrev[i];
     for (std::size_t i = 0; i < v.size(); ++i) vDelta[i] = v[i] - vPrev[i];
     for (std::size_t i = 0; i < w.size(); ++i) wDelta[i] = w[i] - wPrev[i];
+    markStage(timings.setupMs);
 
     extrapolateVelocity();
+    markStage(timings.extrapolateMs);
+
+    applyBoundary();
+    markStage(timings.boundaryMs);
 
     gridToParticles();
+    markStage(timings.gridToParticlesMs);
+
     advectParticles();
     enforceParticleBounds();
     removeParticlesInSolids();
+    markStage(timings.advectParticlesMs);
 
     buildLiquidMask(false);
+    markStage(timings.liquidMaskMs);
+
     reseedParticles();
     if (params.reseedRelaxIters > 0 && params.reseedRelaxStrength > 0.0f) {
         relaxParticles(params.reseedRelaxIters, params.reseedRelaxStrength);
     }
     applyDissipation();
+    markStage(timings.reseedMs);
 
     buildLiquidMask();
-    rasterizeWaterField();
+    markStage(timings.liquidMaskMs);
 
-    const auto end = std::chrono::high_resolution_clock::now();
-    const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
-    updateStats(stepMs);
+    rasterizeWaterField();
+    markStage(timings.rasterizeMs);
+
+    auto statsStart = clock::now();
+    updateStats(0.0f);
+    auto statsEnd = clock::now();
+    timings.statsMs += std::chrono::duration<float, std::milli>(statsEnd - statsStart).count();
+
+    const float stepMs = std::chrono::duration<float, std::milli>(statsEnd - frameStart).count();
+    lastStats.lastStepMs = stepMs;
+    lastStats.pressureMs = lastPressureSolveMs;
+    lastStats.pressureIters = lastPressureIterations;
+    lastStats.timings = timings;
+    lastStats.timings.totalMs = stepMs;
 }
+
 
 void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity) {
     if (MACWater3DCudaBackend* backend = activeCudaBackend()) {

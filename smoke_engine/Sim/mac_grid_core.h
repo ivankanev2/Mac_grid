@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "pressure_solver.h"
+#include "sim_stage_timing.h"
 
 struct MACGridCore {
     int nx, ny;
@@ -51,6 +52,13 @@ struct MACGridCore {
     // setSharedPressureSolver(&shared) on both sims.
     PressureSolver pressureSolver;
 
+    // Multigrid budget controls. These limit MG work without changing the
+    // discretization or disabling features. 2D smoke/coupled use these in
+    // MACGridCore::project(); 2D water uses them in its liquid projection.
+    int   pressureMGVCycles = 20;
+    int   pressureMGCoarseIters = 200;
+    float pressureMGRelativeTol = 1.0e-4f;
+
     // If non-null, all pressure solves will use this shared solver instance instead.
     void setSharedPressureSolver(PressureSolver* s) { sharedPressureSolver = s; }
     PressureSolver& ps() { return sharedPressureSolver ? *sharedPressureSolver : pressureSolver; }
@@ -66,6 +74,7 @@ struct MACGridCore {
         float maxFaceSpeedAfter  = 0.0f;
         int   pressureIters = 0;
         float pressureMs    = 0.0f;
+        float stepMs        = 0.0f;
 
         int   openTopBC = 0;                 // 0/1
         int   pressureSolver = SOLVER_MG;    // PCG or MG
@@ -80,6 +89,8 @@ struct MACGridCore {
         float opDiffMax   = 0.0f;            // max |A_mg - A_pcg|
 
         int   mgResidualIncrease = 0;        // 0/1
+
+        SimStageTimings timings;
 
     };
 
@@ -179,6 +190,8 @@ struct MACGridCore {
     void syncSolidsToFluidAndFaces();
 
 protected:
+    FrameStats& mutableStats() { return stats; }
+
     // Reused scalar scratch to avoid per-step heap churn in active smoke scenes.
     std::vector<float> scalarScratch0;
     std::vector<float> scalarScratch1;

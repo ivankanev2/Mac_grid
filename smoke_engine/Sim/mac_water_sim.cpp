@@ -18,6 +18,9 @@
 
 MACWater::MACWater(int NX, int NY, float DX, float DT)
     : MACGridCore(NX, NY, DX, DT) {
+    pressureMGVCycles = 20;
+    pressureMGCoarseIters = 200;
+    pressureMGRelativeTol = 1.0e-4f;
     reset();
 }
 

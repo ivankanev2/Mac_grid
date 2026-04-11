@@ -1,0 +1,13 @@
+# Simple L-shaped pipe
+# 1m straight section followed by a 90° elbow and 0.8m horizontal run.
+
+name simple_L_pipe
+inner_radius 0.05
+outer_radius 0.06
+
+start 0 0 0
+direction 0 0 1
+
+straight 1.0
+bend90 +x 0.15
+straight 0.8

@@ -180,7 +180,7 @@ if (volumePreserveRhsMean) {
 
     // Warm start: do NOT zero p every frame
     // (If you still want to reset sometimes, do it outside based on user action.)
-    const int maxIters = std::max(1, pressureMaxIters);
+    const int mgVCycles = std::max(1, pressureMGVCycles);
 
     // In the shared solver we interpret tol in "predDiv space": |r|*dt <= tol.
     // So we pass your existing value as-is and dt along.
@@ -188,7 +188,8 @@ if (volumePreserveRhsMean) {
 
     // ps().solvePCG(p, rhs, maxIters, tolPredDiv, dt);
 
-    ps().solveMG(p, rhs, maxIters, pressureTol, dt);
+    ps().setMGControls(pressureMGCoarseIters, pressureMGRelativeTol);
+    ps().solveMG(p, rhs, mgVCycles, pressureTol, dt);
 
     // Subtract pressure gradient from velocities.
     const float scale = dt / dx;

@@ -1,0 +1,16 @@
+# Industrial riser pipe
+# Horizontal intake → 90° elbow up → vertical riser → 90° elbow → horizontal outlet.
+# Typical in oil/gas processing facilities.
+
+name industrial_riser
+inner_radius 0.075
+outer_radius 0.090
+
+start 0 0 0
+direction 1 0 0
+
+straight 0.8          # horizontal intake
+bend90 +y 0.20        # elbow going up
+straight 1.5          # vertical riser
+bend90 +x 0.20        # elbow going horizontal
+straight 0.6          # horizontal outlet
