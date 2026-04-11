@@ -7,7 +7,8 @@ if ! command -v nvcc >/dev/null 2>&1; then
 fi
 
 BUILD_DIR=${BUILD_DIR:-build_cuda}
-JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}
+JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null  sysctl -n hw.ncpu 2>/dev/null 
+ echo 4)}
 
 cmake -S . -B "$BUILD_DIR" \
   -DCMAKE_BUILD_TYPE=Release \
@@ -15,4 +16,12 @@ cmake -S . -B "$BUILD_DIR" \
   -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=OFF \
   "$@"
 cmake --build "$BUILD_DIR" -j"$JOBS"
-"./$BUILD_DIR/SmokeEngine"
+if [ -f "./$BUILD_DIR/Debug/SmokeEngine.exe" ]; then
+  "./$BUILD_DIR/Debug/SmokeEngine.exe"
+elif [ -f "./$BUILD_DIR/Release/SmokeEngine.exe" ]; then
+  "./$BUILD_DIR/Release/SmokeEngine.exe"
+elif [ -f "./$BUILD_DIR/SmokeEngine.exe" ]; then
+  "./$BUILD_DIR/SmokeEngine.exe"
+else
+  "./$BUILD_DIR/SmokeEngine"
+fi
