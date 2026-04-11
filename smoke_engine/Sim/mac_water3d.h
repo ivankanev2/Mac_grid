@@ -130,6 +130,7 @@ struct MACWater3D {
     std::vector<float> water;
     std::vector<float> divergence;
     std::vector<float> speed;
+    bool derivedFieldsDirty = true;
 
     std::vector<uint8_t> liquid;
     std::vector<uint8_t> solid;
@@ -158,7 +159,7 @@ struct MACWater3D {
     void addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity);
     void setVoxelSolids(const std::vector<uint8_t>& mask);
 
-    SliceData copyDebugSlice(SliceAxis axis, int index, DebugField field) const;
+    SliceData copyDebugSlice(SliceAxis axis, int index, DebugField field);
     const Stats& stats() const { return lastStats; }
     const std::vector<uint8_t>& userSolidMask() const { return solidUser; }
     void refreshStats(float stepMs);
@@ -245,7 +246,9 @@ protected:
     void reseedParticles();
     void relaxParticles(int iters, float strength);
 
+    void rasterizeWaterField();
     void rasterizeDebugFields();
+    void ensureDerivedDebugFields();
     void updateStats(float stepMs);
     MACWater3DCudaBackend* activeCudaBackend() const;
 

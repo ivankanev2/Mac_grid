@@ -1,12 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 project(SmokeEngine CXX)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
   message(WARNING "Configuring a 32-bit Windows build. This will be much slower and more memory-constrained than x64. Use the x64 Native Tools prompt or a 64-bit generator.")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(SMOKE_ENABLE_CUDA "Enable experimental CUDA build plumbing for the 3D water path" OFF)
 

@@ -68,8 +68,7 @@ void MACSmoke3D::reset() {
 
     rebuildBorderSolids();
     applyBoundary();
-    rasterizeDebugFields();
-    idleStateLatched = false;
+    derivedFieldsDirty = true;
     updateStats(0.0f);
 }
 
@@ -86,8 +85,7 @@ void MACSmoke3D::setParams(const Params& newParams) {
     params = newParams;
     rebuildBorderSolids();
     applyBoundary();
-    rasterizeDebugFields();
-    idleStateLatched = false;
+    derivedFieldsDirty = true;
     updateStats(0.0f);
 }
 
@@ -1033,6 +1031,11 @@ void MACSmoke3D::advectScalars() {
     }
 }
 
+void MACSmoke3D::ensureDerivedDebugFields() {
+    if (!derivedFieldsDirty) return;
+    rasterizeDebugFields();
+}
+
 void MACSmoke3D::rasterizeDebugFields() {
     for (int k = 0; k < nz; ++k) {
         for (int j = 0; j < ny; ++j) {
@@ -1069,63 +1072,8 @@ void MACSmoke3D::rasterizeDebugFields() {
             }
         }
     }
-}
 
-
-bool MACSmoke3D::hasDynamicContent(float velEps, float scalarEps) const {
-    for (float value : u) if (std::fabs(value) > velEps) return true;
-    for (float value : v) if (std::fabs(value) > velEps) return true;
-    for (float value : w) if (std::fabs(value) > velEps) return true;
-    const std::size_t cellCount = smoke.size();
-    for (std::size_t idx = 0; idx < cellCount; ++idx) {
-        if (solid[idx]) continue;
-        if (std::fabs(smoke[idx]) > scalarEps) return true;
-        if (std::fabs(temp[idx]) > scalarEps) return true;
-    }
-    return false;
-}
-
-void MACSmoke3D::clearDynamicState() {
-    std::fill(u.begin(), u.end(), 0.0f);
-    std::fill(v.begin(), v.end(), 0.0f);
-    std::fill(w.begin(), w.end(), 0.0f);
-    std::fill(u0.begin(), u0.end(), 0.0f);
-    std::fill(v0.begin(), v0.end(), 0.0f);
-    std::fill(w0.begin(), w0.end(), 0.0f);
-    std::fill(uTmp.begin(), uTmp.end(), 0.0f);
-    std::fill(vTmp.begin(), vTmp.end(), 0.0f);
-    std::fill(wTmp.begin(), wTmp.end(), 0.0f);
-    std::fill(pressure.begin(), pressure.end(), 0.0f);
-    std::fill(pressureTmp.begin(), pressureTmp.end(), 0.0f);
-    std::fill(rhs.begin(), rhs.end(), 0.0f);
-    std::fill(smoke.begin(), smoke.end(), 0.0f);
-    std::fill(smoke0.begin(), smoke0.end(), 0.0f);
-    std::fill(temp.begin(), temp.end(), 0.0f);
-    std::fill(temp0.begin(), temp0.end(), 0.0f);
-    std::fill(cellTmp.begin(), cellTmp.end(), 0.0f);
-    std::fill(divergence.begin(), divergence.end(), 0.0f);
-    std::fill(speed.begin(), speed.end(), 0.0f);
-}
-
-void MACSmoke3D::updateIdleStats(float stepMs) {
-    lastStats.nx = nx;
-    lastStats.ny = ny;
-    lastStats.nz = nz;
-    lastStats.activeCells = 0;
-    lastStats.maxSpeed = 0.0f;
-    lastStats.maxDivergence = 0.0f;
-    lastStats.dt = dt;
-    lastStats.lastStepMs = stepMs;
-    lastStats.backendName = "CPU Smoke 3D";
-    lastStats.bytesAllocated =
-        u.size() * sizeof(float) + v.size() * sizeof(float) + w.size() * sizeof(float) +
-        u0.size() * sizeof(float) + v0.size() * sizeof(float) + w0.size() * sizeof(float) +
-        uTmp.size() * sizeof(float) + vTmp.size() * sizeof(float) + wTmp.size() * sizeof(float) +
-        pressure.size() * sizeof(float) + pressureTmp.size() * sizeof(float) + rhs.size() * sizeof(float) +
-        smoke.size() * sizeof(float) + smoke0.size() * sizeof(float) +
-        temp.size() * sizeof(float) + temp0.size() * sizeof(float) +
-        cellTmp.size() * sizeof(float) + divergence.size() * sizeof(float) + speed.size() * sizeof(float) +
-        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t);
+    derivedFieldsDirty = false;
 }
 
 void MACSmoke3D::updateStats(float stepMs) {
@@ -1148,11 +1096,35 @@ void MACSmoke3D::updateStats(float stepMs) {
         cellTmp.size() * sizeof(float) + divergence.size() * sizeof(float) + speed.size() * sizeof(float) +
         solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t);
 
-    for (std::size_t i = 0; i < solid.size(); ++i) {
-        if (solid[i]) continue;
-        lastStats.activeCells++;
-        lastStats.maxSpeed = std::max(lastStats.maxSpeed, speed[i]);
-        lastStats.maxDivergence = std::max(lastStats.maxDivergence, std::fabs(divergence[i]));
+    for (float value : u) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
+    for (float value : v) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
+    for (float value : w) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
+
+    for (int k = 0; k < nz; ++k) {
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const int id = idxCell(i, j, k);
+                if (solid[(std::size_t)id]) continue;
+                lastStats.activeCells++;
+
+                float uL = u[(std::size_t)idxU(i, j, k)];
+                float uR = u[(std::size_t)idxU(i + 1, j, k)];
+                float vB = v[(std::size_t)idxV(i, j, k)];
+                float vT = v[(std::size_t)idxV(i, j + 1, k)];
+                float wBk = w[(std::size_t)idxW(i, j, k)];
+                float wFr = w[(std::size_t)idxW(i, j, k + 1)];
+
+                if (i - 1 >= 0 && solid[(std::size_t)idxCell(i - 1, j, k)]) uL = 0.0f;
+                if (i + 1 < nx && solid[(std::size_t)idxCell(i + 1, j, k)]) uR = 0.0f;
+                if (j - 1 >= 0 && solid[(std::size_t)idxCell(i, j - 1, k)]) vB = 0.0f;
+                if (j + 1 < ny && solid[(std::size_t)idxCell(i, j + 1, k)]) vT = 0.0f;
+                if (k - 1 >= 0 && solid[(std::size_t)idxCell(i, j, k - 1)]) wBk = 0.0f;
+                if (k + 1 < nz && solid[(std::size_t)idxCell(i, j, k + 1)]) wFr = 0.0f;
+
+                const float divCell = (uR - uL + vT - vB + wFr - wBk) / dx;
+                lastStats.maxDivergence = std::max(lastStats.maxDivergence, std::fabs(divCell));
+            }
+        }
     }
 }
 
@@ -1161,18 +1133,6 @@ void MACSmoke3D::step() {
 
     rebuildBorderSolids();
     applyBoundary();
-
-    if (!hasDynamicContent()) {
-        if (!idleStateLatched) {
-            clearDynamicState();
-            idleStateLatched = true;
-        }
-        const auto end = std::chrono::high_resolution_clock::now();
-        const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
-        updateIdleStats(stepMs);
-        return;
-    }
-    idleStateLatched = false;
 
     advectVelocity();
     applyBoundary();
@@ -1191,7 +1151,7 @@ void MACSmoke3D::step() {
     diffuseScalarImplicit(temp, temp0, params.tempDiffusivity, 1.0f);
     applyBoundary();
 
-    rasterizeDebugFields();
+    derivedFieldsDirty = true;
 
     const auto end = std::chrono::high_resolution_clock::now();
     const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
@@ -1238,7 +1198,7 @@ void MACSmoke3D::addSmokeSourceSphere(const Vec3& center, float radius, float am
     }
 
     applyBoundary();
-    rasterizeDebugFields();
+    derivedFieldsDirty = true;
     updateStats(0.0f);
 }
 
@@ -1274,7 +1234,7 @@ void MACSmoke3D::addHeatSourceSphere(const Vec3& center, float radius, float amo
         }
     }
 
-    rasterizeDebugFields();
+    derivedFieldsDirty = true;
     updateStats(0.0f);
 }
 
@@ -1286,18 +1246,24 @@ void MACSmoke3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
     }
     rebuildBorderSolids();
     applyBoundary();
-    rasterizeDebugFields();
+    derivedFieldsDirty = true;
     updateStats(0.0f);
 }
 
-MACSmoke3D::SliceData MACSmoke3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) const {
+MACSmoke3D::SliceData MACSmoke3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) {
     const std::vector<float>* src = &smoke;
     switch (field) {
         case DebugField::Smoke:        src = &smoke; break;
         case DebugField::Temperature:  src = &temp; break;
         case DebugField::Pressure:     src = &pressure; break;
-        case DebugField::Divergence:   src = &divergence; break;
-        case DebugField::Speed:        src = &speed; break;
+        case DebugField::Divergence:
+            ensureDerivedDebugFields();
+            src = &divergence;
+            break;
+        case DebugField::Speed:
+            ensureDerivedDebugFields();
+            src = &speed;
+            break;
     }
 
     SliceData out;

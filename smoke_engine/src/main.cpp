@@ -248,6 +248,42 @@ static void setViziorWindowIcon(GLFWwindow* win, int themeMode) {
     glfwSetWindowIcon(win, 2, images);
 }
 
+struct VolumeRenderTargetSize {
+    int width = 0;
+    int height = 0;
+};
+
+static VolumeRenderTargetSize computeVolumeRenderTargetSize(GLFWwindow* win,
+                                                            float logicalWidth,
+                                                            float logicalHeight,
+                                                            float renderScale,
+                                                            int minDim = 192,
+                                                            int maxDim = 1024)
+{
+    int fbW = 0;
+    int fbH = 0;
+    glfwGetFramebufferSize(win, &fbW, &fbH);
+
+    float dpiX = 1.0f;
+    float dpiY = 1.0f;
+    glfwGetWindowContentScale(win, &dpiX, &dpiY);
+    dpiX = std::max(1.0f, dpiX);
+    dpiY = std::max(1.0f, dpiY);
+
+    const float fallbackLogicalW = std::max(320.0f, 0.46f * (float)std::max(1, fbW) / dpiX);
+    const float fallbackLogicalH = std::max(220.0f, 0.46f * (float)std::max(1, fbH) / dpiY);
+    const float safeLogicalW = (logicalWidth > 1.0f) ? logicalWidth : fallbackLogicalW;
+    const float safeLogicalH = (logicalHeight > 1.0f) ? logicalHeight : fallbackLogicalH;
+    const float safeScale = std::clamp(renderScale, 0.35f, 2.0f);
+
+    int targetW = (int)std::lround(safeLogicalW * dpiX * safeScale);
+    int targetH = (int)std::lround(safeLogicalH * dpiY * safeScale);
+
+    targetW = std::clamp(targetW, minDim, maxDim);
+    targetH = std::clamp(targetH, minDim, maxDim);
+    return VolumeRenderTargetSize{targetW, targetH};
+}
+
 } // namespace
 
 int main()
@@ -639,10 +675,13 @@ int main()
                     static_cast<MACWater3D::DebugField>(field));
                 water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
             } else {
-                const int maxDim = std::max({water3D.nx, water3D.ny, water3D.nz, 1});
-                const int targetRes = std::max(192, std::min(640, maxDim * 3));
-                if (water3DRenderer.width() != targetRes || water3DRenderer.height() != targetRes) {
-                    water3DRenderer.resize(targetRes, targetRes);
+                const auto target = computeVolumeRenderTargetSize(
+                    win,
+                    ui.water3DViewportWidth,
+                    ui.water3DViewportHeight,
+                    ui.volumeRenderScale);
+                if (water3DRenderer.width() != target.width || water3DRenderer.height() != target.height) {
+                    water3DRenderer.resize(target.width, target.height);
                 }
                 water3DRenderer.updateWaterFromVolume(
                     water3D.water,
@@ -678,10 +717,13 @@ int main()
                     static_cast<MACSmoke3D::DebugField>(field));
                 smoke3DRenderer.updateSmokeFromSlice(slice.values, slice.solid, slice.width, slice.height, field, rs);
             } else {
-                const int maxDim = std::max({smoke3D.nx, smoke3D.ny, smoke3D.nz, 1});
-                const int targetRes = std::max(192, std::min(640, maxDim * 3));
-                if (smoke3DRenderer.width() != targetRes || smoke3DRenderer.height() != targetRes) {
-                    smoke3DRenderer.resize(targetRes, targetRes);
+                const auto target = computeVolumeRenderTargetSize(
+                    win,
+                    ui.smoke3DViewportWidth,
+                    ui.smoke3DViewportHeight,
+                    ui.volumeRenderScale);
+                if (smoke3DRenderer.width() != target.width || smoke3DRenderer.height() != target.height) {
+                    smoke3DRenderer.resize(target.width, target.height);
                 }
                 smoke3DRenderer.updateSmokeFromVolume(
                     smoke3D.smoke,

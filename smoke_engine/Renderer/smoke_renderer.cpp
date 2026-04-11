@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 #ifdef __APPLE__
   #define GL_SILENCE_DEPRECATION
@@ -234,6 +235,30 @@ static Vec3f themedWaterBgB(int themeMode) {
                                   : Vec3f{0.910f, 0.922f, 0.940f};
 }
 
+template <typename Fn>
+static void parallelForRows(int rowCount, Fn&& fn) {
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    const int minRowsPerTask = 32;
+    const int maxTasks = std::max(1, std::min<int>((int)hw, rowCount / minRowsPerTask));
+    if (maxTasks <= 1 || rowCount <= minRowsPerTask) {
+        fn(0, rowCount);
+        return;
+    }
+
+    std::vector<std::thread> workers;
+    workers.reserve((size_t)maxTasks - 1);
+    const int chunk = (rowCount + maxTasks - 1) / maxTasks;
+    for (int task = 1; task < maxTasks; ++task) {
+        const int begin = task * chunk;
+        if (begin >= rowCount) break;
+        const int end = std::min(rowCount, begin + chunk);
+        workers.emplace_back([&, begin, end]() { fn(begin, end); });
+    }
+
+    fn(0, std::min(rowCount, chunk));
+    for (auto& worker : workers) worker.join();
+}
+
 }
 
 unsigned int SmokeRenderer::makeTexture(int w, int h) {
@@ -282,7 +307,8 @@ void SmokeRenderer::uploadSmokeRGBA(const std::vector<float>& smoke,
                                    const SmokeRenderSettings& s)
 {
     int w = m_w, h = m_h;
-    std::vector<uint8_t> img(w * h * 4, 0);
+    m_rgbaScratch.assign((std::size_t)w * (std::size_t)h * 4u, 0u);
+    auto& img = m_rgbaScratch;
 
     auto clamp01 = [](float x) {
         if (x < 0.0f) return 0.0f;
@@ -290,61 +316,67 @@ void SmokeRenderer::uploadSmokeRGBA(const std::vector<float>& smoke,
         return x;
     };
 
-    for (int j = 0; j < h; ++j) {
-        int srcJ = (h - 1 - j);
-        for (int i = 0; i < w; ++i) {
-            int srcIdx = i + w * srcJ;
-            int dstIdx = i + w * j;
+    parallelForRows(h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const int srcJ = (h - 1 - j);
+            for (int i = 0; i < w; ++i) {
+                const int srcIdx = i + w * srcJ;
+                const int dstIdx = i + w * j;
 
-            if (solid[srcIdx]) {
-                uint8_t sr = 0, sg = 0, sb = 0;
-                solidThemeColor(s.themeMode, sr, sg, sb);
-                img[dstIdx*4 + 0] = sr;
-                img[dstIdx*4 + 1] = sg;
-                img[dstIdx*4 + 2] = sb;
-                img[dstIdx*4 + 3] = 255;
-                continue;
+                if (solid[srcIdx]) {
+                    uint8_t sr = 0, sg = 0, sb = 0;
+                    solidThemeColor(s.themeMode, sr, sg, sb);
+                    img[(std::size_t)dstIdx * 4 + 0] = sr;
+                    img[(std::size_t)dstIdx * 4 + 1] = sg;
+                    img[(std::size_t)dstIdx * 4 + 2] = sb;
+                    img[(std::size_t)dstIdx * 4 + 3] = 255;
+                    continue;
+                }
+
+                float d = clamp01(smoke[srcIdx]);
+                float alpha = std::pow(d, s.alphaGamma) * s.alphaScale;
+                alpha = clamp01(alpha);
+
+                float r, g, b;
+                if (!s.useColor) {
+                    float gray = std::pow(d, 0.6f);
+                    r = g = b = gray;
+                } else {
+                    float t = clamp01(temp[srcIdx] * s.tempStrength);
+                    float a = clamp01(age[srcIdx]);
+
+                    r = (1.0f - t) * 0.20f + t * 1.00f;
+                    g = (1.0f - t) * 0.25f + t * 0.55f;
+                    b = (1.0f - t) * 0.30f + t * 0.10f;
+
+                    float brightness = (1.0f - s.coreDark) * 1.0f +
+                        s.coreDark * (0.25f + 0.75f * (1.0f - std::pow(d, 0.5f)));
+
+                    float baseGray = (r + g + b) / 3.0f;
+                    float ageMix = clamp01(s.ageGray * a);
+                    float darken = 1.0f - clamp01(s.ageDarken * a);
+
+                    r = (1.0f - ageMix) * r + ageMix * baseGray;
+                    g = (1.0f - ageMix) * g + ageMix * baseGray;
+                    b = (1.0f - ageMix) * b + ageMix * baseGray;
+
+                    brightness *= darken;
+                    r *= brightness;
+                    g *= brightness;
+                    b *= brightness;
+                }
+
+                r = clamp01(r);
+                g = clamp01(g);
+                b = clamp01(b);
+
+                img[(std::size_t)dstIdx * 4 + 0] = (uint8_t)std::lround(r * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 1] = (uint8_t)std::lround(g * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 2] = (uint8_t)std::lround(b * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 3] = (uint8_t)std::lround(alpha * 255.0f);
             }
-
-            float d = clamp01(smoke[srcIdx]);
-            float alpha = std::pow(d, s.alphaGamma) * s.alphaScale;
-            alpha = clamp01(alpha);
-
-            float r, g, b;
-            if (!s.useColor) {
-                float gray = std::pow(d, 0.6f);
-                r = g = b = gray;
-            } else {
-                float t = clamp01(temp[srcIdx] * s.tempStrength);
-                float a = clamp01(age[srcIdx]);
-
-                r = (1.0f - t) * 0.20f + t * 1.00f;
-                g = (1.0f - t) * 0.25f + t * 0.55f;
-                b = (1.0f - t) * 0.30f + t * 0.10f;
-
-                float brightness = (1.0f - s.coreDark) * 1.0f +
-                    s.coreDark * (0.25f + 0.75f * (1.0f - std::pow(d, 0.5f)));
-
-                float baseGray = (r + g + b) / 3.0f;
-                float ageMix = clamp01(s.ageGray * a);
-                float darken = 1.0f - clamp01(s.ageDarken * a);
-
-                r = (1.0f - ageMix) * r + ageMix * baseGray;
-                g = (1.0f - ageMix) * g + ageMix * baseGray;
-                b = (1.0f - ageMix) * b + ageMix * baseGray;
-
-                brightness *= darken;
-                r *= brightness; g *= brightness; b *= brightness;
-            }
-
-            r = clamp01(r); g = clamp01(g); b = clamp01(b);
-
-            img[dstIdx*4 + 0] = (uint8_t)std::lround(r * 255.0f);
-            img[dstIdx*4 + 1] = (uint8_t)std::lround(g * 255.0f);
-            img[dstIdx*4 + 2] = (uint8_t)std::lround(b * 255.0f);
-            img[dstIdx*4 + 3] = (uint8_t)std::lround(alpha * 255.0f);
         }
-    }
+    });
 
     glBindTexture(GL_TEXTURE_2D, m_smokeTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -356,7 +388,8 @@ void SmokeRenderer::uploadWaterRGBA(const std::vector<float>& water,
                                     const WaterRenderSettings& wset)
 {
     int w = m_w, h = m_h;
-    std::vector<uint8_t> img(w * h * 4, 0);
+    m_rgbaScratch.assign((std::size_t)w * (std::size_t)h * 4u, 0u);
+    auto& img = m_rgbaScratch;
 
     auto clamp01 = [](float x) {
         if (x < 0.0f) return 0.0f;
@@ -364,45 +397,45 @@ void SmokeRenderer::uploadWaterRGBA(const std::vector<float>& water,
         return x;
     };
 
-    for (int j = 0; j < h; ++j) {
-        int srcJ = (h - 1 - j);
-        for (int i = 0; i < w; ++i) {
-            int srcIdx = i + w * srcJ;
-            int dstIdx = i + w * j;
+    parallelForRows(h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const int srcJ = (h - 1 - j);
+            for (int i = 0; i < w; ++i) {
+                const int srcIdx = i + w * srcJ;
+                const int dstIdx = i + w * j;
 
-            if (solid[srcIdx]) {
-                uint8_t sr = 0, sg = 0, sb = 0;
-                solidThemeColor(wset.themeMode, sr, sg, sb);
-                img[dstIdx*4 + 0] = sr;
-                img[dstIdx*4 + 1] = sg;
-                img[dstIdx*4 + 2] = sb;
-                img[dstIdx*4 + 3] = 255;
-                continue;
+                if (solid[srcIdx]) {
+                    uint8_t sr = 0, sg = 0, sb = 0;
+                    solidThemeColor(wset.themeMode, sr, sg, sb);
+                    img[(std::size_t)dstIdx * 4 + 0] = sr;
+                    img[(std::size_t)dstIdx * 4 + 1] = sg;
+                    img[(std::size_t)dstIdx * 4 + 2] = sb;
+                    img[(std::size_t)dstIdx * 4 + 3] = 255;
+                    continue;
+                }
+
+                const float raw = std::max(0.0f, water[srcIdx]);
+                const float d = 1.0f - std::exp(-raw);
+                const float a = clamp01(d * wset.alpha);
+
+                float r, g, b;
+                if (isDarkTheme(wset.themeMode)) {
+                    r = 0.08f + 0.08f * d;
+                    g = 0.16f + 0.18f * d;
+                    b = 0.30f + 0.28f * d;
+                } else {
+                    r = 0.18f + 0.08f * d;
+                    g = 0.30f + 0.16f * d;
+                    b = 0.50f + 0.22f * d;
+                }
+
+                img[(std::size_t)dstIdx * 4 + 0] = (uint8_t)std::lround(r * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 1] = (uint8_t)std::lround(g * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 2] = (uint8_t)std::lround(b * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 3] = (uint8_t)std::lround(a * 255.0f);
             }
-
-            float raw = std::max(0.0f, water[srcIdx]);
-            float d = 1.0f - std::exp(-raw);
-            float a = clamp01(d * wset.alpha);
-
-            float r, g, b;
-            if (isDarkTheme(wset.themeMode)) {
-                // Deep ocean blue: near-black base → vivid cyan-blue at full depth
-                r = 0.02f + 0.06f * d;
-                g = 0.12f + 0.28f * d;
-                b = 0.32f + 0.45f * d;
-            } else {
-                // Clear tropical water: bright sky-blue with a natural teal undertone
-                r = 0.08f + 0.06f * d;
-                g = 0.30f + 0.28f * d;
-                b = 0.62f + 0.28f * d;
-            }
-
-            img[dstIdx*4 + 0] = (uint8_t)std::lround(r * 255.0f);
-            img[dstIdx*4 + 1] = (uint8_t)std::lround(g * 255.0f);
-            img[dstIdx*4 + 2] = (uint8_t)std::lround(b * 255.0f);
-            img[dstIdx*4 + 3] = (uint8_t)std::lround(a * 255.0f);
         }
-    }
+    });
 
     glBindTexture(GL_TEXTURE_2D, m_waterTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -414,7 +447,8 @@ void SmokeRenderer::uploadDivOverlay(const std::vector<float>& div,
                                     float scale, float alpha)
 {
     int w = m_w, h = m_h;
-    std::vector<uint8_t> img(w * h * 4, 0);
+    m_rgbaScratch.assign((std::size_t)w * (std::size_t)h * 4u, 0u);
+    auto& img = m_rgbaScratch;
 
     auto clamp01 = [](float x) {
         if (x < 0.0f) return 0.0f;
@@ -422,28 +456,36 @@ void SmokeRenderer::uploadDivOverlay(const std::vector<float>& div,
         return x;
     };
 
-    for (int j = 0; j < h; ++j) {
-        int srcJ = (h - 1 - j);
-        for (int i = 0; i < w; ++i) {
-            int srcIdx = i + w * srcJ;
-            int dstIdx = i + w * j;
+    parallelForRows(h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const int srcJ = (h - 1 - j);
+            for (int i = 0; i < w; ++i) {
+                const int srcIdx = i + w * srcJ;
+                const int dstIdx = i + w * j;
 
-            if (solid[srcIdx]) { img[dstIdx*4 + 3] = 0; continue; }
+                if (solid[srcIdx]) {
+                    img[(std::size_t)dstIdx * 4 + 0] = 0;
+                    img[(std::size_t)dstIdx * 4 + 1] = 0;
+                    img[(std::size_t)dstIdx * 4 + 2] = 0;
+                    img[(std::size_t)dstIdx * 4 + 3] = 0;
+                    continue;
+                }
 
-            float d = div[srcIdx] * scale;
-            d = std::max(-1.0f, std::min(1.0f, d));
+                float d = div[srcIdx] * scale;
+                d = std::max(-1.0f, std::min(1.0f, d));
 
-            float m = std::fabs(d);
-            uint8_t A = (uint8_t)std::lround(clamp01(m * alpha) * 255.0f);
-            uint8_t R = (d > 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
-            uint8_t B = (d < 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
+                const float m = std::fabs(d);
+                const uint8_t A = (uint8_t)std::lround(clamp01(m * alpha) * 255.0f);
+                const uint8_t R = (d > 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
+                const uint8_t B = (d < 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
 
-            img[dstIdx*4 + 0] = R;
-            img[dstIdx*4 + 1] = 0;
-            img[dstIdx*4 + 2] = B;
-            img[dstIdx*4 + 3] = A;
+                img[(std::size_t)dstIdx * 4 + 0] = R;
+                img[(std::size_t)dstIdx * 4 + 1] = 0;
+                img[(std::size_t)dstIdx * 4 + 2] = B;
+                img[(std::size_t)dstIdx * 4 + 3] = A;
+            }
         }
-    }
+    });
 
     glBindTexture(GL_TEXTURE_2D, m_divTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -455,7 +497,8 @@ void SmokeRenderer::uploadVortOverlay(const std::vector<float>& omega,
                                      float scale, float alpha)
 {
     int w = m_w, h = m_h;
-    std::vector<uint8_t> img(w * h * 4, 0);
+    m_rgbaScratch.assign((std::size_t)w * (std::size_t)h * 4u, 0u);
+    auto& img = m_rgbaScratch;
 
     auto clamp01 = [](float x) {
         if (x < 0.0f) return 0.0f;
@@ -463,28 +506,36 @@ void SmokeRenderer::uploadVortOverlay(const std::vector<float>& omega,
         return x;
     };
 
-    for (int j = 0; j < h; ++j) {
-        int srcJ = (h - 1 - j);
-        for (int i = 0; i < w; ++i) {
-            int srcIdx = i + w * srcJ;
-            int dstIdx = i + w * j;
+    parallelForRows(h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const int srcJ = (h - 1 - j);
+            for (int i = 0; i < w; ++i) {
+                const int srcIdx = i + w * srcJ;
+                const int dstIdx = i + w * j;
 
-            if (solid[srcIdx]) { img[dstIdx*4 + 3] = 0; continue; }
+                if (solid[srcIdx]) {
+                    img[(std::size_t)dstIdx * 4 + 0] = 0;
+                    img[(std::size_t)dstIdx * 4 + 1] = 0;
+                    img[(std::size_t)dstIdx * 4 + 2] = 0;
+                    img[(std::size_t)dstIdx * 4 + 3] = 0;
+                    continue;
+                }
 
-            float v = omega[srcIdx] * scale;
-            v = std::max(-1.0f, std::min(1.0f, v));
+                float v = omega[srcIdx] * scale;
+                v = std::max(-1.0f, std::min(1.0f, v));
 
-            float m = std::fabs(v);
-            uint8_t A = (uint8_t)std::lround(clamp01(m * alpha) * 255.0f);
-            uint8_t R = (v > 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
-            uint8_t B = (v < 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
+                const float m = std::fabs(v);
+                const uint8_t A = (uint8_t)std::lround(clamp01(m * alpha) * 255.0f);
+                const uint8_t R = (v > 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
+                const uint8_t B = (v < 0.0f) ? (uint8_t)std::lround(m * 255.0f) : 0;
 
-            img[dstIdx*4 + 0] = R;
-            img[dstIdx*4 + 1] = 0;
-            img[dstIdx*4 + 2] = B;
-            img[dstIdx*4 + 3] = A;
+                img[(std::size_t)dstIdx * 4 + 0] = R;
+                img[(std::size_t)dstIdx * 4 + 1] = 0;
+                img[(std::size_t)dstIdx * 4 + 2] = B;
+                img[(std::size_t)dstIdx * 4 + 3] = A;
+            }
         }
-    }
+    });
 
     glBindTexture(GL_TEXTURE_2D, m_vortTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -564,7 +615,8 @@ void SmokeRenderer::updateSmokeFromSlice(const std::vector<float>& values,
     maxVal = std::max(maxVal, 1e-6f);
     maxAbs = std::max(maxAbs, 1e-6f);
 
-    std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
+    m_rgbaScratch.assign((std::size_t)m_w * (std::size_t)m_h * 4u, 0u);
+    auto& img = m_rgbaScratch;
 
     auto clamp01 = [](float x) {
         if (x < 0.0f) return 0.0f;
@@ -572,72 +624,74 @@ void SmokeRenderer::updateSmokeFromSlice(const std::vector<float>& values,
         return x;
     };
 
-    for (int j = 0; j < m_h; ++j) {
-        const int srcJ = (m_h - 1 - j);
-        for (int i = 0; i < m_w; ++i) {
-            const int srcIdx = i + m_w * srcJ;
-            const int dstIdx = i + m_w * j;
+    parallelForRows(m_h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const int srcJ = (m_h - 1 - j);
+            for (int i = 0; i < m_w; ++i) {
+                const int srcIdx = i + m_w * srcJ;
+                const int dstIdx = i + m_w * j;
 
-            if (solid[(std::size_t)srcIdx]) {
-                uint8_t sr = 0, sg = 0, sb = 0;
-                solidThemeColor(smoke.themeMode, sr, sg, sb);
-                img[(std::size_t)dstIdx * 4 + 0] = sr;
-                img[(std::size_t)dstIdx * 4 + 1] = sg;
-                img[(std::size_t)dstIdx * 4 + 2] = sb;
-                img[(std::size_t)dstIdx * 4 + 3] = 255;
-                continue;
-            }
-
-            const float raw = values[(std::size_t)srcIdx];
-            float r = 0.0f;
-            float g = 0.0f;
-            float b = 0.0f;
-            float a = 0.0f;
-
-            if (signedField) {
-                const float mag = clamp01(std::fabs(raw) / maxAbs);
-                a = std::pow(mag, 0.65f) * 0.95f;
-                if (raw >= 0.0f) {
-                    r = 0.18f + 0.82f * mag;
-                    g = 0.05f + 0.32f * mag;
-                    b = 0.04f + 0.14f * mag;
-                } else {
-                    r = 0.05f + 0.14f * mag;
-                    g = 0.16f + 0.40f * mag;
-                    b = 0.24f + 0.76f * mag;
+                if (solid[(std::size_t)srcIdx]) {
+                    uint8_t sr = 0, sg = 0, sb = 0;
+                    solidThemeColor(smoke.themeMode, sr, sg, sb);
+                    img[(std::size_t)dstIdx * 4 + 0] = sr;
+                    img[(std::size_t)dstIdx * 4 + 1] = sg;
+                    img[(std::size_t)dstIdx * 4 + 2] = sb;
+                    img[(std::size_t)dstIdx * 4 + 3] = 255;
+                    continue;
                 }
-            } else if (fieldMode == 1) {
-                const float t = clamp01(std::max(0.0f, raw) / maxVal);
-                a = std::pow(t, 0.60f) * std::max(0.2f, smoke.alphaScale);
-                r = 0.20f + 0.80f * t;
-                g = 0.06f + 0.62f * t;
-                b = 0.03f + 0.22f * t;
-            } else if (fieldMode == 4) {
-                const float s = clamp01(std::max(0.0f, raw) / maxVal);
-                a = std::pow(s, 0.60f) * 0.95f;
-                r = 0.08f + 0.18f * s;
-                g = 0.18f + 0.58f * s;
-                b = 0.30f + 0.70f * s;
-            } else {
-                const float d = clamp01(std::max(0.0f, raw) / std::max(1.0f, maxVal));
-                a = std::pow(d, smoke.alphaGamma) * smoke.alphaScale;
-                if (!smoke.useColor) {
-                    const float gray = std::pow(d, 0.6f);
-                    r = g = b = gray;
-                } else {
-                    const float gray = 0.12f + 0.88f * std::pow(d, 0.55f);
-                    r = gray;
-                    g = gray;
-                    b = gray;
-                }
-            }
 
-            img[(std::size_t)dstIdx * 4 + 0] = (uint8_t)std::lround(clamp01(r) * 255.0f);
-            img[(std::size_t)dstIdx * 4 + 1] = (uint8_t)std::lround(clamp01(g) * 255.0f);
-            img[(std::size_t)dstIdx * 4 + 2] = (uint8_t)std::lround(clamp01(b) * 255.0f);
-            img[(std::size_t)dstIdx * 4 + 3] = (uint8_t)std::lround(clamp01(a) * 255.0f);
+                const float raw = values[(std::size_t)srcIdx];
+                float r = 0.0f;
+                float g = 0.0f;
+                float b = 0.0f;
+                float a = 0.0f;
+
+                if (signedField) {
+                    const float mag = clamp01(std::fabs(raw) / maxAbs);
+                    a = std::pow(mag, 0.65f) * 0.95f;
+                    if (raw >= 0.0f) {
+                        r = 0.18f + 0.82f * mag;
+                        g = 0.05f + 0.32f * mag;
+                        b = 0.04f + 0.14f * mag;
+                    } else {
+                        r = 0.05f + 0.14f * mag;
+                        g = 0.16f + 0.40f * mag;
+                        b = 0.24f + 0.76f * mag;
+                    }
+                } else if (fieldMode == 1) {
+                    const float t = clamp01(std::max(0.0f, raw) / maxVal);
+                    a = std::pow(t, 0.60f) * std::max(0.2f, smoke.alphaScale);
+                    r = 0.20f + 0.80f * t;
+                    g = 0.06f + 0.62f * t;
+                    b = 0.03f + 0.22f * t;
+                } else if (fieldMode == 4) {
+                    const float s = clamp01(std::max(0.0f, raw) / maxVal);
+                    a = std::pow(s, 0.60f) * 0.95f;
+                    r = 0.08f + 0.18f * s;
+                    g = 0.18f + 0.58f * s;
+                    b = 0.30f + 0.70f * s;
+                } else {
+                    const float d = clamp01(std::max(0.0f, raw) / std::max(1.0f, maxVal));
+                    a = std::pow(d, smoke.alphaGamma) * smoke.alphaScale;
+                    if (!smoke.useColor) {
+                        const float gray = std::pow(d, 0.6f);
+                        r = g = b = gray;
+                    } else {
+                        const float gray = 0.12f + 0.88f * std::pow(d, 0.55f);
+                        r = gray;
+                        g = gray;
+                        b = gray;
+                    }
+                }
+
+                img[(std::size_t)dstIdx * 4 + 0] = (uint8_t)std::lround(clamp01(r) * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 1] = (uint8_t)std::lround(clamp01(g) * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 2] = (uint8_t)std::lround(clamp01(b) * 255.0f);
+                img[(std::size_t)dstIdx * 4 + 3] = (uint8_t)std::lround(clamp01(a) * 255.0f);
+            }
         }
-    }
+    });
 
     glBindTexture(GL_TEXTURE_2D, m_smokeTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -672,7 +726,8 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
     const Vec3f bgA = themedSmokeBgA(smoke.themeMode);
     const Vec3f bgB = themedSmokeBgB(smoke.themeMode);
 
-    std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
+    m_rgbaScratch.assign((std::size_t)m_w * (std::size_t)m_h * 4u, 0u);
+    auto& img = m_rgbaScratch;
 
     auto clamp01 = [](float x) {
         if (x < 0.0f) return 0.0f;
@@ -680,91 +735,93 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
         return x;
     };
 
-    for (int j = 0; j < m_h; ++j) {
-        const float py = 1.0f - 2.0f * ((j + 0.5f) / (float)m_h);
-        for (int i = 0; i < m_w; ++i) {
-            const float px = (2.0f * ((i + 0.5f) / (float)m_w) - 1.0f) * box.imageAspect;
+    parallelForRows(m_h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const float py = 1.0f - 2.0f * ((j + 0.5f) / (float)m_h);
+            for (int i = 0; i < m_w; ++i) {
+                const float px = (2.0f * ((i + 0.5f) / (float)m_w) - 1.0f) * box.imageAspect;
 
-            Vec3f rayOriginWorld{0.0f, 0.0f, -box.camDist / zoomClamped};
-            Vec3f rayDirWorld = normalize3(Vec3f{px * box.fovScale, py * box.fovScale, box.camDist});
-            const Vec3f o = rotateInvYawPitch(rayOriginWorld, yaw, pitch);
-            const Vec3f d = normalize3(rotateInvYawPitch(rayDirWorld, yaw, pitch));
+                const Vec3f rayOriginWorld{0.0f, 0.0f, -box.camDist / zoomClamped};
+                const Vec3f rayDirWorld = normalize3(Vec3f{px * box.fovScale, py * box.fovScale, box.camDist});
+                const Vec3f o = rotateInvYawPitch(rayOriginWorld, yaw, pitch);
+                const Vec3f d = normalize3(rotateInvYawPitch(rayDirWorld, yaw, pitch));
 
-            const float tBg = (float)j / (float)std::max(1, m_h - 1);
-            Vec3f color{
-                bgA.x * (1.0f - tBg) + bgB.x * tBg,
-                bgA.y * (1.0f - tBg) + bgB.y * tBg,
-                bgA.z * (1.0f - tBg) + bgB.z * tBg
-            };
+                const float tBg = (float)j / (float)std::max(1, m_h - 1);
+                Vec3f color{
+                    bgA.x * (1.0f - tBg) + bgB.x * tBg,
+                    bgA.y * (1.0f - tBg) + bgB.y * tBg,
+                    bgA.z * (1.0f - tBg) + bgB.z * tBg
+                };
 
-            float tmin = 0.0f;
-            float tmax = 0.0f;
-            if (intersectBox(o, d, box, tmin, tmax)) {
-                float t = std::max(0.0f, tmin);
-                float accumR = 0.0f;
-                float accumG = 0.0f;
-                float accumB = 0.0f;
-                float accumA = 0.0f;
+                float tmin = 0.0f;
+                float tmax = 0.0f;
+                if (intersectBox(o, d, box, tmin, tmax)) {
+                    float t = std::max(0.0f, tmin);
+                    float accumR = 0.0f;
+                    float accumG = 0.0f;
+                    float accumB = 0.0f;
+                    float accumA = 0.0f;
 
-                while (t < tmax && accumA < 0.995f) {
-                    const Vec3f q = localToUnit(o + d * t, box);
-                    const float density = std::max(0.0f, sampleTrilinear(smokeValues, nx, ny, nz, q.x, q.y, q.z));
-                    const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
-                    if (!solidCell && density > 1e-4f) {
-                        const float temp = tempValues.empty()
-                            ? 0.0f
-                            : std::max(0.0f, sampleTrilinear(tempValues, nx, ny, nz, q.x, q.y, q.z));
+                    while (t < tmax && accumA < 0.995f) {
+                        const Vec3f q = localToUnit(o + d * t, box);
+                        const float density = std::max(0.0f, sampleTrilinear(smokeValues, nx, ny, nz, q.x, q.y, q.z));
+                        const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
+                        if (!solidCell && density > 1e-4f) {
+                            const float temp = tempValues.empty()
+                                ? 0.0f
+                                : std::max(0.0f, sampleTrilinear(tempValues, nx, ny, nz, q.x, q.y, q.z));
 
-                        const float sigma = density * sigmaScale * 3.0f;
-                        const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * clamp01(smoke.alphaScale);
+                            const float sigma = density * sigmaScale * 3.0f;
+                            const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * clamp01(smoke.alphaScale);
 
-                        float cr = 0.0f;
-                        float cg = 0.0f;
-                        float cb = 0.0f;
-                        if (!smoke.useColor) {
-                            const float gray = 0.22f + 0.68f * std::pow(clamp01(density), 0.55f);
-                            cr = gray;
-                            cg = gray;
-                            cb = gray;
-                        } else {
-                            const float tHeat = clamp01(temp * smoke.tempStrength);
-                            cr = (1.0f - tHeat) * 0.24f + tHeat * 0.98f;
-                            cg = (1.0f - tHeat) * 0.28f + tHeat * 0.56f;
-                            cb = (1.0f - tHeat) * 0.32f + tHeat * 0.12f;
-                            const float core = 1.0f - smoke.coreDark * std::pow(clamp01(density), 0.5f);
-                            cr *= 0.35f + 0.65f * core;
-                            cg *= 0.35f + 0.65f * core;
-                            cb *= 0.35f + 0.65f * core;
+                            float cr = 0.0f;
+                            float cg = 0.0f;
+                            float cb = 0.0f;
+                            if (!smoke.useColor) {
+                                const float gray = 0.22f + 0.68f * std::pow(clamp01(density), 0.55f);
+                                cr = gray;
+                                cg = gray;
+                                cb = gray;
+                            } else {
+                                const float tHeat = clamp01(temp * smoke.tempStrength);
+                                cr = (1.0f - tHeat) * 0.24f + tHeat * 0.98f;
+                                cg = (1.0f - tHeat) * 0.28f + tHeat * 0.56f;
+                                cb = (1.0f - tHeat) * 0.32f + tHeat * 0.12f;
+                                const float core = 1.0f - smoke.coreDark * std::pow(clamp01(density), 0.5f);
+                                cr *= 0.35f + 0.65f * core;
+                                cg *= 0.35f + 0.65f * core;
+                                cb *= 0.35f + 0.65f * core;
+                            }
+
+                            const float depthFade = 0.90f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
+                            cr *= depthFade;
+                            cg *= depthFade;
+                            cb *= depthFade;
+
+                            const float oneMinusA = 1.0f - accumA;
+                            accumR += oneMinusA * aStep * cr;
+                            accumG += oneMinusA * aStep * cg;
+                            accumB += oneMinusA * aStep * cb;
+                            accumA += oneMinusA * aStep;
                         }
-
-                        const float depthFade = 0.90f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
-                        cr *= depthFade;
-                        cg *= depthFade;
-                        cb *= depthFade;
-
-                        const float oneMinusA = 1.0f - accumA;
-                        accumR += oneMinusA * aStep * cr;
-                        accumG += oneMinusA * aStep * cg;
-                        accumB += oneMinusA * aStep * cb;
-                        accumA += oneMinusA * aStep;
+                        t += step;
                     }
-                    t += step;
+
+                    if (accumA > 0.0f) {
+                        color.x = color.x * (1.0f - accumA) + accumR;
+                        color.y = color.y * (1.0f - accumA) + accumG;
+                        color.z = color.z * (1.0f - accumA) + accumB;
+                    }
                 }
 
-                if (accumA > 0.0f) {
-                    color.x = color.x * (1.0f - accumA) + accumR;
-                    color.y = color.y * (1.0f - accumA) + accumG;
-                    color.z = color.z * (1.0f - accumA) + accumB;
-                }
+                const int dst = ((m_h - 1 - j) * m_w + i) * 4;
+                img[(std::size_t)dst + 0] = (uint8_t)std::lround(clamp01(color.x) * 255.0f);
+                img[(std::size_t)dst + 1] = (uint8_t)std::lround(clamp01(color.y) * 255.0f);
+                img[(std::size_t)dst + 2] = (uint8_t)std::lround(clamp01(color.z) * 255.0f);
+                img[(std::size_t)dst + 3] = 255;
             }
-
-            const int dst = ((m_h - 1 - j) * m_w + i) * 4;
-            img[(std::size_t)dst + 0] = (uint8_t)std::lround(clamp01(color.x) * 255.0f);
-            img[(std::size_t)dst + 1] = (uint8_t)std::lround(clamp01(color.y) * 255.0f);
-            img[(std::size_t)dst + 2] = (uint8_t)std::lround(clamp01(color.z) * 255.0f);
-            img[(std::size_t)dst + 3] = 255;
         }
-    }
+    });
 
     glBindTexture(GL_TEXTURE_2D, m_smokeTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -820,101 +877,144 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
     const Vec3f bgA = themedWaterBgA(water.themeMode);
     const Vec3f bgB = themedWaterBgB(water.themeMode);
 
-    std::vector<uint8_t> img((std::size_t)m_w * (std::size_t)m_h * 4, 0);
+    m_rgbaScratch.assign((std::size_t)m_w * (std::size_t)m_h * 4u, 0u);
+    auto& img = m_rgbaScratch;
 
-    for (int j = 0; j < m_h; ++j) {
-        const float py = 1.0f - 2.0f * ((j + 0.5f) / (float)m_h);
-        for (int i = 0; i < m_w; ++i) {
-            const float px = (2.0f * ((i + 0.5f) / (float)m_w) - 1.0f) * box.imageAspect;
+    parallelForRows(m_h, [&](int rowBegin, int rowEnd) {
+        for (int j = rowBegin; j < rowEnd; ++j) {
+            const float py = 1.0f - 2.0f * ((j + 0.5f) / (float)m_h);
+            for (int i = 0; i < m_w; ++i) {
+                const float px = (2.0f * ((i + 0.5f) / (float)m_w) - 1.0f) * box.imageAspect;
 
-            Vec3f rayOriginWorld{0.0f, 0.0f, -box.camDist / zoomClamped};
-            Vec3f rayDirWorld = normalize3(Vec3f{px * box.fovScale, py * box.fovScale, box.camDist});
-            const Vec3f o = rotateInvYawPitch(rayOriginWorld, yaw, pitch);
-            const Vec3f d = normalize3(rotateInvYawPitch(rayDirWorld, yaw, pitch));
+                const Vec3f rayOriginWorld{0.0f, 0.0f, -box.camDist / zoomClamped};
+                const Vec3f rayDirWorld = normalize3(Vec3f{px * box.fovScale, py * box.fovScale, box.camDist});
+                const Vec3f o = rotateInvYawPitch(rayOriginWorld, yaw, pitch);
+                const Vec3f d = normalize3(rotateInvYawPitch(rayDirWorld, yaw, pitch));
 
-            const float tBg = (float)j / (float)std::max(1, m_h - 1);
-            Vec3f color{
-                bgA.x * (1.0f - tBg) + bgB.x * tBg,
-                bgA.y * (1.0f - tBg) + bgB.y * tBg,
-                bgA.z * (1.0f - tBg) + bgB.z * tBg
-            };
+                const float tBg = (float)j / (float)std::max(1, m_h - 1);
+                Vec3f color{
+                    bgA.x * (1.0f - tBg) + bgB.x * tBg,
+                    bgA.y * (1.0f - tBg) + bgB.y * tBg,
+                    bgA.z * (1.0f - tBg) + bgB.z * tBg
+                };
 
-            float tmin = 0.0f;
-            float tmax = 0.0f;
-            if (intersectBox(o, d, box, tmin, tmax)) {
-                float t = std::max(0.0f, tmin);
-                if (surfaceMode) {
-                    float prevT = t;
-                    bool prevValid = false;
-                    bool hit = false;
-                    Vec3f hitQ{};
+                float tmin = 0.0f;
+                float tmax = 0.0f;
+                if (intersectBox(o, d, box, tmin, tmax)) {
+                    float t = std::max(0.0f, tmin);
+                    if (surfaceMode) {
+                        float prevT = t;
+                        bool prevValid = false;
+                        bool hit = false;
+                        Vec3f hitQ{};
 
-                    while (t < tmax) {
-                        const Vec3f q = localToUnit(o + d * t, box);
-                        const float raw = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, q.x, q.y, q.z));
-                        const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
-                        if (!solidCell && raw >= iso && prevValid) {
-                            float a = prevT;
-                            float b = t;
-                            for (int refine = 0; refine < 5; ++refine) {
-                                const float mid = 0.5f * (a + b);
-                                const Vec3f qm = localToUnit(o + d * mid, box);
-                                const float vm = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, qm.x, qm.y, qm.z));
-                                if (vm >= iso) {
-                                    b = mid;
-                                } else {
-                                    a = mid;
+                        while (t < tmax) {
+                            const Vec3f q = localToUnit(o + d * t, box);
+                            const float raw = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, q.x, q.y, q.z));
+                            const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
+                            if (!solidCell && raw >= iso && prevValid) {
+                                float a = prevT;
+                                float b = t;
+                                for (int refine = 0; refine < 5; ++refine) {
+                                    const float mid = 0.5f * (a + b);
+                                    const Vec3f qm = localToUnit(o + d * mid, box);
+                                    const float vm = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, qm.x, qm.y, qm.z));
+                                    if (vm >= iso) {
+                                        b = mid;
+                                    } else {
+                                        a = mid;
+                                    }
                                 }
+                                hitQ = localToUnit(o + d * b, box);
+                                hit = true;
+                                break;
                             }
-                            hitQ = localToUnit(o + d * b, box);
-                            hit = true;
-                            break;
+                            prevT = t;
+                            prevValid = !solidCell;
+                            t += step;
                         }
-                        prevT = t;
-                        prevValid = !solidCell;
-                        t += step;
-                    }
 
-                    if (hit) {
-                        Vec3f grad = sampleGradient(values, nx, ny, nz, hitQ);
-                        grad.x /= std::max(1e-6f, box.hx * 2.0f);
-                        grad.y /= std::max(1e-6f, box.hy * 2.0f);
-                        grad.z /= std::max(1e-6f, box.hz * 2.0f);
-                        Vec3f normal = normalize3(grad);
-                        if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
+                        if (hit) {
+                            Vec3f grad = sampleGradient(values, nx, ny, nz, hitQ);
+                            grad.x /= std::max(1e-6f, box.hx * 2.0f);
+                            grad.y /= std::max(1e-6f, box.hy * 2.0f);
+                            grad.z /= std::max(1e-6f, box.hz * 2.0f);
+                            Vec3f normal = normalize3(grad);
+                            if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
 
-                        const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
-                        const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
-                        const float spec = std::pow(std::clamp(dot3(normal, viewLight), 0.0f, 1.0f), 18.0f);
+                            const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
+                            const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
+                            const float spec = std::pow(std::clamp(dot3(normal, viewLight), 0.0f, 1.0f), 18.0f);
 
-                        if (isDarkTheme(water.themeMode)) {
-                            color.x = 0.08f + 0.16f * ndl + 0.12f * rim + 0.22f * spec;
-                            color.y = 0.26f + 0.32f * ndl + 0.12f * rim + 0.18f * spec;
-                            color.z = 0.52f + 0.36f * ndl + 0.14f * rim + 0.20f * spec;
-                        } else {
-                            color.x = 0.36f + 0.16f * ndl + 0.08f * rim + 0.18f * spec;
-                            color.y = 0.52f + 0.20f * ndl + 0.08f * rim + 0.16f * spec;
-                            color.z = 0.72f + 0.18f * ndl + 0.10f * rim + 0.18f * spec;
-                        }
-                    }
-                } else {
-                    float accumR = 0.0f;
-                    float accumG = 0.0f;
-                    float accumB = 0.0f;
-                    float accumA = 0.0f;
-                    float firstSurfaceT = -1.0f;
-
-                    while (t < tmax && accumA < 0.995f) {
-                        const Vec3f q = localToUnit(o + d * t, box);
-                        const float raw = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, q.x, q.y, q.z));
-                        const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
-                        if (!solidCell && raw > 1e-4f) {
-                            if (firstSurfaceT < 0.0f && raw >= iso) {
-                                firstSurfaceT = t;
+                            if (isDarkTheme(water.themeMode)) {
+                                color.x = 0.08f + 0.16f * ndl + 0.12f * rim + 0.22f * spec;
+                                color.y = 0.26f + 0.32f * ndl + 0.12f * rim + 0.18f * spec;
+                                color.z = 0.52f + 0.36f * ndl + 0.14f * rim + 0.20f * spec;
+                            } else {
+                                color.x = 0.36f + 0.16f * ndl + 0.08f * rim + 0.18f * spec;
+                                color.y = 0.52f + 0.20f * ndl + 0.08f * rim + 0.16f * spec;
+                                color.z = 0.72f + 0.18f * ndl + 0.10f * rim + 0.18f * spec;
                             }
-                            const float sigma = raw * sigmaScale * 3.2f;
-                            const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * water.alpha;
+                        }
+                    } else {
+                        float accumR = 0.0f;
+                        float accumG = 0.0f;
+                        float accumB = 0.0f;
+                        float accumA = 0.0f;
+                        float firstSurfaceT = -1.0f;
 
+                        while (t < tmax && accumA < 0.995f) {
+                            const Vec3f q = localToUnit(o + d * t, box);
+                            const float raw = std::max(0.0f, sampleTrilinear(values, nx, ny, nz, q.x, q.y, q.z));
+                            const uint8_t solidCell = sampleSolidNearest(solid, nx, ny, nz, q.x, q.y, q.z);
+                            if (!solidCell && raw > 1e-4f) {
+                                if (firstSurfaceT < 0.0f && raw >= iso) {
+                                    firstSurfaceT = t;
+                                }
+                                const float sigma = raw * sigmaScale * 3.2f;
+                                const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * water.alpha;
+
+                                Vec3f grad = sampleGradient(values, nx, ny, nz, q);
+                                grad.x /= std::max(1e-6f, box.hx * 2.0f);
+                                grad.y /= std::max(1e-6f, box.hy * 2.0f);
+                                grad.z /= std::max(1e-6f, box.hz * 2.0f);
+                                Vec3f normal = normalize3(grad);
+                                if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
+                                const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
+                                const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
+                                const float shade = 0.35f + 0.55f * ndl + 0.25f * rim;
+
+                                const float depthFade = 0.85f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
+                                float cr = 0.0f;
+                                float cg = 0.0f;
+                                float cb = 0.0f;
+                                if (isDarkTheme(water.themeMode)) {
+                                    cr = (0.05f + 0.10f * raw) * depthFade * shade;
+                                    cg = (0.18f + 0.28f * raw) * depthFade * shade;
+                                    cb = (0.48f + 0.38f * raw) * depthFade * (0.85f + 0.25f * shade);
+                                } else {
+                                    cr = (0.20f + 0.12f * raw) * depthFade * (0.90f + 0.15f * shade);
+                                    cg = (0.34f + 0.20f * raw) * depthFade * shade;
+                                    cb = (0.58f + 0.28f * raw) * depthFade * (0.88f + 0.18f * shade);
+                                }
+
+                                const float oneMinusA = 1.0f - accumA;
+                                accumR += oneMinusA * aStep * cr;
+                                accumG += oneMinusA * aStep * cg;
+                                accumB += oneMinusA * aStep * cb;
+                                accumA += oneMinusA * aStep;
+                            }
+                            t += step;
+                        }
+
+                        if (accumA > 0.0f) {
+                            color.x = color.x * (1.0f - accumA) + accumR;
+                            color.y = color.y * (1.0f - accumA) + accumG;
+                            color.z = color.z * (1.0f - accumA) + accumB;
+                        }
+
+                        if (firstSurfaceT >= 0.0f) {
+                            const Vec3f q = localToUnit(o + d * firstSurfaceT, box);
                             Vec3f grad = sampleGradient(values, nx, ny, nz, q);
                             grad.x /= std::max(1e-6f, box.hx * 2.0f);
                             grad.y /= std::max(1e-6f, box.hy * 2.0f);
@@ -922,68 +1022,28 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
                             Vec3f normal = normalize3(grad);
                             if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
                             const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
-                            const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 2.0f);
-                            const float shade = 0.35f + 0.55f * ndl + 0.25f * rim;
-
-                            const float depthFade = 0.85f - 0.25f * std::clamp((t - tmin) / std::max(1e-6f, tmax - tmin), 0.0f, 1.0f);
-                            float cr = 0.0f;
-                            float cg = 0.0f;
-                            float cb = 0.0f;
+                            const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 3.0f);
                             if (isDarkTheme(water.themeMode)) {
-                                cr = (0.05f + 0.10f * raw) * depthFade * shade;
-                                cg = (0.18f + 0.28f * raw) * depthFade * shade;
-                                cb = (0.48f + 0.38f * raw) * depthFade * (0.85f + 0.25f * shade);
+                                color.x += 0.05f * ndl + 0.04f * rim;
+                                color.y += 0.07f * ndl + 0.05f * rim;
+                                color.z += 0.10f * ndl + 0.06f * rim;
                             } else {
-                                cr = (0.20f + 0.12f * raw) * depthFade * (0.90f + 0.15f * shade);
-                                cg = (0.34f + 0.20f * raw) * depthFade * shade;
-                                cb = (0.58f + 0.28f * raw) * depthFade * (0.88f + 0.18f * shade);
+                                color.x += 0.04f * ndl + 0.03f * rim;
+                                color.y += 0.05f * ndl + 0.04f * rim;
+                                color.z += 0.06f * ndl + 0.05f * rim;
                             }
-
-                            const float oneMinusA = 1.0f - accumA;
-                            accumR += oneMinusA * aStep * cr;
-                            accumG += oneMinusA * aStep * cg;
-                            accumB += oneMinusA * aStep * cb;
-                            accumA += oneMinusA * aStep;
-                        }
-                        t += step;
-                    }
-
-                    if (accumA > 0.0f) {
-                        color.x = color.x * (1.0f - accumA) + accumR;
-                        color.y = color.y * (1.0f - accumA) + accumG;
-                        color.z = color.z * (1.0f - accumA) + accumB;
-                    }
-
-                    if (firstSurfaceT >= 0.0f) {
-                        const Vec3f q = localToUnit(o + d * firstSurfaceT, box);
-                        Vec3f grad = sampleGradient(values, nx, ny, nz, q);
-                        grad.x /= std::max(1e-6f, box.hx * 2.0f);
-                        grad.y /= std::max(1e-6f, box.hy * 2.0f);
-                        grad.z /= std::max(1e-6f, box.hz * 2.0f);
-                        Vec3f normal = normalize3(grad);
-                        if (dot3(normal, d) > 0.0f) normal = normal * -1.0f;
-                        const float ndl = std::clamp(dot3(normal, lightDir), 0.0f, 1.0f);
-                        const float rim = std::pow(std::clamp(1.0f - std::fabs(dot3(normal, d)), 0.0f, 1.0f), 3.0f);
-                        if (isDarkTheme(water.themeMode)) {
-                            color.x += 0.05f * ndl + 0.04f * rim;
-                            color.y += 0.07f * ndl + 0.05f * rim;
-                            color.z += 0.10f * ndl + 0.06f * rim;
-                        } else {
-                            color.x += 0.04f * ndl + 0.03f * rim;
-                            color.y += 0.05f * ndl + 0.04f * rim;
-                            color.z += 0.06f * ndl + 0.05f * rim;
                         }
                     }
                 }
-            }
 
-            const int dst = ((m_h - 1 - j) * m_w + i) * 4;
-            img[(std::size_t)dst + 0] = (uint8_t)std::lround(std::clamp(color.x, 0.0f, 1.0f) * 255.0f);
-            img[(std::size_t)dst + 1] = (uint8_t)std::lround(std::clamp(color.y, 0.0f, 1.0f) * 255.0f);
-            img[(std::size_t)dst + 2] = (uint8_t)std::lround(std::clamp(color.z, 0.0f, 1.0f) * 255.0f);
-            img[(std::size_t)dst + 3] = 255;
+                const int dst = ((m_h - 1 - j) * m_w + i) * 4;
+                img[(std::size_t)dst + 0] = (uint8_t)std::lround(std::clamp(color.x, 0.0f, 1.0f) * 255.0f);
+                img[(std::size_t)dst + 1] = (uint8_t)std::lround(std::clamp(color.y, 0.0f, 1.0f) * 255.0f);
+                img[(std::size_t)dst + 2] = (uint8_t)std::lround(std::clamp(color.z, 0.0f, 1.0f) * 255.0f);
+                img[(std::size_t)dst + 3] = 255;
+            }
         }
-    }
+    });
 
     glBindTexture(GL_TEXTURE_2D, m_waterTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);

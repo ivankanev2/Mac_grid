@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-inline void MACWater3D::rasterizeDebugFields() {
+inline void MACWater3D::rasterizeWaterField() {
     const int cellCount = nx * ny * nz;
     if ((int)water.size() != cellCount) water.assign((std::size_t)cellCount, 0.0f);
     if ((int)divergence.size() != cellCount) divergence.assign((std::size_t)cellCount, 0.0f);
@@ -79,14 +79,40 @@ inline void MACWater3D::rasterizeDebugFields() {
                 const int id = idxCell(i, j, k);
                 if (solid[(std::size_t)id]) {
                     water[(std::size_t)id] = 0.0f;
-                    divergence[(std::size_t)id] = 0.0f;
-                    speed[(std::size_t)id] = 0.0f;
                     continue;
                 }
 
                 const float m = mass[(std::size_t)id];
                 sumMass += (double)m;
                 water[(std::size_t)id] = water3d_internal::clamp01(m * invPpc);
+            }
+        }
+    }
+
+    targetMass = (float)sumMass;
+    if (desiredMass < 0.0f && targetMass > 0.0f) {
+        desiredMass = targetMass;
+    }
+
+    derivedFieldsDirty = true;
+}
+
+inline void MACWater3D::ensureDerivedDebugFields() {
+    if (!derivedFieldsDirty) return;
+
+    const int cellCount = nx * ny * nz;
+    if ((int)divergence.size() != cellCount) divergence.assign((std::size_t)cellCount, 0.0f);
+    if ((int)speed.size() != cellCount) speed.assign((std::size_t)cellCount, 0.0f);
+
+    for (int k = 0; k < nz; ++k) {
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const int id = idxCell(i, j, k);
+                if (solid[(std::size_t)id]) {
+                    divergence[(std::size_t)id] = 0.0f;
+                    speed[(std::size_t)id] = 0.0f;
+                    continue;
+                }
 
                 float uL = u[(std::size_t)idxU(i, j, k)];
                 float uR = u[(std::size_t)idxU(i + 1, j, k)];
@@ -114,10 +140,12 @@ inline void MACWater3D::rasterizeDebugFields() {
         }
     }
 
-    targetMass = (float)sumMass;
-    if (desiredMass < 0.0f && targetMass > 0.0f) {
-        desiredMass = targetMass;
-    }
+    derivedFieldsDirty = false;
+}
+
+inline void MACWater3D::rasterizeDebugFields() {
+    rasterizeWaterField();
+    ensureDerivedDebugFields();
 }
 
 inline void MACWater3D::updateStats(float stepMs) {
@@ -165,9 +193,34 @@ inline void MACWater3D::updateStats(float stepMs) {
         validW.size() * sizeof(uint8_t) +
         particles.size() * sizeof(Particle);
 
-    for (std::size_t i = 0; i < liquid.size(); ++i) {
-        if (liquid[i] && !solid[i]) lastStats.liquidCells++;
-        lastStats.maxSpeed = std::max(lastStats.maxSpeed, speed[i]);
-        lastStats.maxDivergence = std::max(lastStats.maxDivergence, std::fabs(divergence[i]));
+    for (float value : u) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
+    for (float value : v) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
+    for (float value : w) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
+
+    for (int k = 0; k < nz; ++k) {
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const int id = idxCell(i, j, k);
+                if (liquid[(std::size_t)id] && !solid[(std::size_t)id]) lastStats.liquidCells++;
+                if (solid[(std::size_t)id]) continue;
+
+                float uL = u[(std::size_t)idxU(i, j, k)];
+                float uR = u[(std::size_t)idxU(i + 1, j, k)];
+                float vB = v[(std::size_t)idxV(i, j, k)];
+                float vT = v[(std::size_t)idxV(i, j + 1, k)];
+                float wBk = w[(std::size_t)idxW(i, j, k)];
+                float wFr = w[(std::size_t)idxW(i, j, k + 1)];
+
+                if (i - 1 >= 0 && solid[(std::size_t)idxCell(i - 1, j, k)]) uL = 0.0f;
+                if (i + 1 < nx && solid[(std::size_t)idxCell(i + 1, j, k)]) uR = 0.0f;
+                if (j - 1 >= 0 && solid[(std::size_t)idxCell(i, j - 1, k)]) vB = 0.0f;
+                if (j + 1 < ny && solid[(std::size_t)idxCell(i, j + 1, k)]) vT = 0.0f;
+                if (k - 1 >= 0 && solid[(std::size_t)idxCell(i, j, k - 1)]) wBk = 0.0f;
+                if (k + 1 < nz && solid[(std::size_t)idxCell(i, j, k + 1)]) wFr = 0.0f;
+
+                const float divCell = (uR - uL + vT - vB + wFr - wBk) / dx;
+                lastStats.maxDivergence = std::max(lastStats.maxDivergence, std::fabs(divCell));
+            }
+        }
     }
 }

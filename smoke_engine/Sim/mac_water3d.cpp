@@ -81,11 +81,12 @@ void MACWater3D::reset() {
     rebuildBorderSolids();
     applyBoundary();
     buildLiquidMask();
-    rasterizeDebugFields();
+    rasterizeWaterField();
     updateStats(0.0f);
 
     if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
         water3dCudaReset(backend, *this);
+        derivedFieldsDirty = false;
     }
 }
 
@@ -103,6 +104,7 @@ void MACWater3D::setParams(const Params& newParams) {
 
     if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
         water3dCudaSetParams(backend, *this);
+        derivedFieldsDirty = false;
         return;
     }
 
@@ -110,11 +112,12 @@ void MACWater3D::setParams(const Params& newParams) {
     removeParticlesInSolids();
     enforceParticleBounds();
     buildLiquidMask();
-    rasterizeDebugFields();
+    rasterizeWaterField();
     updateStats(0.0f);
 }
 
 void MACWater3D::refreshStats(float stepMs) {
+    derivedFieldsDirty = false;
     updateStats(stepMs);
 }
 
@@ -131,6 +134,7 @@ void MACWater3D::setBackendPreference(BackendPreference newPreference) {
 void MACWater3D::step() {
     if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
         water3dCudaStep(backend, *this);
+        derivedFieldsDirty = false;
         return;
     }
 
@@ -147,7 +151,7 @@ void MACWater3D::step() {
         std::fill(w.begin(), w.end(), 0.0f);
         buildLiquidMask();
         applyBoundary();
-        rasterizeDebugFields();
+        rasterizeWaterField();
         const auto end = std::chrono::high_resolution_clock::now();
         const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
         updateStats(stepMs);
@@ -190,7 +194,7 @@ void MACWater3D::step() {
     applyDissipation();
 
     buildLiquidMask();
-    rasterizeDebugFields();
+    rasterizeWaterField();
 
     const auto end = std::chrono::high_resolution_clock::now();
     const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
@@ -200,6 +204,7 @@ void MACWater3D::step() {
 void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity) {
     if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
         water3dCudaAddWaterSourceSphere(backend, *this, center, radius, velocity);
+        derivedFieldsDirty = false;
         return;
     }
 
@@ -270,7 +275,7 @@ void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Ve
     enforceParticleBounds();
     removeParticlesInSolids();
     buildLiquidMask();
-    rasterizeDebugFields();
+    rasterizeWaterField();
     updateStats(0.0f);
 }
 
@@ -293,17 +298,23 @@ void MACWater3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
     enforceParticleBounds();
     buildLiquidMask();
     applyBoundary();
-    rasterizeDebugFields();
+    rasterizeWaterField();
     updateStats(0.0f);
 }
 
-MACWater3D::SliceData MACWater3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) const {
+MACWater3D::SliceData MACWater3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) {
     const std::vector<float>* src = &water;
     switch (field) {
         case DebugField::Water:      src = &water; break;
         case DebugField::Pressure:   src = &pressure; break;
-        case DebugField::Divergence: src = &divergence; break;
-        case DebugField::Speed:      src = &speed; break;
+        case DebugField::Divergence:
+            ensureDerivedDebugFields();
+            src = &divergence;
+            break;
+        case DebugField::Speed:
+            ensureDerivedDebugFields();
+            src = &speed;
+            break;
     }
 
     SliceData out;

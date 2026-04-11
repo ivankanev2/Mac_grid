@@ -106,6 +106,8 @@ private:
     unsigned int m_divTex = 0;
     unsigned int m_vortTex = 0;
     unsigned int m_waterTex = 0;
+    // Reused temporary RGBA buffer for CPU image generation paths.
+    std::vector<uint8_t> m_rgbaScratch;
 
     unsigned int makeTexture(int w, int h);
     void uploadSmokeRGBA(const std::vector<float>& smoke,

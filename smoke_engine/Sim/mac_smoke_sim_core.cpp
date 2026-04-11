@@ -2,7 +2,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
-#include "smoke_diagnostics.h"
+#include "smoke_diag.h"
 
 void MAC2D::applyScalarOutflowTop(std::vector<float>& phi, float outsideValue, int layers)
 {
@@ -161,45 +161,11 @@ void MAC2D::removeSolidText(const std::vector<uint8_t>& textMask, int maskW, int
     invalidatePressureMatrix();
 }
 
-
-
-bool MAC2D::hasDynamicContent(float velEps, float scalarEps) const {
-    if (valveOpen) return true;
-    for (float value : u) if (std::fabs(value) > velEps) return true;
-    for (float value : v) if (std::fabs(value) > velEps) return true;
-    const std::size_t cellCount = smoke.size();
-    for (std::size_t idx = 0; idx < cellCount; ++idx) {
-        if (solid[idx]) continue;
-        if (std::fabs(smoke[idx]) > scalarEps) return true;
-        if (std::fabs(temp[idx]) > scalarEps) return true;
-        if (std::fabs(age[idx]) > scalarEps) return true;
-    }
-    return false;
-}
-
-void MAC2D::clearDynamicState() {
-    std::fill(u.begin(), u.end(), 0.0f);
-    std::fill(v.begin(), v.end(), 0.0f);
-    std::fill(p.begin(), p.end(), 0.0f);
-    std::fill(div.begin(), div.end(), 0.0f);
-    std::fill(rhs.begin(), rhs.end(), 0.0f);
-    std::fill(smoke.begin(), smoke.end(), 0.0f);
-    std::fill(temp.begin(), temp.end(), 0.0f);
-    std::fill(age.begin(), age.end(), 0.0f);
-    setPostBCStats(0.0f, 0.0f);
-}
-
 void MAC2D::step(float vortEps) {
-    SMOKE_DIAG_PRINTF("[step] openTop=%d\n", (int)getOpenTop());
+    SMOKE_DIAG_LOG("[step] openTop=%d\n", (int)getOpenTop());
     // Velocity BC only (don’t inject scalars here)
     applyValveVelocityBC();
     applyBoundary();
-
-    if (!hasDynamicContent()) {
-        clearDynamicState();
-        applyBoundary();
-        return;
-    }
 
     // Velocity sim
     advectVelocity();
@@ -217,24 +183,19 @@ void MAC2D::step(float vortEps) {
     // setOpenTop(openTop);
     project();
 
+#if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
     computeDivergence();
-    SMOKE_DIAG_PRINTF("[POST-PROJ] maxDiv=%g\n", maxAbsDiv());
+    SMOKE_DIAG_LOG("[POST-PROJ] maxDiv=%g\n", maxAbsDiv());
+#endif
 
     applyBoundary();
-
     computeDivergence();
 
     const float maxDivAfterBC  = maxAbsDiv();
     const float maxFaceAfterBC = maxFaceSpeed();
-
     setPostBCStats(maxDivAfterBC, maxFaceAfterBC);
 
-    SMOKE_DIAG_PRINTF("[POST-BC2 ] maxDiv=%g\n", maxAbsDiv());
-
-    computeDivergence();
-    SMOKE_DIAG_PRINTF("[POST-BC] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
-
-
+    SMOKE_DIAG_LOG("[POST-BC] maxDiv=%g maxFace=%g\n", maxDivAfterBC, maxFaceAfterBC);
 
     // Scalars
     advectScalar(temp,  temp0,  tempDissipation);
@@ -264,13 +225,15 @@ void MAC2D::step(float vortEps) {
     for (float val : u) maxFace = std::max(maxFace, fabsf(val));
     for (float val : v) maxFace = std::max(maxFace, fabsf(val));
 
+#if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
     if (!inletTempIsAbsoluteK) {
         // temps are stored as delta relative to ambient; display delta
-        SMOKE_DIAG_PRINTF("[diag] Tdelta_min=%.3f Tdelta_max=%.3f maxFace=%.3f\n",
-               minT, maxT, maxFace);
+        SMOKE_DIAG_LOG("[diag] Tdelta_min=%.3f Tdelta_max=%.3f maxFace=%.3f\n",
+                       minT, maxT, maxFace);
     } else {
         // temps stored as Kelvin; subtract ambient for delta
-        SMOKE_DIAG_PRINTF("[diag] T_min=%.2f T_max=%.2f dT_max=%.2f maxFace=%.3f\n",
-               minT, maxT, (maxT - ambientTempK), maxFace);
+        SMOKE_DIAG_LOG("[diag] T_min=%.2f T_max=%.2f dT_max=%.2f maxFace=%.3f\n",
+                       minT, maxT, (maxT - ambientTempK), maxFace);
     }
+#endif
 }

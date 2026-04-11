@@ -87,7 +87,6 @@ struct MACSmoke3D {
 
     Params params;
     Stats lastStats;
-    bool idleStateLatched = false;
 
     PressureSolver3D pressurePoisson;
 
@@ -115,6 +114,7 @@ struct MACSmoke3D {
 
     std::vector<float> divergence;
     std::vector<float> speed;
+    bool derivedFieldsDirty = true;
 
     std::vector<uint8_t> solid;
     std::vector<uint8_t> solidUser;
@@ -131,7 +131,7 @@ struct MACSmoke3D {
     void addHeatSourceSphere(const Vec3& center, float radius, float amount);
     void setVoxelSolids(const std::vector<uint8_t>& mask);
 
-    SliceData copyDebugSlice(SliceAxis axis, int index, DebugField field) const;
+    SliceData copyDebugSlice(SliceAxis axis, int index, DebugField field);
     const Stats& stats() const { return lastStats; }
 
 protected:
@@ -179,8 +179,6 @@ protected:
                                float dissipation);
     void project();
     void rasterizeDebugFields();
+    void ensureDerivedDebugFields();
     void updateStats(float stepMs);
-    void updateIdleStats(float stepMs);
-    bool hasDynamicContent(float velEps = 1.0e-6f, float scalarEps = 1.0e-6f) const;
-    void clearDynamicState();
 };

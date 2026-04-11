@@ -432,6 +432,26 @@ static void DrawViewportCanvasBackdrop(const ImVec2& p0, const ImVec2& size)
     dl->AddLine(ImVec2(p0.x + 10.0f, p0.y + 10.0f), ImVec2(p0.x + 54.0f, p0.y + 10.0f), VizColorU32(WithAlpha(kVizAccent, 0.85f)), 2.0f);
 }
 
+static ImVec2 FitViewportImageSize(float sourceW, float sourceH, float zoom)
+{
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float safeW = std::max(96.0f, avail.x);
+    const float safeH = std::max(96.0f, avail.y);
+    const float baseW = std::max(1.0f, sourceW);
+    const float baseH = std::max(1.0f, sourceH);
+    const float fitScale = std::min((safeW - 4.0f) / baseW, (safeH - 4.0f) / baseH);
+    const float scale = std::max(0.05f, fitScale * std::max(0.25f, zoom));
+    return ImVec2(baseW * scale, baseH * scale);
+}
+
+static void CenterViewportImageHorizontally(const ImVec2& size)
+{
+    const float availW = ImGui::GetContentRegionAvail().x;
+    if (availW > size.x) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 0.5f * (availW - size.x));
+    }
+}
+
 static void BuildDefaultDockLayout(const ImGuiViewport* vp)
 {
     ImGui::DockBuilderRemoveNode(dock_id);
@@ -1024,7 +1044,10 @@ static Actions drawControls(MAC2D& sim,
         ImGui::TextDisabled("%s", sim.isValveOpen() ? "OPEN" : "CLOSED");
 
         ImGui::Checkbox("Use MacCormack advection", &sim.useMacCormack);
-        ImGui::SliderFloat("3D view scale", &ui.viewScale, 1.0f, 12.0f);
+
+        ImGui::SliderFloat("View zoom", &ui.viewScale, 0.5f, 4.0f);
+        ImGui::SliderFloat("3D render scale", &ui.volumeRenderScale, 0.50f, 1.50f);
+
         ImGui::SliderFloat("CFL", &ui.cfl, 0.1f, 1.5f);
         ImGui::SliderFloat("dt max", &ui.dtMax, 0.001f, 0.05f);
         ImGui::SliderFloat("dt min", &ui.dtMin, 0.0001f, 0.01f);
@@ -1308,7 +1331,6 @@ static void drawDebugTabs(MAC2D& sim,
 
             if (ImGui::Button("Compare advectors (MacCormack vs SL)")) {
                 ui.lastAdvectL2 = sim.compareAdvectors(0.995f);
-                std::printf("Compare advectors L2 = %g\n", ui.lastAdvectL2);
             }
             ImGui::Text("Last advector L2: %.6e", ui.lastAdvectL2);
 
@@ -1534,16 +1556,10 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
     ImGui::Begin(kWinSmoke2D);
 
     DrawViewportHeader(ui, "Smoke 2D", "MAC grid | multigrid | solids", ui.playing ? "LIVE" : "PAUSED");
-    ImVec2 avail2d = ImGui::GetContentRegionAvail();
-    avail2d.y = std::max(avail2d.y, 4.0f);
-    {
-        float aspect = float(NX) / std::max(1.0f, float(NY));
-        float imgW = avail2d.x, imgH = imgW / aspect;
-        if (imgH > avail2d.y) { imgH = avail2d.y; imgW = imgH * aspect; }
-        avail2d = ImVec2(imgW, imgH);
-    }
-    const ImVec2 imageSize = avail2d;
-    const float scale = imageSize.x / std::max(1.0f, float(NX));
+
+    const ImVec2 imageSize = FitViewportImageSize((float)NX, (float)NY, ui.viewScale);
+    CenterViewportImageHorizontally(imageSize);
+
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, imageSize);
     ImGui::Image((ImTextureID)(intptr_t)renderer.smokeTex(), imageSize);
@@ -1715,8 +1731,8 @@ struct Water3DPanelBox {
     float hx = 0.5f;
     float hy = 0.5f;
     float hz = 0.5f;
-    float camDist = 1.85f;
-    float fovScale = 0.95f;
+    float camDist = 2.10f;
+    float fovScale = 0.82f;
     float imageAspect = 1.0f;
 };
 
@@ -1936,18 +1952,12 @@ static void drawWaterViewAndInteract(MACWater& water,
     ImGui::Begin(kWinWater2D);
 
     DrawViewportHeader(ui, "Water 2D", "Particle / grid liquid", ui.paintWater ? "SOURCE" : "VIEW");
-    const int texW2 = std::max(1, renderer.width());
-    const int texH2 = std::max(1, renderer.height());
-    float w2imgW, w2imgH;
-    {
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        avail.y = std::max(avail.y, 4.0f);
-        float aspect = float(texW2) / std::max(1.0f, float(texH2));
-        w2imgW = avail.x; w2imgH = w2imgW / aspect;
-        if (w2imgH > avail.y) { w2imgH = avail.y; w2imgW = w2imgH * aspect; }
-    }
-    const float scale = w2imgW / float(texW2);
-    const ImVec2 imageSize(w2imgW, w2imgH);
+
+    const int texW = std::max(1, renderer.width());
+    const int texH = std::max(1, renderer.height());
+    const ImVec2 imageSize = FitViewportImageSize((float)texW, (float)texH, ui.viewScale);
+    CenterViewportImageHorizontally(imageSize);
+    const float scale = imageSize.x / (float)texW;
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, imageSize);
     ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), imageSize);
@@ -2028,10 +2038,15 @@ static void drawSmoke3DViewAndInteract(MACSmoke3D& smoke3D,
     ImGui::Begin(kWinSmoke3D);
 
     DrawViewportHeader(ui, "Smoke 3D", PressureSolverLabel3D(ui.smoke3DPressureSolverMode), ui.useSmoke3D ? "ACTIVE" : "IDLE");
-    const float scale = ui.viewScale;
+    {
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        ui.smoke3DViewportWidth = std::max(160.0f, avail.x);
+        ui.smoke3DViewportHeight = std::max(160.0f, avail.y);
+    }
     const int texW = std::max(1, renderer.width());
     const int texH = std::max(1, renderer.height());
-    const ImVec2 imageSize(texW * scale, texH * scale);
+    const ImVec2 imageSize = FitViewportImageSize((float)texW, (float)texH, ui.viewScale);
+    CenterViewportImageHorizontally(imageSize);
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, imageSize);
     ImGui::Image((ImTextureID)(intptr_t)renderer.smokeTex(), imageSize);
@@ -2188,10 +2203,15 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
     ImGui::Begin(kWinWater3D);
 
     DrawViewportHeader(ui, "Water 3D", PressureSolverLabel3D(ui.water3DPressureSolverMode), ui.useWater3D ? "ACTIVE" : "IDLE");
-    const float scale = ui.viewScale;
+    {
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        ui.water3DViewportWidth = std::max(160.0f, avail.x);
+        ui.water3DViewportHeight = std::max(160.0f, avail.y);
+    }
     const int texW = std::max(1, renderer.width());
     const int texH = std::max(1, renderer.height());
-    const ImVec2 imageSize(texW * scale, texH * scale);
+    const ImVec2 imageSize = FitViewportImageSize((float)texW, (float)texH, ui.viewScale);
+    CenterViewportImageHorizontally(imageSize);
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, imageSize);
     ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), imageSize);
@@ -2432,16 +2452,10 @@ static void drawCombinedView(MACCoupledSim& coupled,
     ImGui::Begin(kWinCombined);
 
     DrawViewportHeader(ui, "Coupled", "Smoke + water composite workspace", g_pipeMode ? "PIPE" : "LIVE");
-    float cpImgW, cpImgH;
-    {
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        avail.y = std::max(avail.y, 4.0f);
-        float aspect = float(NX) / std::max(1.0f, float(NY));
-        cpImgW = avail.x; cpImgH = cpImgW / aspect;
-        if (cpImgH > avail.y) { cpImgH = avail.y; cpImgW = cpImgH * aspect; }
-    }
-    const float scale = cpImgW / std::max(1.0f, float(NX));
-    const ImVec2 size(cpImgW, cpImgH);
+
+    const ImVec2 size = FitViewportImageSize((float)NX, (float)NY, ui.viewScale);
+    CenterViewportImageHorizontally(size);
+    const float scale = size.x / std::max(1.0f, float(NX));
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, size);
 

@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <chrono>
 #include <limits>
-#include "smoke_diagnostics.h"
+#include "smoke_diag.h"
 
 
 
@@ -695,14 +695,18 @@ void MACGridCore::project() {
         return;
     }
 
+#if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
     int badIdx; float badVal;
-    if (findFirstNonFinite("u", u, badIdx, badVal)) std::printf("[NONFINITE] u[%d]=%g\n", badIdx, badVal);
-    if (findFirstNonFinite("v", v, badIdx, badVal)) std::printf("[NONFINITE] v[%d]=%g\n", badIdx, badVal);
-    if (findFirstNonFinite("p", p, badIdx, badVal)) std::printf("[NONFINITE] p[%d]=%g\n", badIdx, badVal);
+    if (findFirstNonFinite("u", u, badIdx, badVal)) SMOKE_DIAG_LOG("[NONFINITE] u[%d]=%g\n", badIdx, badVal);
+    if (findFirstNonFinite("v", v, badIdx, badVal)) SMOKE_DIAG_LOG("[NONFINITE] v[%d]=%g\n", badIdx, badVal);
+    if (findFirstNonFinite("p", p, badIdx, badVal)) SMOKE_DIAG_LOG("[NONFINITE] p[%d]=%g\n", badIdx, badVal);
+#endif
 
     computeDivergence();
 
-    if (findFirstNonFinite("div", div, badIdx, badVal)) std::printf("[NONFINITE] div[%d]=%g\n", badIdx, badVal);
+#if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
+    if (findFirstNonFinite("div", div, badIdx, badVal)) SMOKE_DIAG_LOG("[NONFINITE] div[%d]=%g\n", badIdx, badVal);
+#endif
     if (!std::isfinite(maxAbsDiv()) || !std::isfinite(maxFaceSpeed())) {
     std::printf("[project] NON-FINITE STATE. Resetting u/v/p.\n");
     std::fill(u.begin(), u.end(), 0.0f);
@@ -714,7 +718,7 @@ void MACGridCore::project() {
 
     // before project (after computeDivergence inside project already fills stats)
     // but add explicit print here (place near top of step or after computeDivergence)
-    SMOKE_DIAG_PRINTF("[BEFORE] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
+    SMOKE_DIAG_LOG("[BEFORE] maxDiv=%g maxFace=%g\n", maxAbsDiv(), maxFaceSpeed());
 
     stats.dt = dt;
     // stats.maxDivBefore = maxAbsDiv();
@@ -730,11 +734,13 @@ void MACGridCore::project() {
     stats.predDivInitial = 0.0f;
     stats.predDivFinal = 0.0f;
 
+#if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
     int bad = 0;
     for (int id = 0; id < nx*ny; ++id) {
         if (solid[id] && fluid[id]) bad++;
     }
-    if (bad) SMOKE_DIAG_PRINTF("[BUG] %d cells are solid AND fluid!\n", bad);
+    if (bad) SMOKE_DIAG_LOG("[BUG] %d cells are solid AND fluid!\n", bad);
+#endif
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
@@ -800,6 +806,7 @@ void MACGridCore::project() {
     auto t1 = std::chrono::high_resolution_clock::now();
     stats.pressureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
 
+#if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
     if (openTopBC) {
         const int jCell = ny - 1; // top row of cells
         const int jFace = ny;     // top boundary v-face row
@@ -822,10 +829,11 @@ void MACGridCore::project() {
 
         static int dbgFrame = 0;
         if ((dbgFrame++ & 31) == 0) {
-            SMOKE_DIAG_PRINTF("[TOP ] |p|_max(topCells)=%g at i=%d   |v|_max(topFace)=%g at i=%d\n",
+            SMOKE_DIAG_LOG("[TOP ] |p|_max(topCells)=%g at i=%d   |v|_max(topFace)=%g at i=%d\n",
                         pTopMax, pTopMaxI, vTopMax, vTopMaxI);
         }
     }
+#endif
 
     auto uW = [&](int i, int j) { return faceOpenU[(size_t)j * (size_t)(nx + 1) + (size_t)i]; };
 
@@ -879,14 +887,16 @@ void MACGridCore::project() {
 
         v[idxV(i, jFace)] *= w;
     }
+#if SMOKE_ENABLE_VERBOSE_DIAGNOSTICS
     if (openTopBC) {
         float vTopMax2 = 0.0f;
         for (int i = 0; i < nx; ++i)
             vTopMax2 = std::max(vTopMax2, std::fabs(v[idxV(i, ny)]));
         static int dbg2 = 0;
         if ((dbg2++ & 31) == 0)
-            SMOKE_DIAG_PRINTF("[TOP2] |v|_max(topFace AFTER bc)=%g\n", vTopMax2);
+            SMOKE_DIAG_LOG("[TOP2] |v|_max(topFace AFTER bc)=%g\n", vTopMax2);
     }
+#endif
 }
 
     // Clamp face speeds to avoid extreme velocities, they dont occur anymore as of now
@@ -902,7 +912,7 @@ void MACGridCore::project() {
 
     const float divInf = divLInfFluid();
     const float divL2  = divL2Fluid();
-    SMOKE_DIAG_PRINTF("[AFTER ] divInf=%g divL2=%g maxFace=%g (iters=%d)\n",
+    SMOKE_DIAG_LOG("[AFTER ] divInf=%g divL2=%g maxFace=%g (iters=%d)\n",
                 divInf, divL2, maxFaceSpeed(), stats.pressureIters);
 
     // std::printf("[AFTER ] maxDiv=%g maxFace=%g (iters=%d)\n",

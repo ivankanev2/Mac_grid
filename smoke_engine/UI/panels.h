@@ -97,8 +97,13 @@ struct Settings {
     bool  showWaterView   = true;
     bool  showWaterParticles = true;
 
-    // Smoke view display
-    float viewScale = 5.0f;
+    // View display and volume-render resolution (display only; simulation resolution stays unchanged)
+    float viewScale = 1.0f;
+    float volumeRenderScale = 1.0f;
+    float smoke3DViewportWidth = 0.0f;
+    float smoke3DViewportHeight = 0.0f;
+    float water3DViewportWidth = 0.0f;
+    float water3DViewportHeight = 0.0f;
 
     bool  showCombinedView = true;
     float combinedWaterAlpha = 0.5f;   // water overlay strength
