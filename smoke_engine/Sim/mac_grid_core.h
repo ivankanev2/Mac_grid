@@ -178,6 +178,13 @@ struct MACGridCore {
 
     void syncSolidsToFluidAndFaces();
 
+protected:
+    // Reused scalar scratch to avoid per-step heap churn in active smoke scenes.
+    std::vector<float> scalarScratch0;
+    std::vector<float> scalarScratch1;
+    std::vector<float> scalarScratch2;
+    std::vector<float> scalarScratch3;
+
     
 
 private:

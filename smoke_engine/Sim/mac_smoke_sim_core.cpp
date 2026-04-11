@@ -176,7 +176,6 @@ void MAC2D::step(float vortEps) {
     clampFaceSpeeds(u, v, 50.0f);
 
     diffuseVelocityImplicit();
-    applyBoundary();
 
     addVorticityConfinement(vortEps);
 

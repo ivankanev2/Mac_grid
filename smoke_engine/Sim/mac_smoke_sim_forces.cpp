@@ -128,8 +128,8 @@ void MAC2D::diffuseScalarImplicit(std::vector<float>& phi,
         return;
     }
 
-    std::vector<float> xOld;
-    xOld.resize(phi.size());
+    if (scalarScratch0.size() != phi.size()) scalarScratch0.resize(phi.size());
+    std::vector<float>& xOld = scalarScratch0;
 
     auto idx = [&](int i, int j) { return idxP(i, j); };
 
@@ -195,10 +195,20 @@ void MAC2D::addVorticityConfinement(float eps) {
     if (eps <= 0.0f) return;
 
     const int Nc = nx * ny;
-    std::vector<float> omega(Nc, 0.0f);
-    std::vector<float> mag(Nc, 0.0f);
-    std::vector<float> fx(Nc, 0.0f);
-    std::vector<float> fy(Nc, 0.0f);
+    if ((int)scalarScratch0.size() != Nc) scalarScratch0.resize((std::size_t)Nc);
+    if ((int)scalarScratch1.size() != Nc) scalarScratch1.resize((std::size_t)Nc);
+    if ((int)scalarScratch2.size() != Nc) scalarScratch2.resize((std::size_t)Nc);
+    if ((int)scalarScratch3.size() != Nc) scalarScratch3.resize((std::size_t)Nc);
+
+    std::fill(scalarScratch0.begin(), scalarScratch0.end(), 0.0f);
+    std::fill(scalarScratch1.begin(), scalarScratch1.end(), 0.0f);
+    std::fill(scalarScratch2.begin(), scalarScratch2.end(), 0.0f);
+    std::fill(scalarScratch3.begin(), scalarScratch3.end(), 0.0f);
+
+    std::vector<float>& omega = scalarScratch0;
+    std::vector<float>& mag = scalarScratch1;
+    std::vector<float>& fx = scalarScratch2;
+    std::vector<float>& fy = scalarScratch3;
 
     auto idx = [&](int i, int j) { return idxP(i, j); };
 
@@ -311,7 +321,9 @@ void MAC2D::coolAndDiffuseTemperature() {
     const float invDx2 = 1.0f / (dx * dx);
 
     // simple explicit diffusion + cooling in one pass
-    std::vector<float> newTemp = temp;
+    if (scalarScratch0.size() != temp.size()) scalarScratch0.resize(temp.size());
+    std::copy(temp.begin(), temp.end(), scalarScratch0.begin());
+    std::vector<float>& newTemp = scalarScratch0;
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {

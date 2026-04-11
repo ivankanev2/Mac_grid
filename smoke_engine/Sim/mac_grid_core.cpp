@@ -108,6 +108,8 @@ void MACGridCore::rebuildFaceOpennessBinaryFromSolids()
             }
         }
     }
+
+    pressureMatrixDirty = true;
 }
 
 void MACGridCore::setFaceValveU(int i, int j, float value) {
@@ -382,8 +384,12 @@ void MACGridCore::advectScalarMacCormack(std::vector<float>& phi,
 {
     phi0 = phi;
 
-    std::vector<float> phiFwd(phi.size(), 0.0f);
-    std::vector<float> phiBack(phi.size(), 0.0f);
+    if (scalarScratch0.size() != phi.size()) scalarScratch0.resize(phi.size());
+    if (scalarScratch1.size() != phi.size()) scalarScratch1.resize(phi.size());
+    std::fill(scalarScratch0.begin(), scalarScratch0.end(), 0.0f);
+    std::fill(scalarScratch1.begin(), scalarScratch1.end(), 0.0f);
+    std::vector<float>& phiFwd = scalarScratch0;
+    std::vector<float>& phiBack = scalarScratch1;
 
     auto stencilMinMax = [&](const std::vector<float>& f, float x, float y, float& outMin, float& outMax) {
         float fx = x / dx - 0.5f;
@@ -508,7 +514,9 @@ void MACGridCore::advectScalarSemiLagrangian(std::vector<float>& phi,
                                              float dissipation)
 {
     phi0 = phi;
-    std::vector<float> tmp(phi.size(), 0.0f);
+    if (scalarScratch0.size() != phi.size()) scalarScratch0.resize(phi.size());
+    std::fill(scalarScratch0.begin(), scalarScratch0.end(), 0.0f);
+    std::vector<float>& tmp = scalarScratch0;
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             int id = idxP(i,j);
@@ -789,15 +797,18 @@ void MACGridCore::project() {
 
     float divTol = openTopBC ? 5e-4f : 1e-4f;
 
-    ps().configure(
-        nx, ny, dx,
-        openTopBC,
-        solid,
-        fluid,
-        /*removeMeanForGauge=*/!openTopBC,
-        &faceOpenU,
-        &faceOpenV
-    );
+    if (pressureMatrixDirty) {
+        ps().configure(
+            nx, ny, dx,
+            openTopBC,
+            solid,
+            fluid,
+            /*removeMeanForGauge=*/!openTopBC,
+            &faceOpenU,
+            &faceOpenV
+        );
+        pressureMatrixDirty = false;
+    }
 
     stats.pressureSolver = SOLVER_MG;
     ps().solveMG(p, rhs, 20, divTol, dt);

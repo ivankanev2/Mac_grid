@@ -134,6 +134,7 @@ struct MACWater3D {
 
     std::vector<uint8_t> liquid;
     std::vector<uint8_t> solid;
+    bool topologyDirty = true;
 
     std::vector<Particle> particles;
 

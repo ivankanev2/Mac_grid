@@ -77,6 +77,7 @@ void MACWater3D::reset() {
     stepCounter = 0;
     targetMass = 0.0f;
     desiredMass = -1.0f;
+    topologyDirty = true;
 
     rebuildBorderSolids();
     applyBoundary();
@@ -141,7 +142,7 @@ void MACWater3D::step() {
     const auto start = std::chrono::high_resolution_clock::now();
     ++stepCounter;
 
-    rebuildBorderSolids();
+    if (topologyDirty) rebuildBorderSolids();
     removeParticlesInSolids();
     enforceParticleBounds();
 
@@ -165,21 +166,18 @@ void MACWater3D::step() {
     applyBoundary();
 // viscosity
     diffuseVelocityImplicit();
-    applyBoundary();
 
     uPrev = u;
     vPrev = v;
     wPrev = w;
 
     projectLiquid();
-    applyBoundary();
 
     for (std::size_t i = 0; i < u.size(); ++i) uDelta[i] = u[i] - uPrev[i];
     for (std::size_t i = 0; i < v.size(); ++i) vDelta[i] = v[i] - vPrev[i];
     for (std::size_t i = 0; i < w.size(); ++i) wDelta[i] = w[i] - wPrev[i];
 
     extrapolateVelocity();
-    applyBoundary();
 
     gridToParticles();
     advectParticles();
@@ -293,6 +291,7 @@ void MACWater3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
         solidUser = mask;
     }
 
+    topologyDirty = true;
     rebuildBorderSolids();
     removeParticlesInSolids();
     enforceParticleBounds();

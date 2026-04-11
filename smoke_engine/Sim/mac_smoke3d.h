@@ -120,6 +120,8 @@ struct MACSmoke3D {
     std::vector<uint8_t> solidUser;
     std::vector<uint8_t> fluidMask;
     int fluidCellCount = 0;
+    bool topologyDirty = true;
+    bool pressureOperatorDirty = true;
 
     MACSmoke3D(int NX, int NY, int NZ, float DX, float DT);
 

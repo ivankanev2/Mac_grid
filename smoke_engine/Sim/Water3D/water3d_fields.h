@@ -10,8 +10,9 @@ inline void MACWater3D::rasterizeWaterField() {
     if ((int)water.size() != cellCount) water.assign((std::size_t)cellCount, 0.0f);
     if ((int)divergence.size() != cellCount) divergence.assign((std::size_t)cellCount, 0.0f);
     if ((int)speed.size() != cellCount) speed.assign((std::size_t)cellCount, 0.0f);
-
-    std::vector<float> mass((std::size_t)cellCount, 0.0f);
+    if ((int)pressureTmp.size() != cellCount) pressureTmp.assign((std::size_t)cellCount, 0.0f);
+    std::fill(pressureTmp.begin(), pressureTmp.end(), 0.0f);
+    std::vector<float>& mass = pressureTmp;
 
     for (const Particle& p : particles) {
         const float fx = p.x / dx - 0.5f;

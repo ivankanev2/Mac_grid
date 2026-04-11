@@ -95,6 +95,8 @@ void MACSmoke3D::reset() {
     solidUser.assign((std::size_t)cellCount, (uint8_t)0);
     fluidMask.assign((std::size_t)cellCount, (uint8_t)0);
     fluidCellCount = 0;
+    topologyDirty = true;
+    pressureOperatorDirty = true;
 
     rebuildBorderSolids();
     applyBoundary();
@@ -172,6 +174,9 @@ void MACSmoke3D::rebuildBorderSolids() {
         fluidMask[(std::size_t)id] = solid[(std::size_t)id] ? (uint8_t)0 : (uint8_t)1;
         if (!solid[(std::size_t)id]) ++fluidCellCount;
     }
+
+    topologyDirty = false;
+    pressureOperatorDirty = true;
 }
 
 void MACSmoke3D::applyBoundary() {
@@ -785,8 +790,6 @@ void MACSmoke3D::project() {
     const float invDt = 1.0f / std::max(1e-8f, dt);
     const float dx2 = dx * dx;
 
-    if ((int)fluidMask.size() != cellCount) fluidMask.assign((std::size_t)cellCount, (uint8_t)0);
-    std::fill(fluidMask.begin(), fluidMask.end(), (uint8_t)0);
     bool hasDirichletReference = false;
 
     auto isFluidCell = [&](int i, int j, int k) -> bool {
@@ -804,7 +807,6 @@ void MACSmoke3D::project() {
                     continue;
                 }
 
-                fluidMask[(std::size_t)id] = (uint8_t)1;
                 if (!std::isfinite(pressure[(std::size_t)id])) pressure[(std::size_t)id] = 0.0f;
 
                 float uL = u[(std::size_t)idxU(i, j, k)];
@@ -833,12 +835,15 @@ void MACSmoke3D::project() {
 
     const auto solverMode = static_cast<PressureSolverMode>(params.pressureSolverMode);
     if (solverMode == PressureSolverMode::Multigrid) {
-        pressurePoisson.configure(
-            nx, ny, nz, dx,
-            params.openTop,
-            solid,
-            fluidMask,
-            /*removeMeanForGauge=*/!hasDirichletReference);
+        if (pressureOperatorDirty) {
+            pressurePoisson.configure(
+                nx, ny, nz, dx,
+                params.openTop,
+                solid,
+                fluidMask,
+                /*removeMeanForGauge=*/!hasDirichletReference);
+            pressureOperatorDirty = false;
+        }
 
         pressurePoisson.solveMG(
             pressure,
@@ -1246,7 +1251,7 @@ void MACSmoke3D::updateStats(float stepMs) {
 void MACSmoke3D::step() {
     const auto start = std::chrono::high_resolution_clock::now();
 
-    rebuildBorderSolids();
+    if (topologyDirty) rebuildBorderSolids();
     applyBoundary();
 
     const bool smokeActive = hasActiveScalar(smoke, 1.0e-5f);
@@ -1280,10 +1285,8 @@ void MACSmoke3D::step() {
         applyBoundary();
 
         diffuseVelocityImplicit();
-        applyBoundary();
 
         project();
-        applyBoundary();
     } else {
         clearVelocityState();
     }
@@ -1393,6 +1396,7 @@ void MACSmoke3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
     if ((int)mask.size() == cellCount) {
         solidUser = mask;
     }
+    topologyDirty = true;
     rebuildBorderSolids();
     applyBoundary();
     derivedFieldsDirty = true;

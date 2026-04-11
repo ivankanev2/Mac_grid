@@ -53,6 +53,8 @@ inline void MACWater3D::rebuildBorderSolids() {
         if ((int)liquid.size() == cellCount) liquid[(std::size_t)id] = 0;
         if ((int)water.size() == cellCount) water[(std::size_t)id] = 0.0f;
     }
+
+    topologyDirty = false;
 }
 
 inline void MACWater3D::applyBoundary() {
