@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -12,7 +13,18 @@ class ChunkWorkerPool {
 public:
     ChunkWorkerPool() {
         const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-        const unsigned backgroundCount = (hw > 1u) ? (hw - 1u) : 0u;
+        unsigned cappedHw = hw;
+#if defined(__APPLE__)
+        cappedHw = std::min(cappedHw, 8u);
+#endif
+        if (const char* envWorkers = std::getenv("SMOKE_MAX_WORKERS")) {
+            char* endPtr = nullptr;
+            const unsigned long parsed = std::strtoul(envWorkers, &endPtr, 10);
+            if (endPtr != envWorkers && parsed > 0ul) {
+                cappedHw = std::max(1u, std::min(hw, (unsigned)parsed));
+            }
+        }
+        const unsigned backgroundCount = (cappedHw > 1u) ? (cappedHw - 1u) : 0u;
         m_workers.reserve(backgroundCount);
         for (unsigned workerIndex = 0; workerIndex < backgroundCount; ++workerIndex) {
             m_workers.emplace_back([this, workerIndex]() { workerLoop((int)workerIndex); });

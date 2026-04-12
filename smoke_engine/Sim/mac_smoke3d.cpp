@@ -1361,47 +1361,41 @@ void MACSmoke3D::project() {
     const float dx2 = dx * dx;
 
     bool hasDirichletReference = false;
-
-    auto isFluidCell = [&](int i, int j, int k) -> bool {
-        if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return false;
-        return !solid[(std::size_t)idxCell(i, j, k)];
-    };
-
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
+    if (params.openTop) {
+        const int topJ = ny - 1;
+        for (int k = 0; k < nz && !hasDirichletReference; ++k) {
+            const int sliceBase = nx * ny * k + nx * topJ;
             for (int i = 0; i < nx; ++i) {
-                const int id = idxCell(i, j, k);
-                if (solid[(std::size_t)id]) {
-                    rhs[(std::size_t)id] = 0.0f;
-                    pressure[(std::size_t)id] = 0.0f;
-                    continue;
-                }
-
-                if (!std::isfinite(pressure[(std::size_t)id])) pressure[(std::size_t)id] = 0.0f;
-
-                float uL = u[(std::size_t)idxU(i, j, k)];
-                float uR = u[(std::size_t)idxU(i + 1, j, k)];
-                float vB = v[(std::size_t)idxV(i, j, k)];
-                float vT = v[(std::size_t)idxV(i, j + 1, k)];
-                float wBk = w[(std::size_t)idxW(i, j, k)];
-                float wFr = w[(std::size_t)idxW(i, j, k + 1)];
-
-                if (i - 1 >= 0 && solid[(std::size_t)idxCell(i - 1, j, k)]) uL = 0.0f;
-                if (i + 1 < nx && solid[(std::size_t)idxCell(i + 1, j, k)]) uR = 0.0f;
-                if (j - 1 >= 0 && solid[(std::size_t)idxCell(i, j - 1, k)]) vB = 0.0f;
-                if (j + 1 < ny && solid[(std::size_t)idxCell(i, j + 1, k)]) vT = 0.0f;
-                if (k - 1 >= 0 && solid[(std::size_t)idxCell(i, j, k - 1)]) wBk = 0.0f;
-                if (k + 1 < nz && solid[(std::size_t)idxCell(i, j, k + 1)]) wFr = 0.0f;
-
-                const float divCell = (uR - uL + vT - vB + wFr - wBk) * invDx;
-                rhs[(std::size_t)id] = -divCell * invDt;
-
-                if (params.openTop && j == ny - 1) {
+                if (!solid[(std::size_t)(sliceBase + i)]) {
                     hasDirichletReference = true;
+                    break;
                 }
             }
         }
     }
+
+    parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int entryIndex = activeCellsByK.offsets[(std::size_t)k];
+                 entryIndex < activeCellsByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeCellsByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int id = idxCell(i, j, k);
+
+                if (!std::isfinite(pressure[(std::size_t)id])) {
+                    pressure[(std::size_t)id] = 0.0f;
+                }
+
+                const float divCell =
+                    (u[(std::size_t)idxU(i + 1, j, k)] - u[(std::size_t)idxU(i, j, k)] +
+                     v[(std::size_t)idxV(i, j + 1, k)] - v[(std::size_t)idxV(i, j, k)] +
+                     w[(std::size_t)idxW(i, j, k + 1)] - w[(std::size_t)idxW(i, j, k)]) * invDx;
+                rhs[(std::size_t)id] = -divCell * invDt;
+            }
+        }
+    });
 
     const auto solverMode = static_cast<PressureSolverMode>(params.pressureSolverMode);
     const auto solveStart = std::chrono::high_resolution_clock::now();
@@ -1444,25 +1438,27 @@ void MACSmoke3D::project() {
         auto computeResidual = [&]() {
             float maxResidual = 0.0f;
             for (int k3 = 0; k3 < nz; ++k3) {
-                for (int j3 = 0; j3 < ny; ++j3) {
-                    for (int i3 = 0; i3 < nx; ++i3) {
-                        const int id = idxCell(i3, j3, k3);
-                        if (solid[(std::size_t)id]) continue;
+                for (int entryIndex = activeCellsByK.offsets[(std::size_t)k3];
+                     entryIndex < activeCellsByK.offsets[(std::size_t)k3 + 1u];
+                     ++entryIndex) {
+                    const auto& entry = activeCellsByK.entries[(std::size_t)entryIndex];
+                    const int i3 = entry.i;
+                    const int j3 = entry.j;
+                    const int id = idxCell(i3, j3, k3);
 
-                        float sum = 0.0f;
-                        int diag = 0;
-                        neighborContribution(i3 - 1, j3, k3, false, sum, diag);
-                        neighborContribution(i3 + 1, j3, k3, false, sum, diag);
-                        neighborContribution(i3, j3 - 1, k3, false, sum, diag);
-                        neighborContribution(i3, j3 + 1, k3, params.openTop && (j3 + 1 >= ny), sum, diag);
-                        neighborContribution(i3, j3, k3 - 1, false, sum, diag);
-                        neighborContribution(i3, j3, k3 + 1, false, sum, diag);
+                    float sum = 0.0f;
+                    int diag = 0;
+                    neighborContribution(i3 - 1, j3, k3, false, sum, diag);
+                    neighborContribution(i3 + 1, j3, k3, false, sum, diag);
+                    neighborContribution(i3, j3 - 1, k3, false, sum, diag);
+                    neighborContribution(i3, j3 + 1, k3, params.openTop && (j3 + 1 >= ny), sum, diag);
+                    neighborContribution(i3, j3, k3 - 1, false, sum, diag);
+                    neighborContribution(i3, j3, k3 + 1, false, sum, diag);
 
-                        if (diag <= 0) continue;
-                        const float residual = std::fabs((float)diag * pressure[(std::size_t)id] - sum - rhs[(std::size_t)id] * dx2)
-                                             / std::max(1e-8f, dx2);
-                        maxResidual = std::max(maxResidual, residual);
-                    }
+                    if (diag <= 0) continue;
+                    const float residual = std::fabs((float)diag * pressure[(std::size_t)id] - sum - rhs[(std::size_t)id] * dx2)
+                                         / std::max(1e-8f, dx2);
+                    maxResidual = std::max(maxResidual, residual);
                 }
             }
             return maxResidual;
@@ -1479,13 +1475,49 @@ void MACSmoke3D::project() {
             for (int it = 0; it < maxIters; ++it) {
                 itersUsed = it + 1;
                 for (int k3 = 0; k3 < nz; ++k3) {
-                    for (int j3 = 0; j3 < ny; ++j3) {
-                        for (int i3 = 0; i3 < nx; ++i3) {
+                    for (int entryIndex = activeCellsByK.offsets[(std::size_t)k3];
+                         entryIndex < activeCellsByK.offsets[(std::size_t)k3 + 1u];
+                         ++entryIndex) {
+                        const auto& entry = activeCellsByK.entries[(std::size_t)entryIndex];
+                        const int i3 = entry.i;
+                        const int j3 = entry.j;
+                        const int id = idxCell(i3, j3, k3);
+
+                        float sum = 0.0f;
+                        int diag = 0;
+                        neighborContribution(i3 - 1, j3, k3, false, sum, diag);
+                        neighborContribution(i3 + 1, j3, k3, false, sum, diag);
+                        neighborContribution(i3, j3 - 1, k3, false, sum, diag);
+                        neighborContribution(i3, j3 + 1, k3, params.openTop && (j3 + 1 >= ny), sum, diag);
+                        neighborContribution(i3, j3, k3 - 1, false, sum, diag);
+                        neighborContribution(i3, j3, k3 + 1, false, sum, diag);
+
+                        if (diag <= 0) {
+                            pressureTmp[(std::size_t)id] = 0.0f;
+                            continue;
+                        }
+
+                        const float target = (sum + rhs[(std::size_t)id] * dx2) / (float)diag;
+                        pressureTmp[(std::size_t)id] =
+                            pressure[(std::size_t)id] + jacobiOmega * (target - pressure[(std::size_t)id]);
+                    }
+                }
+                pressure.swap(pressureTmp);
+                if (computeResidual() * dt <= params.pressureTol) break;
+            }
+        } else {
+            for (int it = 0; it < maxIters; ++it) {
+                itersUsed = it + 1;
+                for (int color = 0; color < 2; ++color) {
+                    for (int k3 = 0; k3 < nz; ++k3) {
+                        for (int entryIndex = activeCellsByK.offsets[(std::size_t)k3];
+                             entryIndex < activeCellsByK.offsets[(std::size_t)k3 + 1u];
+                             ++entryIndex) {
+                            const auto& entry = activeCellsByK.entries[(std::size_t)entryIndex];
+                            const int i3 = entry.i;
+                            const int j3 = entry.j;
+                            if (((i3 + j3 + k3) & 1) != color) continue;
                             const int id = idxCell(i3, j3, k3);
-                            if (solid[(std::size_t)id]) {
-                                pressureTmp[(std::size_t)id] = 0.0f;
-                                continue;
-                            }
 
                             float sum = 0.0f;
                             int diag = 0;
@@ -1497,50 +1529,12 @@ void MACSmoke3D::project() {
                             neighborContribution(i3, j3, k3 + 1, false, sum, diag);
 
                             if (diag <= 0) {
-                                pressureTmp[(std::size_t)id] = 0.0f;
+                                pressure[(std::size_t)id] = 0.0f;
                                 continue;
                             }
 
                             const float target = (sum + rhs[(std::size_t)id] * dx2) / (float)diag;
-                            pressureTmp[(std::size_t)id] =
-                                pressure[(std::size_t)id] + jacobiOmega * (target - pressure[(std::size_t)id]);
-                        }
-                    }
-                }
-                pressure.swap(pressureTmp);
-                if (computeResidual() * dt <= params.pressureTol) break;
-            }
-        } else {
-            for (int it = 0; it < maxIters; ++it) {
-                itersUsed = it + 1;
-                for (int color = 0; color < 2; ++color) {
-                    for (int k3 = 0; k3 < nz; ++k3) {
-                        for (int j3 = 0; j3 < ny; ++j3) {
-                            for (int i3 = 0; i3 < nx; ++i3) {
-                                if (((i3 + j3 + k3) & 1) != color) continue;
-                                const int id = idxCell(i3, j3, k3);
-                                if (solid[(std::size_t)id]) {
-                                    pressure[(std::size_t)id] = 0.0f;
-                                    continue;
-                                }
-
-                                float sum = 0.0f;
-                                int diag = 0;
-                                neighborContribution(i3 - 1, j3, k3, false, sum, diag);
-                                neighborContribution(i3 + 1, j3, k3, false, sum, diag);
-                                neighborContribution(i3, j3 - 1, k3, false, sum, diag);
-                                neighborContribution(i3, j3 + 1, k3, params.openTop && (j3 + 1 >= ny), sum, diag);
-                                neighborContribution(i3, j3, k3 - 1, false, sum, diag);
-                                neighborContribution(i3, j3, k3 + 1, false, sum, diag);
-
-                                if (diag <= 0) {
-                                    pressure[(std::size_t)id] = 0.0f;
-                                    continue;
-                                }
-
-                                const float target = (sum + rhs[(std::size_t)id] * dx2) / (float)diag;
-                                pressure[(std::size_t)id] += rbgsOmega * (target - pressure[(std::size_t)id]);
-                            }
+                            pressure[(std::size_t)id] += rbgsOmega * (target - pressure[(std::size_t)id]);
                         }
                     }
                 }
@@ -1556,73 +1550,54 @@ void MACSmoke3D::project() {
 
     const float scale = dt / dx;
 
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i <= nx; ++i) {
-                const int id = idxU(i, j, k);
-                const bool leftSolid = (i - 1 >= 0) ? isSolidCell(i - 1, j, k) : true;
-                const bool rightSolid = (i < nx) ? isSolidCell(i, j, k) : true;
-                if (leftSolid || rightSolid) {
-                    u[(std::size_t)id] = 0.0f;
-                    continue;
+    parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int entryIndex = activeUFacesByK.offsets[(std::size_t)k];
+                 entryIndex < activeUFacesByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeUFacesByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int face = idxU(i, j, k);
+                const float pL = pressure[(std::size_t)idxCell(i - 1, j, k)];
+                const float pR = pressure[(std::size_t)idxCell(i, j, k)];
+                u[(std::size_t)face] -= scale * (pR - pL);
+            }
+
+            for (int entryIndex = activeVFacesByK.offsets[(std::size_t)k];
+                 entryIndex < activeVFacesByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeVFacesByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int face = idxV(i, j, k);
+                if (j == ny) {
+                    const float pB = pressure[(std::size_t)idxCell(i, ny - 1, k)];
+                    v[(std::size_t)face] += scale * pB;
+                } else {
+                    const float pB = pressure[(std::size_t)idxCell(i, j - 1, k)];
+                    const float pT = pressure[(std::size_t)idxCell(i, j, k)];
+                    v[(std::size_t)face] -= scale * (pT - pB);
                 }
-
-                const bool leftFluid = (i - 1 >= 0) ? isFluidCell(i - 1, j, k) : false;
-                const bool rightFluid = (i < nx) ? isFluidCell(i, j, k) : false;
-                if (!leftFluid && !rightFluid) continue;
-
-                const float pL = leftFluid ? pressure[(std::size_t)idxCell(i - 1, j, k)] : 0.0f;
-                const float pR = rightFluid ? pressure[(std::size_t)idxCell(i, j, k)] : 0.0f;
-                u[(std::size_t)id] -= scale * (pR - pL);
             }
         }
-    }
+    });
 
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j <= ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxV(i, j, k);
-                const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
-                const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
-                if (botSolid || topSolid) {
-                    v[(std::size_t)id] = 0.0f;
-                    continue;
-                }
-
-                const bool botFluid = (j - 1 >= 0) ? isFluidCell(i, j - 1, k) : false;
-                const bool topFluid = (j < ny) ? isFluidCell(i, j, k) : false;
-                if (!botFluid && !topFluid) continue;
-
-                const float pB = botFluid ? pressure[(std::size_t)idxCell(i, j - 1, k)] : 0.0f;
-                const float pT = topFluid ? pressure[(std::size_t)idxCell(i, j, k)] : 0.0f;
-                v[(std::size_t)id] -= scale * (pT - pB);
+    parallelForChunks(nz + 1, 2, [&](int kBegin, int kEnd) {
+        for (int k = kBegin; k < kEnd; ++k) {
+            for (int entryIndex = activeWFacesByK.offsets[(std::size_t)k];
+                 entryIndex < activeWFacesByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeWFacesByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int face = idxW(i, j, k);
+                const float pBk = pressure[(std::size_t)idxCell(i, j, k - 1)];
+                const float pFr = pressure[(std::size_t)idxCell(i, j, k)];
+                w[(std::size_t)face] -= scale * (pFr - pBk);
             }
         }
-    }
-
-    for (int k = 0; k <= nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int id = idxW(i, j, k);
-                const bool backSolid = (k - 1 >= 0) ? isSolidCell(i, j, k - 1) : true;
-                const bool frontSolid = (k < nz) ? isSolidCell(i, j, k) : true;
-                if (backSolid || frontSolid) {
-                    w[(std::size_t)id] = 0.0f;
-                    continue;
-                }
-
-                const bool backFluid = (k - 1 >= 0) ? isFluidCell(i, j, k - 1) : false;
-                const bool frontFluid = (k < nz) ? isFluidCell(i, j, k) : false;
-                if (!backFluid && !frontFluid) continue;
-
-                const float pBk = backFluid ? pressure[(std::size_t)idxCell(i, j, k - 1)] : 0.0f;
-                const float pFr = frontFluid ? pressure[(std::size_t)idxCell(i, j, k)] : 0.0f;
-                w[(std::size_t)id] -= scale * (pFr - pBk);
-            }
-        }
-    }
-
-    applyBoundary();
+    });
 }
 
 void MACSmoke3D::advectScalars() {

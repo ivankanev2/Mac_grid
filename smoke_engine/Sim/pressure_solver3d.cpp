@@ -118,12 +118,16 @@ void PressureSolver3D::rebuildOperator()
 
     m_diagW.assign((std::size_t)N, 0.0f);
     m_diagInv.assign((std::size_t)N, 0.0f);
+    m_fluidCells.clear();
+    m_fluidCells.reserve((std::size_t)N);
 
     for (int k = 0; k < nz; ++k) {
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
                 const int id = idx(i, j, k, nx, ny);
                 if (!m_fluid[(std::size_t)id]) continue;
+
+                m_fluidCells.push_back(id);
 
                 float diagW = 0.0f;
                 auto addFace = [&](int ni, int nj, int nk,
@@ -172,12 +176,33 @@ void PressureSolver3D::applyA(const std::vector<float>& x, std::vector<float>& A
     const int N = m_nx * m_ny * m_nz;
     if ((int)Ax.size() != N) Ax.resize((std::size_t)N);
 
-    for (int id = 0; id < N; ++id) {
-        if (!m_fluid[(std::size_t)id]) {
-            Ax[(std::size_t)id] = 0.0f;
-            continue;
-        }
+    const std::size_t fluidCount = m_fluidCells.size();
+    if (fluidCount == 0u) return;
 
+    const bool useMGStencil =
+        !mgDirty && mgBuiltValid && !mgLevels.empty() &&
+        mgLevels[0].nx == m_nx && mgLevels[0].ny == m_ny && mgLevels[0].nz == m_nz &&
+        mgLevels[0].stencils.size() == fluidCount;
+
+    if (useMGStencil) {
+        const MGLevel& L = mgLevels[0];
+        const MGCellStencil* const stencils = L.stencils.data();
+        const float invDx2 = L.invDx2;
+        for (std::size_t idxStencil = 0; idxStencil < fluidCount; ++idxStencil) {
+            const MGCellStencil& s = stencils[idxStencil];
+            const float sum =
+                s.wXm * x[(std::size_t)s.xm] +
+                s.wXp * x[(std::size_t)s.xp] +
+                s.wYm * x[(std::size_t)s.ym] +
+                s.wYp * x[(std::size_t)s.yp] +
+                s.wZm * x[(std::size_t)s.zm] +
+                s.wZp * x[(std::size_t)s.zp];
+            Ax[(std::size_t)s.cell] = (s.diagW * x[(std::size_t)s.cell] - sum) * invDx2;
+        }
+        return;
+    }
+
+    for (int id : m_fluidCells) {
         float sum = 0.0f;
         int n = m_xm[(std::size_t)id]; if (n >= 0) sum += m_wXm[(std::size_t)id] * x[(std::size_t)n];
         n = m_xp[(std::size_t)id];     if (n >= 0) sum += m_wXp[(std::size_t)id] * x[(std::size_t)n];
@@ -185,7 +210,6 @@ void PressureSolver3D::applyA(const std::vector<float>& x, std::vector<float>& A
         n = m_yp[(std::size_t)id];     if (n >= 0) sum += m_wYp[(std::size_t)id] * x[(std::size_t)n];
         n = m_zm[(std::size_t)id];     if (n >= 0) sum += m_wZm[(std::size_t)id] * x[(std::size_t)n];
         n = m_zp[(std::size_t)id];     if (n >= 0) sum += m_wZp[(std::size_t)id] * x[(std::size_t)n];
-
         Ax[(std::size_t)id] = (m_diagW[(std::size_t)id] * x[(std::size_t)id] - sum) * m_invDx2;
     }
 }
@@ -193,9 +217,7 @@ void PressureSolver3D::applyA(const std::vector<float>& x, std::vector<float>& A
 float PressureSolver3D::dotFluid(const std::vector<float>& a, const std::vector<float>& b) const
 {
     double s = 0.0;
-    const int N = m_nx * m_ny * m_nz;
-    for (int id = 0; id < N; ++id) {
-        if (!m_fluid[(std::size_t)id]) continue;
+    for (int id : m_fluidCells) {
         s += (double)a[(std::size_t)id] * (double)b[(std::size_t)id];
     }
     return (float)s;
@@ -204,9 +226,7 @@ float PressureSolver3D::dotFluid(const std::vector<float>& a, const std::vector<
 float PressureSolver3D::maxAbsFluid(const std::vector<float>& a) const
 {
     float m = 0.0f;
-    const int N = m_nx * m_ny * m_nz;
-    for (int id = 0; id < N; ++id) {
-        if (!m_fluid[(std::size_t)id]) continue;
+    for (int id : m_fluidCells) {
         const float v = std::fabs(a[(std::size_t)id]);
         if (!std::isfinite(v)) return std::numeric_limits<float>::infinity();
         m = std::max(m, v);
@@ -217,20 +237,16 @@ float PressureSolver3D::maxAbsFluid(const std::vector<float>& a) const
 void PressureSolver3D::removeMean(std::vector<float>& p) const
 {
     if (!m_removeMean) return;
+    if (m_fluidCells.empty()) return;
 
     double sum = 0.0;
-    int cnt = 0;
-    const int N = m_nx * m_ny * m_nz;
-    for (int id = 0; id < N; ++id) {
-        if (!m_fluid[(std::size_t)id]) continue;
+    for (int id : m_fluidCells) {
         sum += (double)p[(std::size_t)id];
-        ++cnt;
     }
-    if (cnt <= 0) return;
 
-    const float mean = (float)(sum / (double)cnt);
-    for (int id = 0; id < N; ++id) {
-        if (m_fluid[(std::size_t)id]) p[(std::size_t)id] -= mean;
+    const float mean = (float)(sum / (double)m_fluidCells.size());
+    for (int id : m_fluidCells) {
+        p[(std::size_t)id] -= mean;
     }
 }
 
@@ -255,6 +271,11 @@ int PressureSolver3D::solvePCG(std::vector<float>& p,
         return 0;
     }
 
+    if (m_fluidCells.empty()) {
+        m_lastIters = 0;
+        return 0;
+    }
+
     const float tolRhs = tolPredDiv / std::max(1e-8f, dtForPredDiv);
 
     const float bInf = maxAbsFluid(rhs);
@@ -265,12 +286,13 @@ int PressureSolver3D::solvePCG(std::vector<float>& p,
     }
 
     applyA(p, m_Ap);
-    for (int id = 0; id < N; ++id) m_r[(std::size_t)id] = rhs[(std::size_t)id] - m_Ap[(std::size_t)id];
+    for (int id : m_fluidCells) {
+        m_r[(std::size_t)id] = rhs[(std::size_t)id] - m_Ap[(std::size_t)id];
+        m_z[(std::size_t)id] = m_r[(std::size_t)id] * m_diagInv[(std::size_t)id];
+        m_d[(std::size_t)id] = m_z[(std::size_t)id];
+    }
 
     const float rInf0 = std::max(maxAbsFluid(m_r), 1e-30f);
-    for (int id = 0; id < N; ++id) m_z[(std::size_t)id] = m_r[(std::size_t)id] * m_diagInv[(std::size_t)id];
-    m_d = m_z;
-
     float deltaNew = dotFluid(m_r, m_z);
     if (!std::isfinite(deltaNew) || deltaNew <= 1e-30f) {
         removeMean(p);
@@ -289,8 +311,8 @@ int PressureSolver3D::solvePCG(std::vector<float>& p,
         if (!std::isfinite(dq) || std::fabs(dq) < 1e-30f) break;
 
         const float alpha = deltaNew / dq;
-        for (int id = 0; id < N; ++id) {
-            p[(std::size_t)id]   += alpha * m_d[(std::size_t)id];
+        for (int id : m_fluidCells) {
+            p[(std::size_t)id] += alpha * m_d[(std::size_t)id];
             m_r[(std::size_t)id] -= alpha * m_q[(std::size_t)id];
         }
 
@@ -299,14 +321,16 @@ int PressureSolver3D::solvePCG(std::vector<float>& p,
         if (rInf <= tolRhs) break;
         if (relTol > 0.0f && rInf <= relTol * rInf0) break;
 
-        for (int id = 0; id < N; ++id) m_z[(std::size_t)id] = m_r[(std::size_t)id] * m_diagInv[(std::size_t)id];
+        for (int id : m_fluidCells) {
+            m_z[(std::size_t)id] = m_r[(std::size_t)id] * m_diagInv[(std::size_t)id];
+        }
 
         const float deltaOld = deltaNew;
         deltaNew = dotFluid(m_r, m_z);
         if (!std::isfinite(deltaNew) || deltaNew <= 1e-30f) break;
 
         const float beta = deltaNew / (deltaOld + 1e-30f);
-        for (int id = 0; id < N; ++id) {
+        for (int id : m_fluidCells) {
             m_d[(std::size_t)id] = m_z[(std::size_t)id] + beta * m_d[(std::size_t)id];
         }
     }
@@ -955,7 +979,7 @@ void PressureSolver3D::solveMG(std::vector<float>& p,
         return;
     }
 
-    if (F.stencils.empty()) {
+    if (F.stencils.empty() || m_fluidCells.empty()) {
         std::fill(p.begin(), p.end(), 0.0f);
         m_lastIters = 0;
         return;
@@ -964,17 +988,7 @@ void PressureSolver3D::solveMG(std::vector<float>& p,
     const float tolRhs = tolPredDiv / std::max(1e-8f, dtForPredDiv);
     const float relTol = std::max(0.0f, mgRelativeTol);
 
-    auto maxAbsOnFluid = [&](const std::vector<float>& values) -> float {
-        float m = 0.0f;
-        for (const MGCellStencil& s : F.stencils) {
-            const float a = std::fabs(values[(std::size_t)s.cell]);
-            if (!std::isfinite(a)) return std::numeric_limits<float>::infinity();
-            m = std::max(m, a);
-        }
-        return m;
-    };
-
-    const float bInf = maxAbsOnFluid(rhs);
+    const float bInf = maxAbsFluid(rhs);
     if (!(bInf > 0.0f) || bInf <= tolRhs) {
         removeMean(p);
         m_lastIters = 0;
@@ -982,11 +996,11 @@ void PressureSolver3D::solveMG(std::vector<float>& p,
     }
 
     applyA(p, m_Ap);
-    for (int id = 0; id < N; ++id) {
+    for (int id : m_fluidCells) {
         m_r[(std::size_t)id] = rhs[(std::size_t)id] - m_Ap[(std::size_t)id];
     }
 
-    float rInf = maxAbsOnFluid(m_r);
+    float rInf = maxAbsFluid(m_r);
     if (!(rInf > 0.0f) || rInf <= tolRhs) {
         removeMean(p);
         m_lastIters = 0;
@@ -996,15 +1010,21 @@ void PressureSolver3D::solveMG(std::vector<float>& p,
     const float rInf0 = std::max(rInf, 1.0e-30f);
 
     auto applyPrecond = [&](const std::vector<float>& r, std::vector<float>& z) {
-        F.b = r;
-        std::fill(F.x.begin(), F.x.end(), 0.0f);
+        for (int id : m_fluidCells) {
+            F.b[(std::size_t)id] = r[(std::size_t)id];
+            F.x[(std::size_t)id] = 0.0f;
+        }
         mgVCycle(0);
-        z = F.x;
+        for (int id : m_fluidCells) {
+            z[(std::size_t)id] = F.x[(std::size_t)id];
+        }
         removeMean(z);
     };
 
     applyPrecond(m_r, m_z);
-    m_d = m_z;
+    for (int id : m_fluidCells) {
+        m_d[(std::size_t)id] = m_z[(std::size_t)id];
+    }
 
     float deltaNew = dotFluid(m_r, m_z);
     if (!std::isfinite(deltaNew) || deltaNew <= 1.0e-30f) {
@@ -1025,12 +1045,12 @@ void PressureSolver3D::solveMG(std::vector<float>& p,
         }
 
         const float alpha = deltaNew / dq;
-        for (int id = 0; id < N; ++id) {
+        for (int id : m_fluidCells) {
             p[(std::size_t)id] += alpha * m_d[(std::size_t)id];
             m_r[(std::size_t)id] -= alpha * m_q[(std::size_t)id];
         }
 
-        rInf = maxAbsOnFluid(m_r);
+        rInf = maxAbsFluid(m_r);
         if (!std::isfinite(rInf)) {
             fallbackPCG = true;
             break;
@@ -1047,7 +1067,7 @@ void PressureSolver3D::solveMG(std::vector<float>& p,
         }
 
         const float beta = deltaNew / (deltaOld + 1.0e-30f);
-        for (int id = 0; id < N; ++id) {
+        for (int id : m_fluidCells) {
             m_d[(std::size_t)id] = m_z[(std::size_t)id] + beta * m_d[(std::size_t)id];
         }
     }

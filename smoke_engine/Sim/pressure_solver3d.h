@@ -98,6 +98,7 @@ private:
     std::vector<float> m_wXm, m_wXp, m_wYm, m_wYp, m_wZm, m_wZp;
     std::vector<float> m_diagW;
     std::vector<float> m_diagInv;
+    std::vector<int> m_fluidCells;
 
     std::vector<float> m_r, m_z, m_d, m_q, m_Ap;
 
