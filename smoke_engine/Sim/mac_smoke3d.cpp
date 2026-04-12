@@ -5,6 +5,12 @@
 
 #include "chunk_worker_pool.h"
 
+#if defined(_MSC_VER)
+#define SMOKE_RESTRICT __restrict
+#else
+#define SMOKE_RESTRICT __restrict__
+#endif
+
 namespace {
 
 inline int clampi(int v, int lo, int hi) {
@@ -35,6 +41,268 @@ inline ChunkWorkerPool& smoke3DWorkerPool() {
 template <typename Fn>
 inline void parallelForChunks(int count, int minChunk, Fn&& fn) {
     smoke3DWorkerPool().parallelFor(count, minChunk, std::forward<Fn>(fn));
+}
+
+inline int fastFloorToInt(float x) {
+    const int i = (int)x;
+    return i - ((x < (float)i) ? 1 : 0);
+}
+
+inline float sampleCellCenteredGrid(const float* SMOKE_RESTRICT field,
+                                    int nx,
+                                    int ny,
+                                    int nz,
+                                    float gx,
+                                    float gy,
+                                    float gz) {
+    const float fx = gx - 0.5f;
+    const float fy = gy - 0.5f;
+    const float fz = gz - 0.5f;
+
+    const int i0 = clampi(fastFloorToInt(fx), 0, nx - 1);
+    const int j0 = clampi(fastFloorToInt(fy), 0, ny - 1);
+    const int k0 = clampi(fastFloorToInt(fz), 0, nz - 1);
+
+    const int i1 = std::min(i0 + 1, nx - 1);
+    const int j1 = std::min(j0 + 1, ny - 1);
+    const int k1 = std::min(k0 + 1, nz - 1);
+
+    const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
+    const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
+    const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
+
+    const int sliceStride = nx * ny;
+    const int row00 = j0 * nx + k0 * sliceStride;
+    const int row10 = j1 * nx + k0 * sliceStride;
+    const int row01 = j0 * nx + k1 * sliceStride;
+    const int row11 = j1 * nx + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
+}
+
+inline void sampleCellCenteredPairGrid(const float* SMOKE_RESTRICT field0,
+                                       const float* SMOKE_RESTRICT field1,
+                                       int nx,
+                                       int ny,
+                                       int nz,
+                                       float gx,
+                                       float gy,
+                                       float gz,
+                                       float& out0,
+                                       float& out1) {
+    const float fx = gx - 0.5f;
+    const float fy = gy - 0.5f;
+    const float fz = gz - 0.5f;
+
+    const int i0 = clampi(fastFloorToInt(fx), 0, nx - 1);
+    const int j0 = clampi(fastFloorToInt(fy), 0, ny - 1);
+    const int k0 = clampi(fastFloorToInt(fz), 0, nz - 1);
+
+    const int i1 = std::min(i0 + 1, nx - 1);
+    const int j1 = std::min(j0 + 1, ny - 1);
+    const int k1 = std::min(k0 + 1, nz - 1);
+
+    const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
+    const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
+    const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
+
+    const int sliceStride = nx * ny;
+    const int row00 = j0 * nx + k0 * sliceStride;
+    const int row10 = j1 * nx + k0 * sliceStride;
+    const int row01 = j0 * nx + k1 * sliceStride;
+    const int row11 = j1 * nx + k1 * sliceStride;
+
+    const float f0_00 = wx0 * field0[(std::size_t)(row00 + i0)] + wx1 * field0[(std::size_t)(row00 + i1)];
+    const float f0_10 = wx0 * field0[(std::size_t)(row10 + i0)] + wx1 * field0[(std::size_t)(row10 + i1)];
+    const float f0_01 = wx0 * field0[(std::size_t)(row01 + i0)] + wx1 * field0[(std::size_t)(row01 + i1)];
+    const float f0_11 = wx0 * field0[(std::size_t)(row11 + i0)] + wx1 * field0[(std::size_t)(row11 + i1)];
+
+    const float f1_00 = wx0 * field1[(std::size_t)(row00 + i0)] + wx1 * field1[(std::size_t)(row00 + i1)];
+    const float f1_10 = wx0 * field1[(std::size_t)(row10 + i0)] + wx1 * field1[(std::size_t)(row10 + i1)];
+    const float f1_01 = wx0 * field1[(std::size_t)(row01 + i0)] + wx1 * field1[(std::size_t)(row01 + i1)];
+    const float f1_11 = wx0 * field1[(std::size_t)(row11 + i0)] + wx1 * field1[(std::size_t)(row11 + i1)];
+
+    const float f0_y0 = wy0 * f0_00 + wy1 * f0_10;
+    const float f0_y1 = wy0 * f0_01 + wy1 * f0_11;
+    const float f1_y0 = wy0 * f1_00 + wy1 * f1_10;
+    const float f1_y1 = wy0 * f1_01 + wy1 * f1_11;
+
+    out0 = wz0 * f0_y0 + wz1 * f0_y1;
+    out1 = wz0 * f1_y0 + wz1 * f1_y1;
+}
+
+inline float sampleUGrid(const float* SMOKE_RESTRICT field,
+                         int nx,
+                         int ny,
+                         int nz,
+                         float gx,
+                         float gy,
+                         float gz) {
+    const float fx = gx;
+    const float fy = gy - 0.5f;
+    const float fz = gz - 0.5f;
+
+    const int i0 = clampi(fastFloorToInt(fx), 0, nx);
+    const int j0 = clampi(fastFloorToInt(fy), 0, ny - 1);
+    const int k0 = clampi(fastFloorToInt(fz), 0, nz - 1);
+
+    const int i1 = std::min(i0 + 1, nx);
+    const int j1 = std::min(j0 + 1, ny - 1);
+    const int k1 = std::min(k0 + 1, nz - 1);
+
+    const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
+    const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
+    const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
+
+    const int strideX = nx + 1;
+    const int sliceStride = strideX * ny;
+    const int row00 = j0 * strideX + k0 * sliceStride;
+    const int row10 = j1 * strideX + k0 * sliceStride;
+    const int row01 = j0 * strideX + k1 * sliceStride;
+    const int row11 = j1 * strideX + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
+}
+
+inline float sampleVGrid(const float* SMOKE_RESTRICT field,
+                         int nx,
+                         int ny,
+                         int nz,
+                         float gx,
+                         float gy,
+                         float gz) {
+    const float fx = gx - 0.5f;
+    const float fy = gy;
+    const float fz = gz - 0.5f;
+
+    const int i0 = clampi(fastFloorToInt(fx), 0, nx - 1);
+    const int j0 = clampi(fastFloorToInt(fy), 0, ny);
+    const int k0 = clampi(fastFloorToInt(fz), 0, nz - 1);
+
+    const int i1 = std::min(i0 + 1, nx - 1);
+    const int j1 = std::min(j0 + 1, ny);
+    const int k1 = std::min(k0 + 1, nz - 1);
+
+    const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
+    const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
+    const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
+
+    const int strideX = nx;
+    const int sliceStride = strideX * (ny + 1);
+    const int row00 = j0 * strideX + k0 * sliceStride;
+    const int row10 = j1 * strideX + k0 * sliceStride;
+    const int row01 = j0 * strideX + k1 * sliceStride;
+    const int row11 = j1 * strideX + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
+}
+
+inline float sampleWGrid(const float* SMOKE_RESTRICT field,
+                         int nx,
+                         int ny,
+                         int nz,
+                         float gx,
+                         float gy,
+                         float gz) {
+    const float fx = gx - 0.5f;
+    const float fy = gy - 0.5f;
+    const float fz = gz;
+
+    const int i0 = clampi(fastFloorToInt(fx), 0, nx - 1);
+    const int j0 = clampi(fastFloorToInt(fy), 0, ny - 1);
+    const int k0 = clampi(fastFloorToInt(fz), 0, nz);
+
+    const int i1 = std::min(i0 + 1, nx - 1);
+    const int j1 = std::min(j0 + 1, ny - 1);
+    const int k1 = std::min(k0 + 1, nz);
+
+    const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
+    const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
+    const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
+    const float wx0 = 1.0f - tx;
+    const float wx1 = tx;
+    const float wy0 = 1.0f - ty;
+    const float wy1 = ty;
+    const float wz0 = 1.0f - tz;
+    const float wz1 = tz;
+
+    const int strideX = nx;
+    const int sliceStride = strideX * ny;
+    const int row00 = j0 * strideX + k0 * sliceStride;
+    const int row10 = j1 * strideX + k0 * sliceStride;
+    const int row01 = j0 * strideX + k1 * sliceStride;
+    const int row11 = j1 * strideX + k1 * sliceStride;
+
+    const float c00 = wx0 * field[(std::size_t)(row00 + i0)] + wx1 * field[(std::size_t)(row00 + i1)];
+    const float c10 = wx0 * field[(std::size_t)(row10 + i0)] + wx1 * field[(std::size_t)(row10 + i1)];
+    const float c01 = wx0 * field[(std::size_t)(row01 + i0)] + wx1 * field[(std::size_t)(row01 + i1)];
+    const float c11 = wx0 * field[(std::size_t)(row11 + i0)] + wx1 * field[(std::size_t)(row11 + i1)];
+
+    const float c0 = wy0 * c00 + wy1 * c10;
+    const float c1 = wy0 * c01 + wy1 * c11;
+    return wz0 * c0 + wz1 * c1;
+}
+
+inline void velAtGrid(float gx,
+                      float gy,
+                      float gz,
+                      const float* SMOKE_RESTRICT fu,
+                      const float* SMOKE_RESTRICT fv,
+                      const float* SMOKE_RESTRICT fw,
+                      int nx,
+                      int ny,
+                      int nz,
+                      float& outU,
+                      float& outV,
+                      float& outW) {
+    outU = sampleUGrid(fu, nx, ny, nz, gx, gy, gz);
+    outV = sampleVGrid(fv, nx, ny, nz, gx, gy, gz);
+    outW = sampleWGrid(fw, nx, ny, nz, gx, gy, gz);
 }
 
 } // namespace
@@ -167,9 +435,90 @@ void MACSmoke3D::rebuildBorderSolids() {
         if (!solid[(std::size_t)id]) ++fluidCellCount;
     }
 
+    rebuildAdvectionWorklists();
+
     topologyDirty = false;
     pressureOperatorDirty = true;
     diffusionStencilDirty = true;
+}
+
+void MACSmoke3D::rebuildAdvectionWorklists() {
+    activeCellsByK.clear();
+    activeUFacesByK.clear();
+    activeVFacesByK.clear();
+    activeWFacesByK.clear();
+
+    const auto isFixedU = [&](int i, int j, int k) {
+        if (i == 0 || i == nx) return true;
+        return isSolidCell(i - 1, j, k) || isSolidCell(i, j, k);
+    };
+
+    const auto isFixedV = [&](int i, int j, int k) {
+        if (j == 0) return true;
+        if (j == ny) return !params.openTop;
+        return isSolidCell(i, j - 1, k) || isSolidCell(i, j, k);
+    };
+
+    const auto isFixedW = [&](int i, int j, int k) {
+        if (k == 0 || k == nz) return true;
+        return isSolidCell(i, j, k - 1) || isSolidCell(i, j, k);
+    };
+
+    activeCellsByK.offsets.assign((std::size_t)nz + 1u, 0);
+    activeCellsByK.entries.reserve((std::size_t)std::max(0, fluidCellCount));
+    for (int k = 0; k < nz; ++k) {
+        activeCellsByK.offsets[(std::size_t)k] = (int)activeCellsByK.entries.size();
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (!solid[(std::size_t)idxCell(i, j, k)]) {
+                    activeCellsByK.entries.push_back({i, j});
+                }
+            }
+        }
+    }
+    activeCellsByK.offsets[(std::size_t)nz] = (int)activeCellsByK.entries.size();
+
+    activeUFacesByK.offsets.assign((std::size_t)nz + 1u, 0);
+    activeUFacesByK.entries.reserve((std::size_t)std::max(0, (nx - 1) * ny * nz));
+    for (int k = 0; k < nz; ++k) {
+        activeUFacesByK.offsets[(std::size_t)k] = (int)activeUFacesByK.entries.size();
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                if (!isFixedU(i, j, k)) {
+                    activeUFacesByK.entries.push_back({i, j});
+                }
+            }
+        }
+    }
+    activeUFacesByK.offsets[(std::size_t)nz] = (int)activeUFacesByK.entries.size();
+
+    activeVFacesByK.offsets.assign((std::size_t)nz + 1u, 0);
+    activeVFacesByK.entries.reserve((std::size_t)std::max(0, nx * (ny - 1) * nz));
+    for (int k = 0; k < nz; ++k) {
+        activeVFacesByK.offsets[(std::size_t)k] = (int)activeVFacesByK.entries.size();
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (!isFixedV(i, j, k)) {
+                    activeVFacesByK.entries.push_back({i, j});
+                }
+            }
+        }
+    }
+    activeVFacesByK.offsets[(std::size_t)nz] = (int)activeVFacesByK.entries.size();
+
+    activeWFacesByK.offsets.assign((std::size_t)nz + 2u, 0);
+    activeWFacesByK.entries.reserve((std::size_t)std::max(0, nx * ny * (nz - 1)));
+    for (int k = 0; k <= nz; ++k) {
+        activeWFacesByK.offsets[(std::size_t)k] = (int)activeWFacesByK.entries.size();
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (!isFixedW(i, j, k)) {
+                    activeWFacesByK.entries.push_back({i, j});
+                }
+            }
+        }
+    }
+    activeWFacesByK.offsets[(std::size_t)nz + 1u] = (int)activeWFacesByK.entries.size();
 }
 
 void MACSmoke3D::rebuildDiffusionStencils() {
@@ -571,131 +920,135 @@ void MACSmoke3D::velAt(float x, float y, float z,
 }
 
 void MACSmoke3D::advectVelocity() {
-    u0 = u;
-    v0 = v;
-    w0 = w;
+    u0.swap(u);
+    v0.swap(v);
+    w0.swap(w);
 
-    const float domainX = nx * dx;
-    const float domainY = ny * dx;
-    const float domainZ = nz * dx;
+    const float* SMOKE_RESTRICT uSrc = u0.data();
+    const float* SMOKE_RESTRICT vSrc = v0.data();
+    const float* SMOKE_RESTRICT wSrc = w0.data();
+    float* SMOKE_RESTRICT uDst = u.data();
+    float* SMOKE_RESTRICT vDst = v.data();
+    float* SMOKE_RESTRICT wDst = w.data();
 
-    auto clampPos = [&](float& x, float& y, float& z) {
-        x = clampf(x, 0.0f, domainX);
-        y = clampf(y, 0.0f, domainY);
-        z = clampf(z, 0.0f, domainZ);
+    const float nxf = (float)nx;
+    const float nyf = (float)ny;
+    const float nzf = (float)nz;
+    const float dtOverDx = dt / dx;
+
+    auto clampVelPos = [&](float& gx, float& gy, float& gz) {
+        gx = clampf(gx, 0.0f, nxf);
+        gy = clampf(gy, 0.0f, nyf);
+        gz = clampf(gz, 0.0f, nzf);
     };
 
     parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
         for (int k = kBegin; k < kEnd; ++k) {
-            for (int j = 0; j < ny; ++j) {
-                for (int i = 0; i <= nx; ++i) {
-                    const int id = idxU(i, j, k);
-                    const bool leftSolid = (i - 1 >= 0) ? isSolidCell(i - 1, j, k) : true;
-                    const bool rightSolid = (i < nx) ? isSolidCell(i, j, k) : true;
-                    if (leftSolid || rightSolid) {
-                        uTmp[(std::size_t)id] = 0.0f;
-                        continue;
-                    }
+            const int rowStride = nx + 1;
+            for (int entryIndex = activeUFacesByK.offsets[(std::size_t)k];
+                 entryIndex < activeUFacesByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeUFacesByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int id = i + rowStride * (j + ny * k);
 
-                    float x = i * dx;
-                    float y = (j + 0.5f) * dx;
-                    float z = (k + 0.5f) * dx;
-                    float ux, uy, uz;
-                    velAt(x, y, z, u0, v0, w0, ux, uy, uz);
+                const float gx = (float)i;
+                const float gy = (float)j + 0.5f;
+                const float gz = (float)k + 0.5f;
 
-                    float midX = x - 0.5f * dt * ux;
-                    float midY = y - 0.5f * dt * uy;
-                    float midZ = z - 0.5f * dt * uz;
-                    clampPos(midX, midY, midZ);
+                float ux, uy, uz;
+                velAtGrid(gx, gy, gz, uSrc, vSrc, wSrc, nx, ny, nz, ux, uy, uz);
 
-                    float mx, my, mz;
-                    velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
+                float midX = gx - 0.5f * dtOverDx * ux;
+                float midY = gy - 0.5f * dtOverDx * uy;
+                float midZ = gz - 0.5f * dtOverDx * uz;
+                clampVelPos(midX, midY, midZ);
 
-                    float backX = x - dt * mx;
-                    float backY = y - dt * my;
-                    float backZ = z - dt * mz;
-                    clampPos(backX, backY, backZ);
-                    uTmp[(std::size_t)id] = sampleU(u0, backX, backY, backZ);
-                }
+                float mx, my, mz;
+                velAtGrid(midX, midY, midZ, uSrc, vSrc, wSrc, nx, ny, nz, mx, my, mz);
+
+                float backX = gx - dtOverDx * mx;
+                float backY = gy - dtOverDx * my;
+                float backZ = gz - dtOverDx * mz;
+                clampVelPos(backX, backY, backZ);
+
+                uDst[(std::size_t)id] = sampleUGrid(uSrc, nx, ny, nz, backX, backY, backZ);
             }
         }
     });
 
     parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
         for (int k = kBegin; k < kEnd; ++k) {
-            for (int j = 0; j <= ny; ++j) {
-                for (int i = 0; i < nx; ++i) {
-                    const int id = idxV(i, j, k);
-                    const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
-                    const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
-                    if (botSolid || topSolid) {
-                        vTmp[(std::size_t)id] = 0.0f;
-                        continue;
-                    }
+            const int rowStride = nx;
+            for (int entryIndex = activeVFacesByK.offsets[(std::size_t)k];
+                 entryIndex < activeVFacesByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeVFacesByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int id = i + rowStride * (j + (ny + 1) * k);
 
-                    float x = (i + 0.5f) * dx;
-                    float y = j * dx;
-                    float z = (k + 0.5f) * dx;
-                    float ux, uy, uz;
-                    velAt(x, y, z, u0, v0, w0, ux, uy, uz);
+                const float gx = (float)i + 0.5f;
+                const float gy = (float)j;
+                const float gz = (float)k + 0.5f;
 
-                    float midX = x - 0.5f * dt * ux;
-                    float midY = y - 0.5f * dt * uy;
-                    float midZ = z - 0.5f * dt * uz;
-                    clampPos(midX, midY, midZ);
+                float ux, uy, uz;
+                velAtGrid(gx, gy, gz, uSrc, vSrc, wSrc, nx, ny, nz, ux, uy, uz);
 
-                    float mx, my, mz;
-                    velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
+                float midX = gx - 0.5f * dtOverDx * ux;
+                float midY = gy - 0.5f * dtOverDx * uy;
+                float midZ = gz - 0.5f * dtOverDx * uz;
+                clampVelPos(midX, midY, midZ);
 
-                    float backX = x - dt * mx;
-                    float backY = y - dt * my;
-                    float backZ = z - dt * mz;
-                    clampPos(backX, backY, backZ);
-                    vTmp[(std::size_t)id] = sampleV(v0, backX, backY, backZ);
-                }
+                float mx, my, mz;
+                velAtGrid(midX, midY, midZ, uSrc, vSrc, wSrc, nx, ny, nz, mx, my, mz);
+
+                float backX = gx - dtOverDx * mx;
+                float backY = gy - dtOverDx * my;
+                float backZ = gz - dtOverDx * mz;
+                clampVelPos(backX, backY, backZ);
+
+                vDst[(std::size_t)id] = sampleVGrid(vSrc, nx, ny, nz, backX, backY, backZ);
             }
         }
     });
 
     parallelForChunks(nz + 1, 2, [&](int kBegin, int kEnd) {
         for (int k = kBegin; k < kEnd; ++k) {
-            for (int j = 0; j < ny; ++j) {
-                for (int i = 0; i < nx; ++i) {
-                    const int id = idxW(i, j, k);
-                    const bool backSolid = (k - 1 >= 0) ? isSolidCell(i, j, k - 1) : true;
-                    const bool frontSolid = (k < nz) ? isSolidCell(i, j, k) : true;
-                    if (backSolid || frontSolid) {
-                        wTmp[(std::size_t)id] = 0.0f;
-                        continue;
-                    }
+            const int rowStride = nx;
+            for (int entryIndex = activeWFacesByK.offsets[(std::size_t)k];
+                 entryIndex < activeWFacesByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeWFacesByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int id = i + rowStride * (j + ny * k);
 
-                    float x = (i + 0.5f) * dx;
-                    float y = (j + 0.5f) * dx;
-                    float z = k * dx;
-                    float ux, uy, uz;
-                    velAt(x, y, z, u0, v0, w0, ux, uy, uz);
+                const float gx = (float)i + 0.5f;
+                const float gy = (float)j + 0.5f;
+                const float gz = (float)k;
 
-                    float midX = x - 0.5f * dt * ux;
-                    float midY = y - 0.5f * dt * uy;
-                    float midZ = z - 0.5f * dt * uz;
-                    clampPos(midX, midY, midZ);
+                float ux, uy, uz;
+                velAtGrid(gx, gy, gz, uSrc, vSrc, wSrc, nx, ny, nz, ux, uy, uz);
 
-                    float mx, my, mz;
-                    velAt(midX, midY, midZ, u0, v0, w0, mx, my, mz);
+                float midX = gx - 0.5f * dtOverDx * ux;
+                float midY = gy - 0.5f * dtOverDx * uy;
+                float midZ = gz - 0.5f * dtOverDx * uz;
+                clampVelPos(midX, midY, midZ);
 
-                    float backX = x - dt * mx;
-                    float backY = y - dt * my;
-                    float backZ = z - dt * mz;
-                    clampPos(backX, backY, backZ);
-                    wTmp[(std::size_t)id] = sampleW(w0, backX, backY, backZ);
-                }
+                float mx, my, mz;
+                velAtGrid(midX, midY, midZ, uSrc, vSrc, wSrc, nx, ny, nz, mx, my, mz);
+
+                float backX = gx - dtOverDx * mx;
+                float backY = gy - dtOverDx * my;
+                float backZ = gz - dtOverDx * mz;
+                clampVelPos(backX, backY, backZ);
+
+                wDst[(std::size_t)id] = sampleWGrid(wSrc, nx, ny, nz, backX, backY, backZ);
             }
         }
     });
-
-    u.swap(uTmp);
-    v.swap(vTmp);
-    w.swap(wTmp);
 }
 
 void MACSmoke3D::addBuoyancy() {
@@ -703,27 +1056,22 @@ void MACSmoke3D::addBuoyancy() {
 
     parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
         for (int k = kBegin; k < kEnd; ++k) {
-            for (int j = 0; j <= ny; ++j) {
-                for (int i = 0; i < nx; ++i) {
-                    const int id = idxV(i, j, k);
-                    const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
-                    const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
-                    if (botSolid || topSolid) continue;
+            const int cellSliceBase = nx * ny * k;
+            const int vSliceBase = nx * (ny + 1) * k;
+            for (int entryIndex = activeVFacesByK.offsets[(std::size_t)k];
+                 entryIndex < activeVFacesByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeVFacesByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int id = vSliceBase + i + nx * j;
 
-                    float tAvg = 0.0f;
-                    int count = 0;
-                    if (j - 1 >= 0 && !isSolidCell(i, j - 1, k)) {
-                        tAvg += temp[(std::size_t)idxCell(i, j - 1, k)];
-                        count++;
-                    }
-                    if (j < ny && !isSolidCell(i, j, k)) {
-                        tAvg += temp[(std::size_t)idxCell(i, j, k)];
-                        count++;
-                    }
-                    if (count == 0) continue;
-                    tAvg /= (float)count;
-                    v[(std::size_t)id] += dt * params.gravity * (tAvg / T0) * params.buoyancyScale;
+                float tAvg = temp[(std::size_t)(cellSliceBase + i + nx * (j - 1))];
+                if (j < ny) {
+                    tAvg += temp[(std::size_t)(cellSliceBase + i + nx * j)];
+                    tAvg *= 0.5f;
                 }
+                v[(std::size_t)id] += dt * params.gravity * (tAvg / T0) * params.buoyancyScale;
             }
         }
     });
@@ -745,22 +1093,6 @@ void MACSmoke3D::diffuseVelocityImplicit() {
     if (diffusionStencilDirty) {
         rebuildDiffusionStencils();
     }
-
-    const auto isFixedU = [&](int i, int j, int k) {
-        if (i == 0 || i == nx) return true;
-        return isSolidCell(i - 1, j, k) || isSolidCell(i, j, k);
-    };
-
-    const auto isFixedV = [&](int i, int j, int k) {
-        if (j == 0) return true;
-        if (j == ny) return !params.openTop;
-        return isSolidCell(i, j - 1, k) || isSolidCell(i, j, k);
-    };
-
-    const auto isFixedW = [&](int i, int j, int k) {
-        if (k == 0 || k == nz) return true;
-        return isSolidCell(i, j, k - 1) || isSolidCell(i, j, k);
-    };
 
     auto enforceUBoundary = [&]() {
         for (int k = 0; k < nz; ++k) {
@@ -1294,99 +1626,76 @@ void MACSmoke3D::project() {
 }
 
 void MACSmoke3D::advectScalars() {
-    smoke0 = smoke;
-    temp0 = temp;
+    smoke0.swap(smoke);
+    temp0.swap(temp);
 
     const float keepSmoke = dissipationStep(params.smokeDissipation, dt);
     const float keepTemp = dissipationStep(params.tempDissipation, dt);
 
-    const float domainX = nx * dx;
-    const float domainY = ny * dx;
-    const float domainZ = nz * dx;
-    const float domainYSampleMax = domainY + (params.openTop ? dx : 0.0f);
-    const float invDx = 1.0f / dx;
-    const int sliceStride = nx * ny;
+    const float nxf = (float)nx;
+    const float nyf = (float)ny;
+    const float nzf = (float)nz;
+    const float sampleNyf = nyf + (params.openTop ? 1.0f : 0.0f);
+    const float dtOverDx = dt / dx;
+
+    const float* SMOKE_RESTRICT smokeSrc = smoke0.data();
+    const float* SMOKE_RESTRICT tempSrc = temp0.data();
+    const float* SMOKE_RESTRICT uSrc = u.data();
+    const float* SMOKE_RESTRICT vSrc = v.data();
+    const float* SMOKE_RESTRICT wSrc = w.data();
+    float* SMOKE_RESTRICT smokeDst = smoke.data();
+    float* SMOKE_RESTRICT tempDst = temp.data();
+
+    auto clampScalarPos = [&](float& gx, float& gy, float& gz) {
+        gx = clampf(gx, 0.0f, nxf);
+        gy = clampf(gy, 0.0f, sampleNyf);
+        gz = clampf(gz, 0.0f, nzf);
+    };
 
     parallelForChunks(nz, 2, [&](int kBegin, int kEnd) {
         for (int k = kBegin; k < kEnd; ++k) {
-            for (int j = 0; j < ny; ++j) {
-                for (int i = 0; i < nx; ++i) {
-                    const int id = idxCell(i, j, k);
-                    if (solid[(std::size_t)id]) {
-                        smoke[(std::size_t)id] = 0.0f;
-                        temp[(std::size_t)id] = 0.0f;
+            const int cellSliceBase = nx * ny * k;
+            for (int entryIndex = activeCellsByK.offsets[(std::size_t)k];
+                 entryIndex < activeCellsByK.offsets[(std::size_t)k + 1u];
+                 ++entryIndex) {
+                const auto& entry = activeCellsByK.entries[(std::size_t)entryIndex];
+                const int i = entry.i;
+                const int j = entry.j;
+                const int id = cellSliceBase + i + nx * j;
+
+                const float gx = (float)i + 0.5f;
+                const float gy = (float)j + 0.5f;
+                const float gz = (float)k + 0.5f;
+
+                float u1, v1, w1;
+                velAtGrid(gx, gy, gz, uSrc, vSrc, wSrc, nx, ny, nz, u1, v1, w1);
+                float midX = gx - 0.5f * dtOverDx * u1;
+                float midY = gy - 0.5f * dtOverDx * v1;
+                float midZ = gz - 0.5f * dtOverDx * w1;
+                clampScalarPos(midX, midY, midZ);
+
+                float u2, v2, w2;
+                velAtGrid(midX, midY, midZ, uSrc, vSrc, wSrc, nx, ny, nz, u2, v2, w2);
+                float backX = gx - dtOverDx * u2;
+                float backY = gy - dtOverDx * v2;
+                float backZ = gz - dtOverDx * w2;
+                clampScalarPos(backX, backY, backZ);
+
+                if (backY > nyf) {
+                    if (params.openTop) {
+                        smokeDst[(std::size_t)id] = 0.0f;
+                        tempDst[(std::size_t)id] = 0.0f;
                         continue;
                     }
-
-                    const float x = (i + 0.5f) * dx;
-                    const float y = (j + 0.5f) * dx;
-                    const float z = (k + 0.5f) * dx;
-
-                    float u1, v1, w1;
-                    velAt(x, y, z, u, v, w, u1, v1, w1);
-                    const float midX = clampf(x - 0.5f * dt * u1, 0.0f, domainX);
-                    const float midY = clampf(y - 0.5f * dt * v1, 0.0f, domainYSampleMax);
-                    const float midZ = clampf(z - 0.5f * dt * w1, 0.0f, domainZ);
-
-                    float u2, v2, w2;
-                    velAt(midX, midY, midZ, u, v, w, u2, v2, w2);
-                    const float backX = clampf(x - dt * u2, 0.0f, domainX);
-                    float backY = clampf(y - dt * v2, 0.0f, domainYSampleMax);
-                    const float backZ = clampf(z - dt * w2, 0.0f, domainZ);
-
-                    if (backY > domainY) {
-                        if (params.openTop) {
-                            smoke[(std::size_t)id] = 0.0f;
-                            temp[(std::size_t)id] = 0.0f;
-                            continue;
-                        }
-                        backY = domainY;
-                    }
-
-                    const float fx = backX * invDx - 0.5f;
-                    const float fy = backY * invDx - 0.5f;
-                    const float fz = backZ * invDx - 0.5f;
-
-                    const int i0 = clampi((int)std::floor(fx), 0, nx - 1);
-                    const int j0 = clampi((int)std::floor(fy), 0, ny - 1);
-                    const int k0 = clampi((int)std::floor(fz), 0, nz - 1);
-                    const int i1 = std::min(i0 + 1, nx - 1);
-                    const int j1 = std::min(j0 + 1, ny - 1);
-                    const int k1 = std::min(k0 + 1, nz - 1);
-
-                    const float tx = clampf(fx - (float)i0, 0.0f, 1.0f);
-                    const float ty = clampf(fy - (float)j0, 0.0f, 1.0f);
-                    const float tz = clampf(fz - (float)k0, 0.0f, 1.0f);
-                    const float wx0 = 1.0f - tx;
-                    const float wx1 = tx;
-                    const float wy0 = 1.0f - ty;
-                    const float wy1 = ty;
-                    const float wz0 = 1.0f - tz;
-                    const float wz1 = tz;
-
-                    const int row00 = j0 * nx + k0 * sliceStride;
-                    const int row10 = j1 * nx + k0 * sliceStride;
-                    const int row01 = j0 * nx + k1 * sliceStride;
-                    const int row11 = j1 * nx + k1 * sliceStride;
-
-                    const float s00 = wx0 * smoke0[(std::size_t)(row00 + i0)] + wx1 * smoke0[(std::size_t)(row00 + i1)];
-                    const float s10 = wx0 * smoke0[(std::size_t)(row10 + i0)] + wx1 * smoke0[(std::size_t)(row10 + i1)];
-                    const float s01 = wx0 * smoke0[(std::size_t)(row01 + i0)] + wx1 * smoke0[(std::size_t)(row01 + i1)];
-                    const float s11 = wx0 * smoke0[(std::size_t)(row11 + i0)] + wx1 * smoke0[(std::size_t)(row11 + i1)];
-
-                    const float t00 = wx0 * temp0[(std::size_t)(row00 + i0)] + wx1 * temp0[(std::size_t)(row00 + i1)];
-                    const float t10 = wx0 * temp0[(std::size_t)(row10 + i0)] + wx1 * temp0[(std::size_t)(row10 + i1)];
-                    const float t01 = wx0 * temp0[(std::size_t)(row01 + i0)] + wx1 * temp0[(std::size_t)(row01 + i1)];
-                    const float t11 = wx0 * temp0[(std::size_t)(row11 + i0)] + wx1 * temp0[(std::size_t)(row11 + i1)];
-
-                    const float smokeY0 = wy0 * s00 + wy1 * s10;
-                    const float smokeY1 = wy0 * s01 + wy1 * s11;
-                    const float tempY0 = wy0 * t00 + wy1 * t10;
-                    const float tempY1 = wy0 * t01 + wy1 * t11;
-
-                    smoke[(std::size_t)id] = keepSmoke * (wz0 * smokeY0 + wz1 * smokeY1);
-                    temp[(std::size_t)id] = keepTemp * (wz0 * tempY0 + wz1 * tempY1);
+                    backY = nyf;
                 }
+
+                float sampledSmoke = 0.0f;
+                float sampledTemp = 0.0f;
+                sampleCellCenteredPairGrid(smokeSrc, tempSrc, nx, ny, nz, backX, backY, backZ,
+                                           sampledSmoke, sampledTemp);
+                smokeDst[(std::size_t)id] = keepSmoke * sampledSmoke;
+                tempDst[(std::size_t)id] = keepTemp * sampledTemp;
             }
         }
     });
@@ -1511,6 +1820,10 @@ void MACSmoke3D::updateIdleStats(float stepMs) {
         (wDiffusionStencil.face.size() + wDiffusionStencil.xm.size() + wDiffusionStencil.xp.size() +
          wDiffusionStencil.ym.size() + wDiffusionStencil.yp.size() + wDiffusionStencil.zm.size() +
          wDiffusionStencil.zp.size()) * sizeof(int) + wDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (activeCellsByK.offsets.size() + activeUFacesByK.offsets.size() + activeVFacesByK.offsets.size() +
+         activeWFacesByK.offsets.size()) * sizeof(int) +
+        (activeCellsByK.entries.size() + activeUFacesByK.entries.size() + activeVFacesByK.entries.size() +
+         activeWFacesByK.entries.size()) * sizeof(SliceIJWorkList::Entry) +
         diffuseScratch0.size() * sizeof(float) + diffuseScratch1.size() * sizeof(float) +
         diffuseScratch2.size() * sizeof(float) + diffuseScratch3.size() * sizeof(float);
 }
@@ -1547,6 +1860,10 @@ void MACSmoke3D::updateStats(float stepMs) {
         (wDiffusionStencil.face.size() + wDiffusionStencil.xm.size() + wDiffusionStencil.xp.size() +
          wDiffusionStencil.ym.size() + wDiffusionStencil.yp.size() + wDiffusionStencil.zm.size() +
          wDiffusionStencil.zp.size()) * sizeof(int) + wDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (activeCellsByK.offsets.size() + activeUFacesByK.offsets.size() + activeVFacesByK.offsets.size() +
+         activeWFacesByK.offsets.size()) * sizeof(int) +
+        (activeCellsByK.entries.size() + activeUFacesByK.entries.size() + activeVFacesByK.entries.size() +
+         activeWFacesByK.entries.size()) * sizeof(SliceIJWorkList::Entry) +
         diffuseScratch0.size() * sizeof(float) + diffuseScratch1.size() * sizeof(float) +
         diffuseScratch2.size() * sizeof(float) + diffuseScratch3.size() * sizeof(float);
 

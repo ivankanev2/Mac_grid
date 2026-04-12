@@ -157,10 +157,32 @@ struct MACSmoke3D {
         std::size_t size() const { return face.size(); }
     };
 
+    struct SliceIJWorkList {
+        struct Entry {
+            int i = 0;
+            int j = 0;
+        };
+
+        std::vector<int> offsets;
+        std::vector<Entry> entries;
+
+        void clear() {
+            offsets.clear();
+            entries.clear();
+        }
+
+        std::size_t size() const { return entries.size(); }
+    };
+
     DiffusionStencilSet uDiffusionStencil;
     DiffusionStencilSet vDiffusionStencil;
     DiffusionStencilSet wDiffusionStencil;
     bool diffusionStencilDirty = true;
+
+    SliceIJWorkList activeCellsByK;
+    SliceIJWorkList activeUFacesByK;
+    SliceIJWorkList activeVFacesByK;
+    SliceIJWorkList activeWFacesByK;
 
     std::vector<float> diffuseScratch0;
     std::vector<float> diffuseScratch1;
@@ -204,6 +226,7 @@ protected:
     }
 
     void rebuildBorderSolids();
+    void rebuildAdvectionWorklists();
     void rebuildDiffusionStencils();
     void applyBoundary();
 
