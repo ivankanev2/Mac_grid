@@ -133,6 +133,40 @@ struct MACSmoke3D {
     float lastPressureSolveMs = 0.0f;
     int lastPressureIterations = 0;
 
+    struct DiffusionStencilSet {
+        std::vector<int> face;
+        std::vector<int> xm;
+        std::vector<int> xp;
+        std::vector<int> ym;
+        std::vector<int> yp;
+        std::vector<int> zm;
+        std::vector<int> zp;
+        std::vector<uint8_t> neighborCount;
+
+        void clear() {
+            face.clear();
+            xm.clear();
+            xp.clear();
+            ym.clear();
+            yp.clear();
+            zm.clear();
+            zp.clear();
+            neighborCount.clear();
+        }
+
+        std::size_t size() const { return face.size(); }
+    };
+
+    DiffusionStencilSet uDiffusionStencil;
+    DiffusionStencilSet vDiffusionStencil;
+    DiffusionStencilSet wDiffusionStencil;
+    bool diffusionStencilDirty = true;
+
+    std::vector<float> diffuseScratch0;
+    std::vector<float> diffuseScratch1;
+    std::vector<float> diffuseScratch2;
+    std::vector<float> diffuseScratch3;
+
     MACSmoke3D(int NX, int NY, int NZ, float DX, float DT);
 
     void reset();
@@ -170,6 +204,7 @@ protected:
     }
 
     void rebuildBorderSolids();
+    void rebuildDiffusionStencils();
     void applyBoundary();
 
     float sampleCellCentered(const std::vector<float>& field, float x, float y, float z) const;

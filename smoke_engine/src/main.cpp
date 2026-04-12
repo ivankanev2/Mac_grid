@@ -518,8 +518,9 @@ int main()
             robotoPath.empty() ? "external/imgui/misc/fonts/Roboto-Medium.ttf" : robotoPath.c_str(),
             g_textMaskW, g_textMaskH, 0.5f, 0.15f);
 
-        // Keep the viewport filling roughly the same screen area after a resize.
-        ui.viewScale = std::max(1.0f, std::min(12.0f, (256.0f * 5.0f) / float(NX)));
+        // Preserve the current zoom. Lower-resolution 2D grids now draw smaller
+        // instead of being auto-stretched to the old on-screen footprint.
+        ui.viewScale = std::clamp(ui.viewScale, 0.5f, 4.0f);
 
         activateWorkspace(activeWorkspace);
     };

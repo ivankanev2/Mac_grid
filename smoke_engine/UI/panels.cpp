@@ -439,7 +439,13 @@ static ImVec2 FitViewportImageSize(float sourceW, float sourceH, float zoom)
     const float safeH = std::max(96.0f, avail.y);
     const float baseW = std::max(1.0f, sourceW);
     const float baseH = std::max(1.0f, sourceH);
-    const float fitScale = std::min((safeW - 4.0f) / baseW, (safeH - 4.0f) / baseH);
+
+    // Keep sub-256 2D grids visually smaller instead of stretching them to fill
+    // the whole viewport. This makes resolution changes feel like a real lower-
+    // resolution workspace instead of a blown-up pixel preview.
+    const float nominalW = std::max(256.0f, baseW);
+    const float nominalH = std::max(256.0f, baseH);
+    const float fitScale = std::min((safeW - 4.0f) / nominalW, (safeH - 4.0f) / nominalH);
     const float scale = std::max(0.05f, fitScale * std::max(0.25f, zoom));
     return ImVec2(baseW * scale, baseH * scale);
 }

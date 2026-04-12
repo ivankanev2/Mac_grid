@@ -2,8 +2,8 @@
 
 #include <chrono>
 #include <cmath>
-#include <thread>
 
+#include "chunk_worker_pool.h"
 
 namespace {
 
@@ -27,30 +27,14 @@ inline float dissipationStep(float base, float dt) {
     return std::pow(b, dt / std::max(1e-6f, dtRef));
 }
 
+inline ChunkWorkerPool& smoke3DWorkerPool() {
+    static ChunkWorkerPool pool;
+    return pool;
+}
+
 template <typename Fn>
 inline void parallelForChunks(int count, int minChunk, Fn&& fn) {
-    if (count <= 0) return;
-
-    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    int taskCount = (int)std::min<unsigned>(hw, (unsigned)std::max(1, count / std::max(1, minChunk)));
-    if (taskCount <= 1) {
-        fn(0, count);
-        return;
-    }
-
-    const int chunk = (count + taskCount - 1) / taskCount;
-    std::vector<std::thread> workers;
-    workers.reserve((std::size_t)taskCount - 1u);
-
-    for (int task = 1; task < taskCount; ++task) {
-        const int begin = task * chunk;
-        if (begin >= count) break;
-        const int end = std::min(count, begin + chunk);
-        workers.emplace_back([&, begin, end]() { fn(begin, end); });
-    }
-
-    fn(0, std::min(count, chunk));
-    for (auto& worker : workers) worker.join();
+    smoke3DWorkerPool().parallelFor(count, minChunk, std::forward<Fn>(fn));
 }
 
 } // namespace
@@ -97,6 +81,14 @@ void MACSmoke3D::reset() {
     fluidCellCount = 0;
     topologyDirty = true;
     pressureOperatorDirty = true;
+    diffusionStencilDirty = true;
+    uDiffusionStencil.clear();
+    vDiffusionStencil.clear();
+    wDiffusionStencil.clear();
+    diffuseScratch0.clear();
+    diffuseScratch1.clear();
+    diffuseScratch2.clear();
+    diffuseScratch3.clear();
 
     rebuildBorderSolids();
     applyBoundary();
@@ -177,6 +169,128 @@ void MACSmoke3D::rebuildBorderSolids() {
 
     topologyDirty = false;
     pressureOperatorDirty = true;
+    diffusionStencilDirty = true;
+}
+
+void MACSmoke3D::rebuildDiffusionStencils() {
+    uDiffusionStencil.clear();
+    vDiffusionStencil.clear();
+    wDiffusionStencil.clear();
+
+    auto appendStencil = [](DiffusionStencilSet& set,
+                            int face,
+                            int xm,
+                            int xp,
+                            int ym,
+                            int yp,
+                            int zm,
+                            int zp,
+                            uint8_t neighborCount) {
+        set.face.push_back(face);
+        set.xm.push_back(xm);
+        set.xp.push_back(xp);
+        set.ym.push_back(ym);
+        set.yp.push_back(yp);
+        set.zm.push_back(zm);
+        set.zp.push_back(zp);
+        set.neighborCount.push_back(neighborCount);
+    };
+
+    auto isFixedU = [&](int i, int j, int k) {
+        if (i == 0 || i == nx) return true;
+        return isSolidCell(i - 1, j, k) || isSolidCell(i, j, k);
+    };
+
+    auto isFixedV = [&](int i, int j, int k) {
+        if (j == 0) return true;
+        if (j == ny) return !params.openTop;
+        return isSolidCell(i, j - 1, k) || isSolidCell(i, j, k);
+    };
+
+    auto isFixedW = [&](int i, int j, int k) {
+        if (k == 0 || k == nz) return true;
+        return isSolidCell(i, j, k - 1) || isSolidCell(i, j, k);
+    };
+
+    const std::size_t uReserve = ((std::size_t)(nx + 1) * (std::size_t)ny * (std::size_t)nz) / 2u + 1u;
+    uDiffusionStencil.face.reserve(uReserve);
+    uDiffusionStencil.xm.reserve(uReserve);
+    uDiffusionStencil.xp.reserve(uReserve);
+    uDiffusionStencil.ym.reserve(uReserve);
+    uDiffusionStencil.yp.reserve(uReserve);
+    uDiffusionStencil.zm.reserve(uReserve);
+    uDiffusionStencil.zp.reserve(uReserve);
+    uDiffusionStencil.neighborCount.reserve(uReserve);
+    for (int k = 0; k < nz; ++k) {
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                if (isFixedU(i, j, k)) continue;
+                uint8_t count = 0;
+                int xm = -1, xp = -1, ym = -1, yp = -1, zm = -1, zp = -1;
+                if (i > 0)      { ++count; if (!isFixedU(i - 1, j, k)) xm = idxU(i - 1, j, k); }
+                if (i < nx)     { ++count; if (!isFixedU(i + 1, j, k)) xp = idxU(i + 1, j, k); }
+                if (j > 0)      { ++count; if (!isFixedU(i, j - 1, k)) ym = idxU(i, j - 1, k); }
+                if (j + 1 < ny) { ++count; if (!isFixedU(i, j + 1, k)) yp = idxU(i, j + 1, k); }
+                if (k > 0)      { ++count; if (!isFixedU(i, j, k - 1)) zm = idxU(i, j, k - 1); }
+                if (k + 1 < nz) { ++count; if (!isFixedU(i, j, k + 1)) zp = idxU(i, j, k + 1); }
+                appendStencil(uDiffusionStencil, idxU(i, j, k), xm, xp, ym, yp, zm, zp, count);
+            }
+        }
+    }
+
+    const std::size_t vReserve = ((std::size_t)nx * (std::size_t)(ny + 1) * (std::size_t)nz) / 2u + 1u;
+    vDiffusionStencil.face.reserve(vReserve);
+    vDiffusionStencil.xm.reserve(vReserve);
+    vDiffusionStencil.xp.reserve(vReserve);
+    vDiffusionStencil.ym.reserve(vReserve);
+    vDiffusionStencil.yp.reserve(vReserve);
+    vDiffusionStencil.zm.reserve(vReserve);
+    vDiffusionStencil.zp.reserve(vReserve);
+    vDiffusionStencil.neighborCount.reserve(vReserve);
+    for (int k = 0; k < nz; ++k) {
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (isFixedV(i, j, k)) continue;
+                uint8_t count = 0;
+                int xm = -1, xp = -1, ym = -1, yp = -1, zm = -1, zp = -1;
+                if (i > 0)      { ++count; if (!isFixedV(i - 1, j, k)) xm = idxV(i - 1, j, k); }
+                if (i + 1 < nx) { ++count; if (!isFixedV(i + 1, j, k)) xp = idxV(i + 1, j, k); }
+                if (j > 0)      { ++count; if (!isFixedV(i, j - 1, k)) ym = idxV(i, j - 1, k); }
+                if (j < ny)     { ++count; if (!isFixedV(i, j + 1, k)) yp = idxV(i, j + 1, k); }
+                if (k > 0)      { ++count; if (!isFixedV(i, j, k - 1)) zm = idxV(i, j, k - 1); }
+                if (k + 1 < nz) { ++count; if (!isFixedV(i, j, k + 1)) zp = idxV(i, j, k + 1); }
+                appendStencil(vDiffusionStencil, idxV(i, j, k), xm, xp, ym, yp, zm, zp, count);
+            }
+        }
+    }
+
+    const std::size_t wReserve = ((std::size_t)nx * (std::size_t)ny * (std::size_t)(nz + 1)) / 2u + 1u;
+    wDiffusionStencil.face.reserve(wReserve);
+    wDiffusionStencil.xm.reserve(wReserve);
+    wDiffusionStencil.xp.reserve(wReserve);
+    wDiffusionStencil.ym.reserve(wReserve);
+    wDiffusionStencil.yp.reserve(wReserve);
+    wDiffusionStencil.zm.reserve(wReserve);
+    wDiffusionStencil.zp.reserve(wReserve);
+    wDiffusionStencil.neighborCount.reserve(wReserve);
+    for (int k = 0; k <= nz; ++k) {
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                if (isFixedW(i, j, k)) continue;
+                uint8_t count = 0;
+                int xm = -1, xp = -1, ym = -1, yp = -1, zm = -1, zp = -1;
+                if (i > 0)      { ++count; if (!isFixedW(i - 1, j, k)) xm = idxW(i - 1, j, k); }
+                if (i + 1 < nx) { ++count; if (!isFixedW(i + 1, j, k)) xp = idxW(i + 1, j, k); }
+                if (j > 0)      { ++count; if (!isFixedW(i, j - 1, k)) ym = idxW(i, j - 1, k); }
+                if (j + 1 < ny) { ++count; if (!isFixedW(i, j + 1, k)) yp = idxW(i, j + 1, k); }
+                if (k > 0)      { ++count; if (!isFixedW(i, j, k - 1)) zm = idxW(i, j, k - 1); }
+                if (k < nz)     { ++count; if (!isFixedW(i, j, k + 1)) zp = idxW(i, j, k + 1); }
+                appendStencil(wDiffusionStencil, idxW(i, j, k), xm, xp, ym, yp, zm, zp, count);
+            }
+        }
+    }
+
+    diffusionStencilDirty = false;
 }
 
 void MACSmoke3D::applyBoundary() {
@@ -628,9 +742,9 @@ void MACSmoke3D::diffuseVelocityImplicit() {
     const float alphaInvDx2 = (params.viscosity * dt) / (dx * dx);
     if (alphaInvDx2 <= 0.0f) return;
 
-    const auto jacobiUpdate = [&](float b, float sumN, int count) {
-        return (b + alphaInvDx2 * sumN) / (1.0f + alphaInvDx2 * (float)count);
-    };
+    if (diffusionStencilDirty) {
+        rebuildDiffusionStencils();
+    }
 
     const auto isFixedU = [&](int i, int j, int k) {
         if (i == 0 || i == nx) return true;
@@ -648,99 +762,196 @@ void MACSmoke3D::diffuseVelocityImplicit() {
         return isSolidCell(i, j, k - 1) || isSolidCell(i, j, k);
     };
 
-    const std::vector<float> bU = u;
-    const std::vector<float> bV = v;
-    const std::vector<float> bW = w;
-
-    for (int it = 0; it < params.diffuseIters; ++it) {
+    auto enforceUBoundary = [&]() {
         for (int k = 0; k < nz; ++k) {
             for (int j = 0; j < ny; ++j) {
-                for (int i = 0; i <= nx; ++i) {
-                    const int id = idxU(i, j, k);
-                    if (isFixedU(i, j, k)) {
-                        uTmp[(std::size_t)id] = u[(std::size_t)id];
-                        continue;
+                u[(std::size_t)idxU(0, j, k)] = 0.0f;
+                u[(std::size_t)idxU(nx, j, k)] = 0.0f;
+                for (int i = 1; i < nx; ++i) {
+                    if (isSolidCell(i - 1, j, k) || isSolidCell(i, j, k)) {
+                        u[(std::size_t)idxU(i, j, k)] = 0.0f;
                     }
-
-                    float sumN = 0.0f;
-                    int count = 0;
-                    if (i > 0) { sumN += u[(std::size_t)idxU(i - 1, j, k)]; count++; }
-                    if (i < nx) { sumN += u[(std::size_t)idxU(i + 1, j, k)]; count++; }
-                    if (j > 0) { sumN += u[(std::size_t)idxU(i, j - 1, k)]; count++; }
-                    if (j + 1 < ny) { sumN += u[(std::size_t)idxU(i, j + 1, k)]; count++; }
-                    if (k > 0) { sumN += u[(std::size_t)idxU(i, j, k - 1)]; count++; }
-                    if (k + 1 < nz) { sumN += u[(std::size_t)idxU(i, j, k + 1)]; count++; }
-
-                    const float xNew = jacobiUpdate(bU[(std::size_t)id], sumN, count);
-                    uTmp[(std::size_t)id] =
-                        (1.0f - params.diffuseOmega) * u[(std::size_t)id] +
-                        params.diffuseOmega * xNew;
                 }
             }
         }
-        u.swap(uTmp);
-        applyBoundary();
-    }
+    };
 
-    for (int it = 0; it < params.diffuseIters; ++it) {
+    auto enforceVBoundary = [&]() {
         for (int k = 0; k < nz; ++k) {
-            for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                v[(std::size_t)idxV(i, 0, k)] = 0.0f;
+                if (!params.openTop) {
+                    v[(std::size_t)idxV(i, ny, k)] = 0.0f;
+                }
+            }
+
+            for (int j = 1; j < ny; ++j) {
                 for (int i = 0; i < nx; ++i) {
-                    const int id = idxV(i, j, k);
-                    if (isFixedV(i, j, k)) {
-                        vTmp[(std::size_t)id] = v[(std::size_t)id];
-                        continue;
+                    if (isSolidCell(i, j - 1, k) || isSolidCell(i, j, k)) {
+                        v[(std::size_t)idxV(i, j, k)] = 0.0f;
                     }
+                }
+            }
 
-                    float sumN = 0.0f;
-                    int count = 0;
-                    if (i > 0) { sumN += v[(std::size_t)idxV(i - 1, j, k)]; count++; }
-                    if (i + 1 < nx) { sumN += v[(std::size_t)idxV(i + 1, j, k)]; count++; }
-                    if (j > 0) { sumN += v[(std::size_t)idxV(i, j - 1, k)]; count++; }
-                    if (j < ny) { sumN += v[(std::size_t)idxV(i, j + 1, k)]; count++; }
-                    if (k > 0) { sumN += v[(std::size_t)idxV(i, j, k - 1)]; count++; }
-                    if (k + 1 < nz) { sumN += v[(std::size_t)idxV(i, j, k + 1)]; count++; }
-
-                    const float xNew = jacobiUpdate(bV[(std::size_t)id], sumN, count);
-                    vTmp[(std::size_t)id] =
-                        (1.0f - params.diffuseOmega) * v[(std::size_t)id] +
-                        params.diffuseOmega * xNew;
+            if (params.openTop) {
+                for (int i = 0; i < nx; ++i) {
+                    if (isSolidCell(i, ny - 1, k)) {
+                        v[(std::size_t)idxV(i, ny, k)] = 0.0f;
+                    }
                 }
             }
         }
-        v.swap(vTmp);
-        applyBoundary();
-    }
+    };
 
-    for (int it = 0; it < params.diffuseIters; ++it) {
+    auto enforceWBoundary = [&]() {
         for (int k = 0; k <= nz; ++k) {
             for (int j = 0; j < ny; ++j) {
                 for (int i = 0; i < nx; ++i) {
-                    const int id = idxW(i, j, k);
-                    if (isFixedW(i, j, k)) {
-                        wTmp[(std::size_t)id] = w[(std::size_t)id];
+                    if (k == 0 || k == nz) {
+                        w[(std::size_t)idxW(i, j, k)] = 0.0f;
                         continue;
                     }
-
-                    float sumN = 0.0f;
-                    int count = 0;
-                    if (i > 0) { sumN += w[(std::size_t)idxW(i - 1, j, k)]; count++; }
-                    if (i + 1 < nx) { sumN += w[(std::size_t)idxW(i + 1, j, k)]; count++; }
-                    if (j > 0) { sumN += w[(std::size_t)idxW(i, j - 1, k)]; count++; }
-                    if (j + 1 < ny) { sumN += w[(std::size_t)idxW(i, j + 1, k)]; count++; }
-                    if (k > 0) { sumN += w[(std::size_t)idxW(i, j, k - 1)]; count++; }
-                    if (k < nz) { sumN += w[(std::size_t)idxW(i, j, k + 1)]; count++; }
-
-                    const float xNew = jacobiUpdate(bW[(std::size_t)id], sumN, count);
-                    wTmp[(std::size_t)id] =
-                        (1.0f - params.diffuseOmega) * w[(std::size_t)id] +
-                        params.diffuseOmega * xNew;
+                    if (isSolidCell(i, j, k - 1) || isSolidCell(i, j, k)) {
+                        w[(std::size_t)idxW(i, j, k)] = 0.0f;
+                    }
                 }
             }
         }
-        w.swap(wTmp);
-        applyBoundary();
-    }
+    };
+
+    enforceUBoundary();
+    enforceVBoundary();
+    enforceWBoundary();
+
+    // Freeze the RHS without per-step heap churn.
+    u0 = u;
+    v0 = v;
+    w0 = w;
+
+    auto ensureScratch = [&](std::size_t count) {
+        if (diffuseScratch0.size() != count) diffuseScratch0.resize(count, 0.0f);
+        if (diffuseScratch1.size() != count) diffuseScratch1.resize(count, 0.0f);
+        if (diffuseScratch2.size() != count) diffuseScratch2.resize(count, 0.0f);
+        if (diffuseScratch3.size() != count) diffuseScratch3.resize(count, 0.0f);
+    };
+
+    auto solveComponent = [&](std::vector<float>& x,
+                              const std::vector<float>& b,
+                              const DiffusionStencilSet& stencilSet) {
+        if (stencilSet.size() == 0u) return;
+
+        ensureScratch(x.size());
+        std::vector<float>& r = diffuseScratch0;
+        std::vector<float>& z = diffuseScratch1;
+        std::vector<float>& p = diffuseScratch2;
+        std::vector<float>& q = diffuseScratch3;
+
+        auto applyA = [&](const std::vector<float>& in, std::vector<float>& out) {
+            for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
+                float sumN = 0.0f;
+                int n = stencilSet.xm[idx]; if (n >= 0) sumN += in[(std::size_t)n];
+                n = stencilSet.xp[idx];     if (n >= 0) sumN += in[(std::size_t)n];
+                n = stencilSet.ym[idx];     if (n >= 0) sumN += in[(std::size_t)n];
+                n = stencilSet.yp[idx];     if (n >= 0) sumN += in[(std::size_t)n];
+                n = stencilSet.zm[idx];     if (n >= 0) sumN += in[(std::size_t)n];
+                n = stencilSet.zp[idx];     if (n >= 0) sumN += in[(std::size_t)n];
+                const int face = stencilSet.face[idx];
+                const float diag = 1.0f + alphaInvDx2 * (float)stencilSet.neighborCount[idx];
+                out[(std::size_t)face] = diag * in[(std::size_t)face] - alphaInvDx2 * sumN;
+            }
+        };
+
+        auto dotActive = [&](const std::vector<float>& a, const std::vector<float>& bvec) {
+            double sum = 0.0;
+            for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
+                const int face = stencilSet.face[idx];
+                sum += (double)a[(std::size_t)face] * (double)bvec[(std::size_t)face];
+            }
+            return (float)sum;
+        };
+
+        auto maxAbsActive = [&](const std::vector<float>& a) {
+            float m = 0.0f;
+            for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
+                const int face = stencilSet.face[idx];
+                m = std::max(m, std::fabs(a[(std::size_t)face]));
+            }
+            return m;
+        };
+
+        applyA(x, q);
+
+        float bInf = 0.0f;
+        float rInf = 0.0f;
+        for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
+            const int face = stencilSet.face[idx];
+            const float diag = 1.0f + alphaInvDx2 * (float)stencilSet.neighborCount[idx];
+            r[(std::size_t)face] = b[(std::size_t)face] - q[(std::size_t)face];
+            z[(std::size_t)face] = r[(std::size_t)face] / diag;
+            p[(std::size_t)face] = z[(std::size_t)face];
+            bInf = std::max(bInf, std::fabs(b[(std::size_t)face]));
+            rInf = std::max(rInf, std::fabs(r[(std::size_t)face]));
+        }
+
+        const float absTol = std::max(1.0e-6f, 1.0e-6f * std::max(1.0f, bInf));
+        const float relTol = std::max(1.0e-6f, 1.0e-4f * std::max(rInf, 1.0e-6f));
+        if (rInf <= std::max(absTol, relTol)) {
+            return;
+        }
+
+        float deltaNew = dotActive(r, z);
+        if (!std::isfinite(deltaNew) || deltaNew <= 1.0e-20f) {
+            return;
+        }
+
+        const int maxIters = std::max(1, params.diffuseIters);
+        for (int it = 0; it < maxIters; ++it) {
+            applyA(p, q);
+            const float denom = dotActive(p, q);
+            if (!std::isfinite(denom) || std::fabs(denom) < 1.0e-20f) {
+                break;
+            }
+
+            const float alpha = deltaNew / denom;
+            for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
+                const int face = stencilSet.face[idx];
+                x[(std::size_t)face] += alpha * p[(std::size_t)face];
+                r[(std::size_t)face] -= alpha * q[(std::size_t)face];
+            }
+
+            rInf = maxAbsActive(r);
+            if (!std::isfinite(rInf) || rInf <= std::max(absTol, relTol)) {
+                break;
+            }
+
+            for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
+                const int face = stencilSet.face[idx];
+                const float diag = 1.0f + alphaInvDx2 * (float)stencilSet.neighborCount[idx];
+                z[(std::size_t)face] = r[(std::size_t)face] / diag;
+            }
+
+            const float deltaOld = deltaNew;
+            deltaNew = dotActive(r, z);
+            if (!std::isfinite(deltaNew) || deltaNew <= 1.0e-20f) {
+                break;
+            }
+
+            const float beta = deltaNew / (deltaOld + 1.0e-20f);
+            for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
+                const int face = stencilSet.face[idx];
+                p[(std::size_t)face] = z[(std::size_t)face] + beta * p[(std::size_t)face];
+            }
+        }
+    };
+
+    solveComponent(u, u0, uDiffusionStencil);
+    enforceUBoundary();
+
+    solveComponent(v, v0, vDiffusionStencil);
+    enforceVBoundary();
+
+    solveComponent(w, w0, wDiffusionStencil);
+    enforceWBoundary();
 }
 
 void MACSmoke3D::diffuseScalarImplicit(std::vector<float>& phi,
@@ -1290,7 +1501,18 @@ void MACSmoke3D::updateIdleStats(float stepMs) {
         smoke.size() * sizeof(float) + smoke0.size() * sizeof(float) +
         temp.size() * sizeof(float) + temp0.size() * sizeof(float) +
         cellTmp.size() * sizeof(float) + divergence.size() * sizeof(float) + speed.size() * sizeof(float) +
-        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t) + fluidMask.size() * sizeof(uint8_t);
+        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t) + fluidMask.size() * sizeof(uint8_t) +
+        (uDiffusionStencil.face.size() + uDiffusionStencil.xm.size() + uDiffusionStencil.xp.size() +
+         uDiffusionStencil.ym.size() + uDiffusionStencil.yp.size() + uDiffusionStencil.zm.size() +
+         uDiffusionStencil.zp.size()) * sizeof(int) + uDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (vDiffusionStencil.face.size() + vDiffusionStencil.xm.size() + vDiffusionStencil.xp.size() +
+         vDiffusionStencil.ym.size() + vDiffusionStencil.yp.size() + vDiffusionStencil.zm.size() +
+         vDiffusionStencil.zp.size()) * sizeof(int) + vDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (wDiffusionStencil.face.size() + wDiffusionStencil.xm.size() + wDiffusionStencil.xp.size() +
+         wDiffusionStencil.ym.size() + wDiffusionStencil.yp.size() + wDiffusionStencil.zm.size() +
+         wDiffusionStencil.zp.size()) * sizeof(int) + wDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        diffuseScratch0.size() * sizeof(float) + diffuseScratch1.size() * sizeof(float) +
+        diffuseScratch2.size() * sizeof(float) + diffuseScratch3.size() * sizeof(float);
 }
 
 void MACSmoke3D::updateStats(float stepMs) {
@@ -1315,7 +1537,18 @@ void MACSmoke3D::updateStats(float stepMs) {
         smoke.size() * sizeof(float) + smoke0.size() * sizeof(float) +
         temp.size() * sizeof(float) + temp0.size() * sizeof(float) +
         cellTmp.size() * sizeof(float) + divergence.size() * sizeof(float) + speed.size() * sizeof(float) +
-        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t) + fluidMask.size() * sizeof(uint8_t);
+        solid.size() * sizeof(uint8_t) + solidUser.size() * sizeof(uint8_t) + fluidMask.size() * sizeof(uint8_t) +
+        (uDiffusionStencil.face.size() + uDiffusionStencil.xm.size() + uDiffusionStencil.xp.size() +
+         uDiffusionStencil.ym.size() + uDiffusionStencil.yp.size() + uDiffusionStencil.zm.size() +
+         uDiffusionStencil.zp.size()) * sizeof(int) + uDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (vDiffusionStencil.face.size() + vDiffusionStencil.xm.size() + vDiffusionStencil.xp.size() +
+         vDiffusionStencil.ym.size() + vDiffusionStencil.yp.size() + vDiffusionStencil.zm.size() +
+         vDiffusionStencil.zp.size()) * sizeof(int) + vDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (wDiffusionStencil.face.size() + wDiffusionStencil.xm.size() + wDiffusionStencil.xp.size() +
+         wDiffusionStencil.ym.size() + wDiffusionStencil.yp.size() + wDiffusionStencil.zm.size() +
+         wDiffusionStencil.zp.size()) * sizeof(int) + wDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        diffuseScratch0.size() * sizeof(float) + diffuseScratch1.size() * sizeof(float) +
+        diffuseScratch2.size() * sizeof(float) + diffuseScratch3.size() * sizeof(float);
 
     for (float value : u) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
     for (float value : v) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
