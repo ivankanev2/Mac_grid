@@ -184,10 +184,23 @@ struct MACSmoke3D {
     SliceIJWorkList activeVFacesByK;
     SliceIJWorkList activeWFacesByK;
 
-    std::vector<float> diffuseScratch0;
-    std::vector<float> diffuseScratch1;
-    std::vector<float> diffuseScratch2;
-    std::vector<float> diffuseScratch3;
+    struct DiffusionScratchSet {
+        std::vector<float> r;
+        std::vector<float> z;
+        std::vector<float> p;
+        std::vector<float> q;
+
+        void ensureSize(std::size_t count) {
+            if (r.size() != count) r.resize(count, 0.0f);
+            if (z.size() != count) z.resize(count, 0.0f);
+            if (p.size() != count) p.resize(count, 0.0f);
+            if (q.size() != count) q.resize(count, 0.0f);
+        }
+    };
+
+    DiffusionScratchSet uDiffusionScratch;
+    DiffusionScratchSet vDiffusionScratch;
+    DiffusionScratchSet wDiffusionScratch;
 
     MACSmoke3D(int NX, int NY, int NZ, float DX, float DT);
 

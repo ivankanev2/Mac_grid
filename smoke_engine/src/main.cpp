@@ -6,6 +6,12 @@
 #include <vector>
 #include <filesystem>
 #include <string>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <ctime>
+#include <cstring>
+#include <functional>
 
 #include "UI/panels.h"
 
@@ -333,6 +339,455 @@ static VolumeRenderTargetSize computeVolumeRenderTargetSize(GLFWwindow* win,
     return VolumeRenderTargetSize{targetW, targetH};
 }
 
+
+struct OfflineFitRect {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+struct OfflineFrameImage {
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> rgba;
+};
+
+static std::array<uint8_t, 4> themeCanvasColor(int themeMode) {
+    if (themeMode == kThemeLight) {
+        return {242u, 241u, 239u, 255u};
+    }
+    return {14u, 17u, 20u, 255u};
+}
+
+static std::vector<uint8_t> makeSolidCanvasRGBA(int width,
+                                                int height,
+                                                uint8_t r,
+                                                uint8_t g,
+                                                uint8_t b,
+                                                uint8_t a = 255)
+{
+    std::vector<uint8_t> out((std::size_t)std::max(0, width) * (std::size_t)std::max(0, height) * 4u, 0u);
+    for (std::size_t i = 0; i + 3 < out.size(); i += 4u) {
+        out[i + 0] = r;
+        out[i + 1] = g;
+        out[i + 2] = b;
+        out[i + 3] = a;
+    }
+    return out;
+}
+
+static void alphaCompositeOverOpaque(std::vector<uint8_t>& dst,
+                                     const std::vector<uint8_t>& src,
+                                     float globalAlpha = 1.0f)
+{
+    if (dst.size() != src.size()) return;
+    const float alphaScale = std::clamp(globalAlpha, 0.0f, 1.0f);
+    const std::size_t count = dst.size() / 4u;
+    for (std::size_t px = 0; px < count; ++px) {
+        const std::size_t idx = px * 4u;
+        const float sa = (src[idx + 3] / 255.0f) * alphaScale;
+        if (sa <= 1.0e-6f) continue;
+        const float inv = 1.0f - sa;
+        dst[idx + 0] = (uint8_t)std::lround(std::clamp(src[idx + 0] * sa + dst[idx + 0] * inv, 0.0f, 255.0f));
+        dst[idx + 1] = (uint8_t)std::lround(std::clamp(src[idx + 1] * sa + dst[idx + 1] * inv, 0.0f, 255.0f));
+        dst[idx + 2] = (uint8_t)std::lround(std::clamp(src[idx + 2] * sa + dst[idx + 2] * inv, 0.0f, 255.0f));
+        dst[idx + 3] = 255;
+    }
+}
+
+static bool readTextureRGBA(unsigned int texture,
+                            int width,
+                            int height,
+                            std::vector<uint8_t>& out)
+{
+    if (texture == 0u || width <= 0 || height <= 0) return false;
+    out.resize((std::size_t)width * (std::size_t)height * 4u);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, out.data());
+    return glGetError() == GL_NO_ERROR;
+}
+
+static OfflineFitRect computeAspectFitRect(int srcWidth,
+                                           int srcHeight,
+                                           int dstWidth,
+                                           int dstHeight)
+{
+    OfflineFitRect rect;
+    if (srcWidth <= 0 || srcHeight <= 0 || dstWidth <= 0 || dstHeight <= 0) return rect;
+    const float scale = std::min((float)dstWidth / (float)srcWidth,
+                                 (float)dstHeight / (float)srcHeight);
+    rect.width = std::max(1, (int)std::lround((float)srcWidth * scale));
+    rect.height = std::max(1, (int)std::lround((float)srcHeight * scale));
+    rect.x = std::max(0, (dstWidth - rect.width) / 2);
+    rect.y = std::max(0, (dstHeight - rect.height) / 2);
+    return rect;
+}
+
+static std::vector<uint8_t> scaleOpaqueRGBAWithLetterbox(const std::vector<uint8_t>& src,
+                                                         int srcWidth,
+                                                         int srcHeight,
+                                                         int dstWidth,
+                                                         int dstHeight,
+                                                         uint8_t bgR,
+                                                         uint8_t bgG,
+                                                         uint8_t bgB,
+                                                         OfflineFitRect* outRect = nullptr)
+{
+    std::vector<uint8_t> dst = makeSolidCanvasRGBA(dstWidth, dstHeight, bgR, bgG, bgB, 255);
+    if (srcWidth <= 0 || srcHeight <= 0 || src.size() != (std::size_t)srcWidth * (std::size_t)srcHeight * 4u) {
+        if (outRect) *outRect = {};
+        return dst;
+    }
+
+    const OfflineFitRect rect = computeAspectFitRect(srcWidth, srcHeight, dstWidth, dstHeight);
+    if (outRect) *outRect = rect;
+    if (rect.width <= 0 || rect.height <= 0) return dst;
+
+    auto sample = [&](float x, float y, int channel) -> float {
+        x = std::clamp(x, 0.0f, (float)std::max(0, srcWidth - 1));
+        y = std::clamp(y, 0.0f, (float)std::max(0, srcHeight - 1));
+        const int x0 = (int)std::floor(x);
+        const int y0 = (int)std::floor(y);
+        const int x1 = std::min(x0 + 1, srcWidth - 1);
+        const int y1 = std::min(y0 + 1, srcHeight - 1);
+        const float tx = x - (float)x0;
+        const float ty = y - (float)y0;
+        auto at = [&](int sx, int sy) -> float {
+            return (float)src[((std::size_t)sy * (std::size_t)srcWidth + (std::size_t)sx) * 4u + (std::size_t)channel];
+        };
+        const float c00 = at(x0, y0);
+        const float c10 = at(x1, y0);
+        const float c01 = at(x0, y1);
+        const float c11 = at(x1, y1);
+        const float c0 = c00 * (1.0f - tx) + c10 * tx;
+        const float c1 = c01 * (1.0f - tx) + c11 * tx;
+        return c0 * (1.0f - ty) + c1 * ty;
+    };
+
+    for (int y = 0; y < rect.height; ++y) {
+        const float srcY = ((y + 0.5f) / (float)rect.height) * (float)srcHeight - 0.5f;
+        for (int x = 0; x < rect.width; ++x) {
+            const float srcX = ((x + 0.5f) / (float)rect.width) * (float)srcWidth - 0.5f;
+            const std::size_t dstIdx = ((std::size_t)(rect.y + y) * (std::size_t)dstWidth + (std::size_t)(rect.x + x)) * 4u;
+            dst[dstIdx + 0] = (uint8_t)std::lround(sample(srcX, srcY, 0));
+            dst[dstIdx + 1] = (uint8_t)std::lround(sample(srcX, srcY, 1));
+            dst[dstIdx + 2] = (uint8_t)std::lround(sample(srcX, srcY, 2));
+            dst[dstIdx + 3] = 255;
+        }
+    }
+    return dst;
+}
+
+static void drawFilledCircleOnCanvas(std::vector<uint8_t>& canvas,
+                                     int canvasWidth,
+                                     int canvasHeight,
+                                     float cx,
+                                     float cy,
+                                     float radius,
+                                     uint8_t r,
+                                     uint8_t g,
+                                     uint8_t b,
+                                     uint8_t a)
+{
+    if (canvasWidth <= 0 || canvasHeight <= 0 || radius <= 0.0f) return;
+    const int x0 = std::max(0, (int)std::floor(cx - radius - 1.0f));
+    const int x1 = std::min(canvasWidth - 1, (int)std::ceil(cx + radius + 1.0f));
+    const int y0 = std::max(0, (int)std::floor(cy - radius - 1.0f));
+    const int y1 = std::min(canvasHeight - 1, (int)std::ceil(cy + radius + 1.0f));
+    const float alpha = a / 255.0f;
+    for (int y = y0; y <= y1; ++y) {
+        for (int x = x0; x <= x1; ++x) {
+            const float dx = (x + 0.5f) - cx;
+            const float dy = (y + 0.5f) - cy;
+            const float dist2 = dx * dx + dy * dy;
+            if (dist2 > radius * radius) continue;
+            const std::size_t idx = ((std::size_t)y * (std::size_t)canvasWidth + (std::size_t)x) * 4u;
+            const float inv = 1.0f - alpha;
+            canvas[idx + 0] = (uint8_t)std::lround(std::clamp(r * alpha + canvas[idx + 0] * inv, 0.0f, 255.0f));
+            canvas[idx + 1] = (uint8_t)std::lround(std::clamp(g * alpha + canvas[idx + 1] * inv, 0.0f, 255.0f));
+            canvas[idx + 2] = (uint8_t)std::lround(std::clamp(b * alpha + canvas[idx + 2] * inv, 0.0f, 255.0f));
+            canvas[idx + 3] = 255;
+        }
+    }
+}
+
+template <typename ParticleContainer>
+static void drawParticlesOnCanvas(std::vector<uint8_t>& canvas,
+                                  int canvasWidth,
+                                  int canvasHeight,
+                                  const OfflineFitRect& rect,
+                                  const ParticleContainer& particles,
+                                  float domainWidth,
+                                  float domainHeight)
+{
+    if (particles.empty() || rect.width <= 0 || rect.height <= 0) return;
+    const float safeDomainX = std::max(1.0e-6f, domainWidth);
+    const float safeDomainY = std::max(1.0e-6f, domainHeight);
+    const float radius = std::max(2.0f, 0.0035f * (float)std::max(rect.width, rect.height));
+    for (const auto& p : particles) {
+        const float px = p.x / safeDomainX;
+        const float py = p.y / safeDomainY;
+        if (px < 0.0f || px > 1.0f || py < 0.0f || py > 1.0f) continue;
+        const float sx = rect.x + px * (float)rect.width;
+        const float sy = rect.y + (1.0f - py) * (float)rect.height;
+        drawFilledCircleOnCanvas(canvas, canvasWidth, canvasHeight, sx, sy, radius, 255, 245, 120, 230);
+    }
+}
+
+static bool writeTgaImage(const std::filesystem::path& path,
+                          int width,
+                          int height,
+                          const std::vector<uint8_t>& rgba)
+{
+    if (width <= 0 || height <= 0) return false;
+    if (rgba.size() != (std::size_t)width * (std::size_t)height * 4u) return false;
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return false;
+
+    uint8_t header[18] = {};
+    header[2] = 2; // uncompressed true-color
+    header[12] = (uint8_t)(width & 0xFF);
+    header[13] = (uint8_t)((width >> 8) & 0xFF);
+    header[14] = (uint8_t)(height & 0xFF);
+    header[15] = (uint8_t)((height >> 8) & 0xFF);
+    header[16] = 32;
+    header[17] = 0x28; // 8-bit alpha + top-left origin
+    out.write(reinterpret_cast<const char*>(header), sizeof(header));
+
+    std::vector<uint8_t> bgra(rgba.size(), 0u);
+    for (std::size_t i = 0; i + 3 < rgba.size(); i += 4u) {
+        bgra[i + 0] = rgba[i + 2];
+        bgra[i + 1] = rgba[i + 1];
+        bgra[i + 2] = rgba[i + 0];
+        bgra[i + 3] = rgba[i + 3];
+    }
+    out.write(reinterpret_cast<const char*>(bgra.data()), (std::streamsize)bgra.size());
+    return (bool)out;
+}
+
+static std::string shellQuote(const std::filesystem::path& path) {
+    std::string s = path.generic_string();
+    std::string out;
+    out.reserve(s.size() + 8u);
+    out.push_back('"');
+    for (char c : s) {
+        if (c == '"') out += "\\\"";
+        else out.push_back(c);
+    }
+    out.push_back('"');
+    return out;
+}
+
+static bool captureWorkspaceFrame(int workspace,
+                                  const UI::Settings& renderUi,
+                                  MAC2D& sim,
+                                  MACWater& waterSim,
+                                  MACSmoke3D& smoke3D,
+                                  MACWater3D& water3D,
+                                  MACCoupledSim& coupled,
+                                  SmokeRenderer& bakeRenderer,
+                                  int outputWidth,
+                                  int outputHeight,
+                                  OfflineFrameImage& outImage,
+                                  std::string& outError)
+{
+    outError.clear();
+    outImage = {};
+    const auto bg = themeCanvasColor(renderUi.themeMode);
+
+    SmokeRenderSettings smokeRender;
+    OverlaySettings overlay;
+    UI::BuildRenderSettings(renderUi, smokeRender, overlay);
+    WaterRenderSettings waterRender;
+    UI::BuildWaterRenderSettings(renderUi, waterRender);
+
+    auto finalize2DLike = [&](const std::vector<uint8_t>& rgba,
+                              int srcWidth,
+                              int srcHeight,
+                              const std::function<void(std::vector<uint8_t>&, int, int, const OfflineFitRect&)>& decorate) {
+        if (rgba.size() != (std::size_t)srcWidth * (std::size_t)srcHeight * 4u) {
+            outError = "Texture readback size mismatch.";
+            return false;
+        }
+        OfflineFitRect fit;
+        outImage.width = outputWidth;
+        outImage.height = outputHeight;
+        outImage.rgba = scaleOpaqueRGBAWithLetterbox(rgba, srcWidth, srcHeight, outputWidth, outputHeight,
+                                                     bg[0], bg[1], bg[2], &fit);
+        decorate(outImage.rgba, outputWidth, outputHeight, fit);
+        return true;
+    };
+
+    switch (workspace) {
+        case UI::kWorkspaceSmoke2D: {
+            bakeRenderer.resize(sim.nx, sim.ny);
+            bakeRenderer.updateFromSim(sim, smokeRender, overlay);
+            std::vector<uint8_t> smokeRGBA;
+            if (!readTextureRGBA(bakeRenderer.smokeTex(), bakeRenderer.width(), bakeRenderer.height(), smokeRGBA)) {
+                outError = "Failed to read Smoke 2D texture.";
+                return false;
+            }
+            std::vector<uint8_t> opaque = makeSolidCanvasRGBA(sim.nx, sim.ny, bg[0], bg[1], bg[2], 255);
+            alphaCompositeOverOpaque(opaque, smokeRGBA, 1.0f);
+            if (overlay.showDiv) {
+                std::vector<uint8_t> divRGBA;
+                if (readTextureRGBA(bakeRenderer.divTex(), bakeRenderer.width(), bakeRenderer.height(), divRGBA)) {
+                    alphaCompositeOverOpaque(opaque, divRGBA, 1.0f);
+                }
+            }
+            if (overlay.showVort) {
+                std::vector<uint8_t> vortRGBA;
+                if (readTextureRGBA(bakeRenderer.vortTex(), bakeRenderer.width(), bakeRenderer.height(), vortRGBA)) {
+                    alphaCompositeOverOpaque(opaque, vortRGBA, 1.0f);
+                }
+            }
+            return finalize2DLike(opaque, sim.nx, sim.ny,
+                                  [](std::vector<uint8_t>&, int, int, const OfflineFitRect&) {});
+        }
+        case UI::kWorkspaceWater2D: {
+            bakeRenderer.resize(waterSim.nx, waterSim.ny);
+            bakeRenderer.updateWaterFromSim(waterSim, waterRender);
+            std::vector<uint8_t> waterRGBA;
+            if (!readTextureRGBA(bakeRenderer.waterTex(), bakeRenderer.width(), bakeRenderer.height(), waterRGBA)) {
+                outError = "Failed to read Water 2D texture.";
+                return false;
+            }
+            std::vector<uint8_t> opaque = makeSolidCanvasRGBA(waterSim.nx, waterSim.ny, bg[0], bg[1], bg[2], 255);
+            alphaCompositeOverOpaque(opaque, waterRGBA, 1.0f);
+            return finalize2DLike(opaque, waterSim.nx, waterSim.ny,
+                                  [&](std::vector<uint8_t>& canvas, int canvasW, int canvasH, const OfflineFitRect& fit) {
+                                      if (renderUi.offlineBakeIncludeParticles && renderUi.showWaterParticles) {
+                                          drawParticlesOnCanvas(canvas, canvasW, canvasH, fit,
+                                                                waterSim.particles,
+                                                                waterSim.nx * waterSim.dx,
+                                                                waterSim.ny * waterSim.dx);
+                                      }
+                                  });
+        }
+        case UI::kWorkspaceSmoke3D: {
+            const int viewMode = std::clamp(renderUi.smoke3DViewMode, 0, 1);
+            if (viewMode == 1) {
+                const int axis = std::clamp(renderUi.smoke3DSliceAxis, 0, 2);
+                const int maxSlice = (axis == 0)
+                    ? std::max(0, smoke3D.nz - 1)
+                    : (axis == 1)
+                        ? std::max(0, smoke3D.ny - 1)
+                        : std::max(0, smoke3D.nx - 1);
+                const int sliceIndex = std::clamp(renderUi.smoke3DSliceIndex, 0, maxSlice);
+                const int field = std::clamp(renderUi.smoke3DDebugField, 0, 4);
+                auto slice = smoke3D.copyDebugSlice(
+                    static_cast<MACSmoke3D::SliceAxis>(axis),
+                    sliceIndex,
+                    static_cast<MACSmoke3D::DebugField>(field));
+                bakeRenderer.updateSmokeFromSlice(slice.values, slice.solid, slice.width, slice.height, field, smokeRender);
+                std::vector<uint8_t> smokeRGBA;
+                if (!readTextureRGBA(bakeRenderer.smokeTex(), bakeRenderer.width(), bakeRenderer.height(), smokeRGBA)) {
+                    outError = "Failed to read Smoke 3D slice texture.";
+                    return false;
+                }
+                std::vector<uint8_t> opaque = makeSolidCanvasRGBA(slice.width, slice.height, bg[0], bg[1], bg[2], 255);
+                alphaCompositeOverOpaque(opaque, smokeRGBA, 1.0f);
+                return finalize2DLike(opaque, slice.width, slice.height,
+                                      [](std::vector<uint8_t>&, int, int, const OfflineFitRect&) {});
+            }
+            bakeRenderer.resize(outputWidth, outputHeight);
+            bakeRenderer.updateSmokeFromVolume(smoke3D.smoke, smoke3D.temp, smoke3D.solid,
+                                               smoke3D.nx, smoke3D.ny, smoke3D.nz,
+                                               renderUi.smoke3DViewYawDeg,
+                                               renderUi.smoke3DViewPitchDeg,
+                                               renderUi.smoke3DViewZoom,
+                                               renderUi.smoke3DVolumeDensity,
+                                               smokeRender);
+            outImage.width = bakeRenderer.width();
+            outImage.height = bakeRenderer.height();
+            if (!readTextureRGBA(bakeRenderer.smokeTex(), outImage.width, outImage.height, outImage.rgba)) {
+                outError = "Failed to read Smoke 3D volume texture.";
+                return false;
+            }
+            return true;
+        }
+        case UI::kWorkspaceWater3D: {
+            const int viewMode = std::clamp(renderUi.water3DViewMode, 0, 2);
+            if (viewMode == 1) {
+                const int axis = std::clamp(renderUi.water3DSliceAxis, 0, 2);
+                const int maxSlice = (axis == 0)
+                    ? std::max(0, water3D.nz - 1)
+                    : (axis == 1)
+                        ? std::max(0, water3D.ny - 1)
+                        : std::max(0, water3D.nx - 1);
+                const int sliceIndex = std::clamp(renderUi.water3DSliceIndex, 0, maxSlice);
+                const int field = std::clamp(renderUi.water3DDebugField, 0, 3);
+                auto slice = water3D.copyDebugSlice(
+                    static_cast<MACWater3D::SliceAxis>(axis),
+                    sliceIndex,
+                    static_cast<MACWater3D::DebugField>(field));
+                bakeRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, waterRender);
+                std::vector<uint8_t> waterRGBA;
+                if (!readTextureRGBA(bakeRenderer.waterTex(), bakeRenderer.width(), bakeRenderer.height(), waterRGBA)) {
+                    outError = "Failed to read Water 3D slice texture.";
+                    return false;
+                }
+                std::vector<uint8_t> opaque = makeSolidCanvasRGBA(slice.width, slice.height, bg[0], bg[1], bg[2], 255);
+                alphaCompositeOverOpaque(opaque, waterRGBA, 1.0f);
+                return finalize2DLike(opaque, slice.width, slice.height,
+                                      [](std::vector<uint8_t>&, int, int, const OfflineFitRect&) {});
+            }
+            bakeRenderer.resize(outputWidth, outputHeight);
+            bakeRenderer.updateWaterFromVolume(water3D.water, water3D.solid,
+                                               water3D.nx, water3D.ny, water3D.nz,
+                                               viewMode,
+                                               renderUi.water3DViewYawDeg,
+                                               renderUi.water3DViewPitchDeg,
+                                               renderUi.water3DViewZoom,
+                                               renderUi.water3DVolumeDensity,
+                                               renderUi.water3DSurfaceThreshold,
+                                               waterRender);
+            outImage.width = bakeRenderer.width();
+            outImage.height = bakeRenderer.height();
+            if (!readTextureRGBA(bakeRenderer.waterTex(), outImage.width, outImage.height, outImage.rgba)) {
+                outError = "Failed to read Water 3D texture.";
+                return false;
+            }
+            return true;
+        }
+        case UI::kWorkspaceCoupled: {
+            bakeRenderer.resize(coupled.nx, coupled.ny);
+            bakeRenderer.updateFromSim(coupled, smokeRender, overlay);
+            bakeRenderer.updateWaterFromSim(coupled, waterRender);
+            std::vector<uint8_t> smokeRGBA;
+            std::vector<uint8_t> waterRGBA;
+            if (!readTextureRGBA(bakeRenderer.smokeTex(), bakeRenderer.width(), bakeRenderer.height(), smokeRGBA)) {
+                outError = "Failed to read coupled smoke texture.";
+                return false;
+            }
+            if (!readTextureRGBA(bakeRenderer.waterTex(), bakeRenderer.width(), bakeRenderer.height(), waterRGBA)) {
+                outError = "Failed to read coupled water texture.";
+                return false;
+            }
+            std::vector<uint8_t> opaque = makeSolidCanvasRGBA(coupled.nx, coupled.ny, bg[0], bg[1], bg[2], 255);
+            alphaCompositeOverOpaque(opaque, smokeRGBA, 1.0f);
+            alphaCompositeOverOpaque(opaque, waterRGBA, std::clamp(renderUi.combinedWaterAlpha, 0.0f, 1.0f));
+            return finalize2DLike(opaque, coupled.nx, coupled.ny,
+                                  [&](std::vector<uint8_t>& canvas, int canvasW, int canvasH, const OfflineFitRect& fit) {
+                                      if (renderUi.offlineBakeIncludeParticles && renderUi.combinedShowParticles) {
+                                          drawParticlesOnCanvas(canvas, canvasW, canvasH, fit,
+                                                                coupled.particles,
+                                                                coupled.nx * coupled.dx,
+                                                                coupled.ny * coupled.dx);
+                                      }
+                                  });
+        }
+        default:
+            break;
+    }
+
+    outError = "Unsupported workspace.";
+    return false;
+}
+
 } // namespace
 
 int main()
@@ -525,6 +980,253 @@ int main()
         activateWorkspace(activeWorkspace);
     };
 
+    SmokeRenderer offlineBakeRenderer(1, 1);
+    struct OfflineBakeRuntime {
+        bool running = false;
+        bool cancelRequested = false;
+        int nextFrame = 0;
+        int totalFrames = 0;
+        int workspace = UI::kWorkspaceSmoke2D;
+        int outputWidth = 0;
+        int outputHeight = 0;
+        int videoFPS = 30;
+        int simStepsPerFrame = 1;
+        float fixedDt = 1.0f / 120.0f;
+        bool encodeVideo = true;
+        bool keepImageSequence = true;
+        std::filesystem::path jobDir;
+        std::filesystem::path framesDir;
+        std::filesystem::path videoPath;
+        std::string framePrefix;
+        UI::Settings snapshot{};
+        double startTime = 0.0;
+    };
+    OfflineBakeRuntime offlineBake;
+
+    auto setOfflineStatus = [&](const std::string& message) {
+        std::snprintf(ui.offlineBakeStatus, sizeof(ui.offlineBakeStatus), "%s", message.c_str());
+    };
+    setOfflineStatus("Idle");
+
+    auto writeOfflineBakeManifest = [&](const OfflineBakeRuntime& job) {
+        try {
+            std::ofstream manifest(job.jobDir / "job.txt", std::ios::out | std::ios::trunc);
+            if (!manifest) return;
+            const std::time_t nowTs = std::time(nullptr);
+            manifest << "Vizior Offline Bake\n";
+            manifest << "Workspace: " << UI::ActiveWorkspaceLabel(job.workspace) << "\n";
+            manifest << "Frames: " << job.totalFrames << "\n";
+            manifest << "Output resolution: " << job.outputWidth << " x " << job.outputHeight << "\n";
+            manifest << "Video FPS: " << job.videoFPS << "\n";
+            manifest << "Sim steps per frame: " << job.simStepsPerFrame << "\n";
+            manifest << "Fixed sim dt: " << job.fixedDt << "\n";
+            manifest << "Frame prefix: " << job.framePrefix << "\n";
+            manifest << "Encode video: " << (job.encodeVideo ? "yes" : "no") << "\n";
+            manifest << "Keep image sequence: " << (job.keepImageSequence ? "yes" : "no") << "\n";
+            manifest << "Created: " << std::asctime(std::localtime(&nowTs));
+        } catch (...) {
+        }
+    };
+
+    auto finishOfflineBake = [&](const std::string& status) {
+        offlineBake.running = false;
+        offlineBake.cancelRequested = false;
+        ui.offlineBakeRunning = false;
+        ui.offlineBakeCurrentFrame = std::min(ui.offlineBakeFrameCount, offlineBake.nextFrame);
+        ++smoke3DSimVersion;
+        ++water3DSimVersion;
+        invalidate3DRenderCaches();
+        setOfflineStatus(status);
+    };
+
+    auto startOfflineBake = [&]() {
+        if (offlineBake.running) return;
+
+        const std::string outputDir = std::strlen(ui.offlineBakeOutputDir) > 0
+            ? std::string(ui.offlineBakeOutputDir)
+            : std::string("offline_bakes/latest");
+        const std::string framePrefix = std::strlen(ui.offlineBakeFramePrefix) > 0
+            ? std::string(ui.offlineBakeFramePrefix)
+            : std::string("frame");
+        std::string videoFile = std::strlen(ui.offlineBakeVideoFile) > 0
+            ? std::string(ui.offlineBakeVideoFile)
+            : std::string("preview.mp4");
+        if (std::filesystem::path(videoFile).extension().empty()) {
+            videoFile += ".mp4";
+        }
+
+        OfflineBakeRuntime job;
+        job.workspace = activeWorkspace;
+        job.totalFrames = std::max(1, ui.offlineBakeFrameCount);
+        job.outputWidth = std::max(64, ui.offlineBakeWidth);
+        job.outputHeight = std::max(64, ui.offlineBakeHeight);
+        if (ui.offlineBakeAutoEncodeVideo) {
+            if ((job.outputWidth & 1) != 0) ++job.outputWidth;
+            if ((job.outputHeight & 1) != 0) ++job.outputHeight;
+        }
+        job.videoFPS = std::max(1, ui.offlineBakeVideoFPS);
+        job.simStepsPerFrame = std::max(1, ui.offlineBakeSimStepsPerFrame);
+        job.fixedDt = std::clamp(ui.offlineBakeFixedDt, 1.0e-4f, 0.1f);
+        job.encodeVideo = ui.offlineBakeAutoEncodeVideo;
+        job.keepImageSequence = ui.offlineBakeKeepImageSequence;
+        job.framePrefix = framePrefix;
+        job.snapshot = ui;
+        job.snapshot.activeWorkspace = activeWorkspace;
+        job.jobDir = std::filesystem::path(outputDir);
+        job.framesDir = job.jobDir / "frames";
+        job.videoPath = job.jobDir / videoFile;
+        job.startTime = glfwGetTime();
+
+        try {
+            std::filesystem::create_directories(job.jobDir);
+            if (std::filesystem::exists(job.framesDir)) {
+                std::filesystem::remove_all(job.framesDir);
+            }
+            std::filesystem::create_directories(job.framesDir);
+            std::error_code ec;
+            std::filesystem::remove(job.videoPath, ec);
+        } catch (const std::exception& e) {
+            setOfflineStatus(std::string("Bake setup failed: ") + e.what());
+            return;
+        }
+
+        offlineBake = std::move(job);
+        offlineBake.running = true;
+        ui.playing = false;
+        ui.offlineBakeRunning = true;
+        ui.offlineBakeCurrentFrame = 0;
+        writeOfflineBakeManifest(offlineBake);
+
+        std::ostringstream oss;
+        oss << "Bake ready: " << UI::ActiveWorkspaceLabel(offlineBake.workspace)
+            << " -> " << offlineBake.jobDir.generic_string();
+        setOfflineStatus(oss.str());
+    };
+
+    auto stepOfflineWorkspace = [&](int workspace, const UI::Settings& cfg, float dt) {
+        switch (workspace) {
+            case UI::kWorkspaceWater2D:
+                waterSim.setDt(dt);
+                waterSim.syncSolidsFrom(sim);
+                waterSim.step();
+                break;
+            case UI::kWorkspaceSmoke3D:
+                smoke3D.setDt(dt);
+                smoke3D.step();
+                break;
+            case UI::kWorkspaceWater3D:
+                water3D.setDt(dt);
+                water3D.step();
+                break;
+            case UI::kWorkspaceCoupled:
+                coupled.setDt(dt);
+                coupled.stepCoupled(cfg.vortEps);
+                break;
+            case UI::kWorkspaceSmoke2D:
+            default:
+                sim.setDt(dt);
+                sim.step(cfg.vortEps);
+                break;
+        }
+    };
+
+    auto processOfflineBakeChunk = [&]() {
+        if (!offlineBake.running) return;
+        constexpr int kMaxFramesPerTick = 4;
+        const double chunkStart = glfwGetTime();
+        int framesDone = 0;
+
+        while (offlineBake.running && !offlineBake.cancelRequested && offlineBake.nextFrame < offlineBake.totalFrames) {
+            OfflineFrameImage frame;
+            std::string frameError;
+            if (!captureWorkspaceFrame(offlineBake.workspace,
+                                       offlineBake.snapshot,
+                                       sim,
+                                       waterSim,
+                                       smoke3D,
+                                       water3D,
+                                       coupled,
+                                       offlineBakeRenderer,
+                                       offlineBake.outputWidth,
+                                       offlineBake.outputHeight,
+                                       frame,
+                                       frameError)) {
+                finishOfflineBake(std::string("Bake failed: ") + frameError);
+                return;
+            }
+
+            char frameName[256];
+            std::snprintf(frameName, sizeof(frameName), "%s_%06d.tga", offlineBake.framePrefix.c_str(), offlineBake.nextFrame);
+            const std::filesystem::path framePath = offlineBake.framesDir / frameName;
+            if (!writeTgaImage(framePath, frame.width, frame.height, frame.rgba)) {
+                finishOfflineBake(std::string("Bake failed: could not write ") + framePath.generic_string());
+                return;
+            }
+
+            ++offlineBake.nextFrame;
+            ui.offlineBakeCurrentFrame = std::min(ui.offlineBakeFrameCount, offlineBake.nextFrame);
+
+            if (offlineBake.nextFrame < offlineBake.totalFrames) {
+                for (int step = 0; step < offlineBake.simStepsPerFrame; ++step) {
+                    stepOfflineWorkspace(offlineBake.workspace, offlineBake.snapshot, offlineBake.fixedDt);
+                }
+            }
+
+            ++framesDone;
+            if (framesDone >= kMaxFramesPerTick || (glfwGetTime() - chunkStart) > 0.20) {
+                break;
+            }
+        }
+
+        if (!offlineBake.running) return;
+
+        if (offlineBake.cancelRequested) {
+            std::ostringstream oss;
+            oss << "Bake cancelled after " << offlineBake.nextFrame << " frame(s). Images kept in "
+                << offlineBake.framesDir.generic_string();
+            finishOfflineBake(oss.str());
+            return;
+        }
+
+        if (offlineBake.nextFrame >= offlineBake.totalFrames) {
+            std::ostringstream status;
+            status << "Bake finished: " << offlineBake.framesDir.generic_string();
+            if (offlineBake.encodeVideo) {
+                const std::filesystem::path inputPattern = offlineBake.framesDir /
+                    (offlineBake.framePrefix + std::string("_%06d.tga"));
+                const std::string cmd =
+                    std::string("ffmpeg -y -framerate ") + std::to_string(offlineBake.videoFPS) +
+                    std::string(" -i ") + shellQuote(inputPattern) +
+                    std::string(" -c:v libx264 -pix_fmt yuv420p ") + shellQuote(offlineBake.videoPath);
+                setOfflineStatus(std::string("Encoding video: ") + offlineBake.videoPath.generic_string());
+                const int rc = std::system(cmd.c_str());
+                if (rc == 0) {
+                    if (!offlineBake.keepImageSequence) {
+                        std::error_code ec;
+                        std::filesystem::remove_all(offlineBake.framesDir, ec);
+                    }
+                    status.str(std::string());
+                    status.clear();
+                    status << "Bake finished: " << offlineBake.videoPath.generic_string();
+                    if (offlineBake.keepImageSequence) {
+                        status << " (frames in " << offlineBake.framesDir.generic_string() << ")";
+                    }
+                } else {
+                    status.str(std::string());
+                    status.clear();
+                    status << "Video encode failed. Frames kept in " << offlineBake.framesDir.generic_string();
+                }
+            }
+            finishOfflineBake(status.str());
+            return;
+        }
+
+        std::ostringstream progress;
+        progress << "Baking frame " << offlineBake.nextFrame << " / " << offlineBake.totalFrames
+                 << " -> " << offlineBake.framesDir.generic_string();
+        setOfflineStatus(progress.str());
+    };
+
     while (!glfwWindowShouldClose(win))
     {
         glfwPollEvents();
@@ -538,13 +1240,14 @@ int main()
             appliedUiScale = ui.uiScale;
         }
 
-        const int requestedWorkspace = std::clamp(ui.activeWorkspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
-        if (requestedWorkspace != activeWorkspace) {
-            activeWorkspace = requestedWorkspace;
-            activateWorkspace(activeWorkspace);
-        }
+        if (!offlineBake.running) {
+            const int requestedWorkspace = std::clamp(ui.activeWorkspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
+            if (requestedWorkspace != activeWorkspace) {
+                activeWorkspace = requestedWorkspace;
+                activateWorkspace(activeWorkspace);
+            }
 
-        // step sim (if playing)
+            // step sim (if playing)
         sim.smokeDissipation = ui.smokeDissipation;
         sim.tempDissipation  = ui.tempDissipation;
 
@@ -911,6 +1614,10 @@ int main()
             }
         }
 
+        } else {
+            processOfflineBakeChunk();
+        }
+
         // start imgui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -929,25 +1636,34 @@ int main()
     }
 
         // handle actions
-        if (actions.dropWaterTextRequested) {
-            waterSim.waterHeld = false;
+        if (actions.startOfflineBakeRequested && !offlineBake.running) {
+            startOfflineBake();
         }
-        if (actions.resetRequested) {
-            activateWorkspace(activeWorkspace);
+        if (actions.cancelOfflineBakeRequested && offlineBake.running) {
+            offlineBake.cancelRequested = true;
+            setOfflineStatus("Cancelling bake after the current frame batch...");
         }
-        if ((actions.applySmoke3DGridRequested || actions.resetSmoke3DRequested) && activeWorkspace == UI::kWorkspaceSmoke3D) {
-            activateWorkspace(activeWorkspace);
-        }
-        if ((actions.applyWater3DGridRequested || actions.resetWater3DRequested) && activeWorkspace == UI::kWorkspaceWater3D) {
-            activateWorkspace(activeWorkspace);
-        }
-        if (actions.applyWindowResolutionRequested) {
-            ui.windowWidth = std::clamp(ui.windowWidth, 960, 7680);
-            ui.windowHeight = std::clamp(ui.windowHeight, 540, 4320);
-            glfwSetWindowSize(win, ui.windowWidth, ui.windowHeight);
-        }
-        if (actions.applyGrid2DRequested) {
-            reinit2DGrid();
+        if (!offlineBake.running) {
+            if (actions.dropWaterTextRequested) {
+                waterSim.waterHeld = false;
+            }
+            if (actions.resetRequested) {
+                activateWorkspace(activeWorkspace);
+            }
+            if ((actions.applySmoke3DGridRequested || actions.resetSmoke3DRequested) && activeWorkspace == UI::kWorkspaceSmoke3D) {
+                activateWorkspace(activeWorkspace);
+            }
+            if ((actions.applyWater3DGridRequested || actions.resetWater3DRequested) && activeWorkspace == UI::kWorkspaceWater3D) {
+                activateWorkspace(activeWorkspace);
+            }
+            if (actions.applyWindowResolutionRequested) {
+                ui.windowWidth = std::clamp(ui.windowWidth, 960, 7680);
+                ui.windowHeight = std::clamp(ui.windowHeight, 540, 4320);
+                glfwSetWindowSize(win, ui.windowWidth, ui.windowHeight);
+            }
+            if (actions.applyGrid2DRequested) {
+                reinit2DGrid();
+            }
         }
 
         // render GL

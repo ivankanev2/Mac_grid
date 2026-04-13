@@ -182,6 +182,23 @@ struct Settings {
     float water3DSourceVelX = 0.0f;
     float water3DSourceVelY = 0.0f;
     float water3DSourceVelZ = 0.0f;
+
+    // Offline bake / export.
+    bool  offlineBakeAutoEncodeVideo = true;
+    bool  offlineBakeKeepImageSequence = true;
+    bool  offlineBakeIncludeParticles = true;
+    int   offlineBakeWidth = 1920;
+    int   offlineBakeHeight = 1080;
+    int   offlineBakeFrameCount = 240;
+    int   offlineBakeVideoFPS = 30;
+    int   offlineBakeSimStepsPerFrame = 4;
+    float offlineBakeFixedDt = 1.0f / 120.0f;
+    char  offlineBakeOutputDir[512] = "offline_bakes/latest";
+    char  offlineBakeFramePrefix[64] = "frame";
+    char  offlineBakeVideoFile[128] = "preview.mp4";
+    bool  offlineBakeRunning = false;
+    int   offlineBakeCurrentFrame = 0;
+    char  offlineBakeStatus[512] = "Idle";
 };
 
 struct Probe {
@@ -203,6 +220,8 @@ struct Actions {
     bool dropWaterTextRequested = false;
     bool applyGrid2DRequested = false;
     bool applyWindowResolutionRequested = false;
+    bool startOfflineBakeRequested = false;
+    bool cancelOfflineBakeRequested = false;
 };
 
 void BuildRenderSettings(const Settings& ui,

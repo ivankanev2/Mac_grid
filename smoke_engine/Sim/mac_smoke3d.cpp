@@ -353,10 +353,18 @@ void MACSmoke3D::reset() {
     uDiffusionStencil.clear();
     vDiffusionStencil.clear();
     wDiffusionStencil.clear();
-    diffuseScratch0.clear();
-    diffuseScratch1.clear();
-    diffuseScratch2.clear();
-    diffuseScratch3.clear();
+    uDiffusionScratch.r.clear();
+    uDiffusionScratch.z.clear();
+    uDiffusionScratch.p.clear();
+    uDiffusionScratch.q.clear();
+    vDiffusionScratch.r.clear();
+    vDiffusionScratch.z.clear();
+    vDiffusionScratch.p.clear();
+    vDiffusionScratch.q.clear();
+    wDiffusionScratch.r.clear();
+    wDiffusionScratch.z.clear();
+    wDiffusionScratch.p.clear();
+    wDiffusionScratch.q.clear();
 
     rebuildBorderSolids();
     applyBoundary();
@@ -1160,23 +1168,17 @@ void MACSmoke3D::diffuseVelocityImplicit() {
     v0 = v;
     w0 = w;
 
-    auto ensureScratch = [&](std::size_t count) {
-        if (diffuseScratch0.size() != count) diffuseScratch0.resize(count, 0.0f);
-        if (diffuseScratch1.size() != count) diffuseScratch1.resize(count, 0.0f);
-        if (diffuseScratch2.size() != count) diffuseScratch2.resize(count, 0.0f);
-        if (diffuseScratch3.size() != count) diffuseScratch3.resize(count, 0.0f);
-    };
-
     auto solveComponent = [&](std::vector<float>& x,
                               const std::vector<float>& b,
-                              const DiffusionStencilSet& stencilSet) {
+                              const DiffusionStencilSet& stencilSet,
+                              DiffusionScratchSet& scratch) {
         if (stencilSet.size() == 0u) return;
 
-        ensureScratch(x.size());
-        std::vector<float>& r = diffuseScratch0;
-        std::vector<float>& z = diffuseScratch1;
-        std::vector<float>& p = diffuseScratch2;
-        std::vector<float>& q = diffuseScratch3;
+        scratch.ensureSize(x.size());
+        std::vector<float>& r = scratch.r;
+        std::vector<float>& z = scratch.z;
+        std::vector<float>& p = scratch.p;
+        std::vector<float>& q = scratch.q;
 
         auto applyA = [&](const std::vector<float>& in, std::vector<float>& out) {
             for (std::size_t idx = 0; idx < stencilSet.size(); ++idx) {
@@ -1276,14 +1278,47 @@ void MACSmoke3D::diffuseVelocityImplicit() {
         }
     };
 
-    solveComponent(u, u0, uDiffusionStencil);
-    enforceUBoundary();
+    const std::size_t totalUnknowns = uDiffusionStencil.size() + vDiffusionStencil.size() + wDiffusionStencil.size();
+    int activeComponents = 0;
+    if (!uDiffusionStencil.face.empty()) ++activeComponents;
+    if (!vDiffusionStencil.face.empty()) ++activeComponents;
+    if (!wDiffusionStencil.face.empty()) ++activeComponents;
 
-    solveComponent(v, v0, vDiffusionStencil);
-    enforceVBoundary();
+    const bool parallelComponents = (smoke3DWorkerPool().maxWorkers() > 1) &&
+                                    (activeComponents > 1) &&
+                                    (totalUnknowns >= 32768u);
 
-    solveComponent(w, w0, wDiffusionStencil);
-    enforceWBoundary();
+    if (parallelComponents) {
+        parallelForChunks(3, 1, [&](int begin, int end) {
+            for (int component = begin; component < end; ++component) {
+                switch (component) {
+                    case 0:
+                        solveComponent(u, u0, uDiffusionStencil, uDiffusionScratch);
+                        enforceUBoundary();
+                        break;
+                    case 1:
+                        solveComponent(v, v0, vDiffusionStencil, vDiffusionScratch);
+                        enforceVBoundary();
+                        break;
+                    case 2:
+                        solveComponent(w, w0, wDiffusionStencil, wDiffusionScratch);
+                        enforceWBoundary();
+                        break;
+                    default:
+                        break;
+                }
+            }
+        });
+    } else {
+        solveComponent(u, u0, uDiffusionStencil, uDiffusionScratch);
+        enforceUBoundary();
+
+        solveComponent(v, v0, vDiffusionStencil, vDiffusionScratch);
+        enforceVBoundary();
+
+        solveComponent(w, w0, wDiffusionStencil, wDiffusionScratch);
+        enforceWBoundary();
+    }
 }
 
 void MACSmoke3D::diffuseScalarImplicit(std::vector<float>& phi,
@@ -1799,8 +1834,9 @@ void MACSmoke3D::updateIdleStats(float stepMs) {
          activeWFacesByK.offsets.size()) * sizeof(int) +
         (activeCellsByK.entries.size() + activeUFacesByK.entries.size() + activeVFacesByK.entries.size() +
          activeWFacesByK.entries.size()) * sizeof(SliceIJWorkList::Entry) +
-        diffuseScratch0.size() * sizeof(float) + diffuseScratch1.size() * sizeof(float) +
-        diffuseScratch2.size() * sizeof(float) + diffuseScratch3.size() * sizeof(float);
+        (uDiffusionScratch.r.size() + uDiffusionScratch.z.size() + uDiffusionScratch.p.size() + uDiffusionScratch.q.size() +
+         vDiffusionScratch.r.size() + vDiffusionScratch.z.size() + vDiffusionScratch.p.size() + vDiffusionScratch.q.size() +
+         wDiffusionScratch.r.size() + wDiffusionScratch.z.size() + wDiffusionScratch.p.size() + wDiffusionScratch.q.size()) * sizeof(float);
 }
 
 void MACSmoke3D::updateStats(float stepMs) {
@@ -1839,8 +1875,9 @@ void MACSmoke3D::updateStats(float stepMs) {
          activeWFacesByK.offsets.size()) * sizeof(int) +
         (activeCellsByK.entries.size() + activeUFacesByK.entries.size() + activeVFacesByK.entries.size() +
          activeWFacesByK.entries.size()) * sizeof(SliceIJWorkList::Entry) +
-        diffuseScratch0.size() * sizeof(float) + diffuseScratch1.size() * sizeof(float) +
-        diffuseScratch2.size() * sizeof(float) + diffuseScratch3.size() * sizeof(float);
+        (uDiffusionScratch.r.size() + uDiffusionScratch.z.size() + uDiffusionScratch.p.size() + uDiffusionScratch.q.size() +
+         vDiffusionScratch.r.size() + vDiffusionScratch.z.size() + vDiffusionScratch.p.size() + vDiffusionScratch.q.size() +
+         wDiffusionScratch.r.size() + wDiffusionScratch.z.size() + wDiffusionScratch.p.size() + wDiffusionScratch.q.size()) * sizeof(float);
 
     for (float value : u) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));
     for (float value : v) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));

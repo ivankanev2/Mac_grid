@@ -71,12 +71,15 @@ private:
     }
 
     void rebuildOperator();
+    void detectCompactDenseBox();
     void ensurePCGBuffers();
-    void applyA(const std::vector<float>& x, std::vector<float>& Ax) const;
+    void packFluidField(const std::vector<float>& full, std::vector<float>& compact) const;
+    void unpackFluidField(const std::vector<float>& compact, std::vector<float>& full) const;
+    void applyACompact(const std::vector<float>& x, std::vector<float>& Ax) const;
 
-    float dotFluid(const std::vector<float>& a, const std::vector<float>& b) const;
-    float maxAbsFluid(const std::vector<float>& a) const;
-    void removeMean(std::vector<float>& p) const;
+    float dotCompact(const std::vector<float>& a, const std::vector<float>& b) const;
+    float maxAbsCompact(const std::vector<float>& a) const;
+    void removeMeanCompact(std::vector<float>& p) const;
 
     int m_nx = 0;
     int m_ny = 0;
@@ -99,7 +102,37 @@ private:
     std::vector<float> m_diagW;
     std::vector<float> m_diagInv;
     std::vector<int> m_fluidCells;
+    std::vector<int> m_gridToCompact;
 
+    struct CompactCellStencil {
+        int xm = -1;
+        int xp = -1;
+        int ym = -1;
+        int yp = -1;
+        int zm = -1;
+        int zp = -1;
+
+        float wXm = 0.0f;
+        float wXp = 0.0f;
+        float wYm = 0.0f;
+        float wYp = 0.0f;
+        float wZm = 0.0f;
+        float wZp = 0.0f;
+
+        float diagW = 0.0f;
+        float diagInv = 0.0f;
+    };
+
+    bool m_compactDenseBoxValid = false;
+    int m_compactBoxNx = 0;
+    int m_compactBoxNy = 0;
+    int m_compactBoxNz = 0;
+    bool m_compactBoxOpenTopDirichlet = false;
+
+    std::vector<CompactCellStencil> m_compactStencils;
+    std::vector<float> m_compactDiagInv;
+    std::vector<float> m_pCompact;
+    std::vector<float> m_rhsCompact;
     std::vector<float> m_r, m_z, m_d, m_q, m_Ap;
 
     int m_lastIters = 0;
@@ -131,6 +164,15 @@ private:
         int nz = 0;
         float invDx2 = 0.0f;
 
+        bool denseBoxValid = false;
+        int boxI0 = 0;
+        int boxI1 = 0;
+        int boxJ0 = 0;
+        int boxJ1 = 0;
+        int boxK0 = 0;
+        int boxK1 = 0;
+        bool boxOpenTopDirichlet = false;
+
         std::vector<uint8_t> solid;
         std::vector<uint8_t> fluid;
 
@@ -138,11 +180,16 @@ private:
         std::vector<float> faceOpenV;
         std::vector<float> faceOpenW;
 
+        // Full-grid <-> compact-fluid mappings for this MG level.
+        std::vector<int> fluidCells;
+        std::vector<int> gridToCompact;
+
         // Compact fluid-only stencils in color-major order:
         // [0, redStencilCount) are red cells, [redStencilCount, end) are black.
         std::vector<MGCellStencil> stencils;
         std::size_t redStencilCount = 0;
 
+        // Compact fluid-only vectors, indexed by compact fluid id.
         std::vector<float> x;
         std::vector<float> b;
         std::vector<float> r;
@@ -172,6 +219,7 @@ private:
     };
 
     struct MGTransfer {
+        bool denseBoxStructured = false;
         std::vector<MGRestrictEntry> restrictEntries;
         std::vector<MGProlongEntry> prolongEntries;
     };
@@ -195,6 +243,7 @@ private:
     std::vector<MGLevel> mgLevels;
     std::vector<MGTransfer> mgTransfers;
 
+    void detectDenseBox(MGLevel& level) const;
     void ensureMultigrid();
     void buildLevelStencil(MGLevel& level) const;
     void buildTransfer(int fineLev, MGTransfer& transfer) const;

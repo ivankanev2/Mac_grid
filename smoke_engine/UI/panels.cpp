@@ -847,6 +847,63 @@ static void DrawSettingsWindow(Settings& ui,
         actions.applyGrid2DRequested = true;
     }
 
+    ImGui::Spacing();
+    DrawInspectorSectionLabel("Offline Bake", "Simulate and render the active workspace to an image sequence, then optionally assemble a video with ffmpeg.");
+    ImGui::TextDisabled("Active workspace: %s", ActiveWorkspaceLabel(std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled)));
+    ImGui::TextWrapped("The bake starts from the current simulation state, advances using a fixed timestep, saves numbered frames, and can optionally encode an MP4 preview when it finishes.");
+
+    ImGui::BeginDisabled(ui.offlineBakeRunning);
+    ImGui::InputText("Output directory", ui.offlineBakeOutputDir, IM_ARRAYSIZE(ui.offlineBakeOutputDir));
+    ImGui::InputText("Frame prefix", ui.offlineBakeFramePrefix, IM_ARRAYSIZE(ui.offlineBakeFramePrefix));
+    ImGui::InputText("Video file", ui.offlineBakeVideoFile, IM_ARRAYSIZE(ui.offlineBakeVideoFile));
+
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Bake width", &ui.offlineBakeWidth, 32, 256);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Bake height", &ui.offlineBakeHeight, 32, 256);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Frame count", &ui.offlineBakeFrameCount, 1, 24);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Video FPS", &ui.offlineBakeVideoFPS, 1, 10);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Sim steps / output frame", &ui.offlineBakeSimStepsPerFrame, 1, 4);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputFloat("Fixed sim dt", &ui.offlineBakeFixedDt, 0.0005f, 0.005f, "%.5f");
+
+    ui.offlineBakeWidth = std::clamp(ui.offlineBakeWidth, 64, 8192);
+    ui.offlineBakeHeight = std::clamp(ui.offlineBakeHeight, 64, 8192);
+    ui.offlineBakeFrameCount = std::clamp(ui.offlineBakeFrameCount, 1, 20000);
+    ui.offlineBakeVideoFPS = std::clamp(ui.offlineBakeVideoFPS, 1, 240);
+    ui.offlineBakeSimStepsPerFrame = std::clamp(ui.offlineBakeSimStepsPerFrame, 1, 128);
+    ui.offlineBakeFixedDt = std::clamp(ui.offlineBakeFixedDt, 1.0e-4f, 0.1f);
+
+    ImGui::Checkbox("Encode MP4 with ffmpeg", &ui.offlineBakeAutoEncodeVideo);
+    ImGui::Checkbox("Keep image sequence", &ui.offlineBakeKeepImageSequence);
+    ImGui::Checkbox("Include 2D water/coupled particles", &ui.offlineBakeIncludeParticles);
+    ImGui::EndDisabled();
+
+    const float progress = (ui.offlineBakeFrameCount > 0)
+        ? std::clamp((float)ui.offlineBakeCurrentFrame / (float)ui.offlineBakeFrameCount, 0.0f, 1.0f)
+        : 0.0f;
+    ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f));
+    ImGui::TextWrapped("Status: %s", ui.offlineBakeStatus);
+
+    if (!ui.offlineBakeRunning) {
+        if (ImGui::Button("Start offline bake", ImVec2(220.0f, 0.0f))) {
+            actions.startOfflineBakeRequested = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("The bake uses the current workspace and current simulation state.");
+    } else {
+        if (ImGui::Button("Cancel bake", ImVec2(220.0f, 0.0f))) {
+            actions.cancelOfflineBakeRequested = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Frame %d / %d", ui.offlineBakeCurrentFrame, ui.offlineBakeFrameCount);
+    }
+
+    ImGui::TextDisabled("Notes: the bake focuses on the simulation image itself; viewport-only guides such as velocity arrows, pipe overlays, and 3D particle markers are not baked yet.");
+
     ImGui::End();
 }
 
@@ -1711,7 +1768,7 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
     }
 
     // PIPE EDIT: click to add points
-    if (hovered && g_pipeMode && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (!ui.offlineBakeRunning && hovered && g_pipeMode && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         ImVec2 m = ImGui::GetMousePos();
         float u = (m.x - p0.x) / (p1.x - p0.x);
         float v = (m.y - p0.y) / (p1.y - p0.y);
@@ -1734,7 +1791,7 @@ static void drawSmokeViewAndInteract(MAC2D& sim,
 
     // PAINT / ERASE solids (disabled when pipe mode is on)
     if (!g_pipeMode) {
-        if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (!ui.offlineBakeRunning && hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             ImVec2 m = ImGui::GetMousePos();
             float u = (m.x - p0.x) / (p1.x - p0.x);
             float v = (m.y - p0.y) / (p1.y - p0.y);
@@ -2065,7 +2122,7 @@ static void drawWaterViewAndInteract(MACWater& water,
         dl->PopClipRect();
     }
 
-    if (hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    if (!ui.offlineBakeRunning && hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const ImVec2 m = ImGui::GetMousePos();
         const float u = (m.x - p0.x) / std::max(1e-6f, (p1.x - p0.x));
         const float v = (m.y - p0.y) / std::max(1e-6f, (p1.y - p0.y));
@@ -2132,11 +2189,11 @@ static void drawSmoke3DViewAndInteract(MACSmoke3D& smoke3D,
     const float domainX = std::max(1e-6f, smoke3D.nx * smoke3D.dx);
     const float domainY = std::max(1e-6f, smoke3D.ny * smoke3D.dx);
     const float domainZ = std::max(1e-6f, smoke3D.nz * smoke3D.dx);
-    const bool canPaintVolume = hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)
+    const bool canPaintVolume = !ui.offlineBakeRunning && hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)
                              && !ImGui::GetIO().KeyAlt
                              && !ImGui::IsMouseDown(ImGuiMouseButton_Right)
                              && !ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-    const bool canPaintSlice = hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)
+    const bool canPaintSlice = !ui.offlineBakeRunning && hovered && ui.paintSmoke3D && ImGui::IsMouseDown(ImGuiMouseButton_Left)
                             && !ImGui::GetIO().KeyAlt;
 
     if (!sliceMode) {
@@ -2308,11 +2365,11 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
                            1.15f);
     }
 
-    const bool canPaintVolume = hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+    const bool canPaintVolume = !ui.offlineBakeRunning && hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                                 !ImGui::GetIO().KeyAlt &&
                                 !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
                                 !ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-    const bool canPaintSlice = hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+    const bool canPaintSlice = !ui.offlineBakeRunning && hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                                !ImGui::GetIO().KeyAlt;
 
     if (!sliceMode) {
@@ -2589,7 +2646,7 @@ static void drawCombinedView(MACCoupledSim& coupled,
     }
 
     // PIPE EDIT
-    if (hovered && g_pipeMode && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (!ui.offlineBakeRunning && hovered && g_pipeMode && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         ImVec2 m = ImGui::GetMousePos();
         float u = (m.x - p0.x) / (p1.x - p0.x);
         float v = (m.y - p0.y) / (p1.y - p0.y);
@@ -2606,7 +2663,7 @@ static void drawCombinedView(MACCoupledSim& coupled,
 
     // SOLID PAINT/ERASE (Combined)
     if (!g_pipeMode) {
-        if (hovered && ui.paintSolid && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (!ui.offlineBakeRunning && hovered && ui.paintSolid && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             ImVec2 m = ImGui::GetMousePos();
             float u = (m.x - p0.x) / (p1.x - p0.x);
             float v = (m.y - p0.y) / (p1.y - p0.y);
@@ -2653,7 +2710,7 @@ static void drawCombinedView(MACCoupledSim& coupled,
     }
 
     // WATER PAINT (Combined)
-    if (hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    if (!ui.offlineBakeRunning && hovered && ui.paintWater && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         ImVec2 m = ImGui::GetMousePos();
         float u = (m.x - p0.x) / (p1.x - p0.x);
         float v = (m.y - p0.y) / (p1.y - p0.y);
@@ -2749,6 +2806,8 @@ Actions DrawAll(MAC2D& sim,
         a.dropWaterTextRequested = a.dropWaterTextRequested || inspectorActions.dropWaterTextRequested;
         a.applyGrid2DRequested = a.applyGrid2DRequested || inspectorActions.applyGrid2DRequested;
         a.applyWindowResolutionRequested = a.applyWindowResolutionRequested || inspectorActions.applyWindowResolutionRequested;
+        a.startOfflineBakeRequested = a.startOfflineBakeRequested || inspectorActions.startOfflineBakeRequested;
+        a.cancelOfflineBakeRequested = a.cancelOfflineBakeRequested || inspectorActions.cancelOfflineBakeRequested;
     }
 
     ui.activeWorkspace = std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);

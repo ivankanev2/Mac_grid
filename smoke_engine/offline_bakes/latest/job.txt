@@ -1,0 +1,11 @@
+Vizior Offline Bake
+Workspace: Smoke 2D
+Frames: 240
+Output resolution: 1920 x 1080
+Video FPS: 30
+Sim steps per frame: 4
+Fixed sim dt: 0.00833333
+Frame prefix: frame
+Encode video: yes
+Keep image sequence: yes
+Created: Mon Apr 13 19:40:49 2026

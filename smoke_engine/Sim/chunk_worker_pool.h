@@ -177,3 +177,8 @@ private:
     unsigned m_epoch = 0;
     bool m_stop = false;
 };
+
+inline ChunkWorkerPool& sharedChunkWorkerPool() {
+    static ChunkWorkerPool pool;
+    return pool;
+}
