@@ -1104,7 +1104,7 @@ int main()
         s3.viscosity = cfg.smoke3DViscosity;
         s3.smokeDiffusivity = cfg.smoke3DSmokeDiffusivity;
         s3.tempDiffusivity = cfg.smoke3DTempDiffusivity;
-        s3.openTop = cfg.smoke3DOpenTop;
+        s3.openTop = false;
         s3.pressureIters = cfg.smoke3DPressureIters;
         s3.pressureSolverMode = cfg.smoke3DPressureSolverMode;
         s3.pressureOmega = cfg.smoke3DPressureOmega;
@@ -1120,7 +1120,7 @@ int main()
         p3.waterDissipation = cfg.waterDissipation;
         p3.gravity = cfg.waterGravity;
         p3.velDamping = cfg.waterVelDamping;
-        p3.openTop = cfg.waterOpenTop;
+        p3.openTop = false;
         p3.pressureIters = cfg.water3DPressureIters;
         p3.pressureSolverMode = cfg.water3DPressureSolverMode;
         p3.useAPIC = cfg.water3DUseAPIC;
@@ -1404,7 +1404,7 @@ int main()
         job.framePrefix = framePrefix;
         job.snapshot = ui;
         job.snapshot.activeWorkspace = job.workspace;
-        job.snapshot.offlineBakeSourceDurationFrames = std::clamp(job.snapshot.offlineBakeSourceDurationFrames, 0, job.totalFrames);
+        job.snapshot.offlineBakeSourceDurationFrames = std::max(0, job.snapshot.offlineBakeSourceDurationFrames);
         job.snapshot.offlineBakeWarmupSteps = std::max(0, job.snapshot.offlineBakeWarmupSteps);
         job.jobDir = std::filesystem::path(outputDir);
         job.framesDir = job.jobDir / "frames";

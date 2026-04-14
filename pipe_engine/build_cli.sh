@@ -10,14 +10,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 
 mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
 
-cmake "$SCRIPT_DIR" \
+# `--fresh` clears stale CMake cache/config state, which matters when the
+# workspace has been moved or copied from another machine.
+cmake --fresh -S "$SCRIPT_DIR" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DPIPE_BUILD_GUI=OFF \
     -DPIPE_BUILD_CLI=ON
 
-cmake --build . --parallel
+cmake --build "$BUILD_DIR" --parallel
 
 echo ""
 echo "=== CLI Build complete ==="

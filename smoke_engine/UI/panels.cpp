@@ -54,6 +54,109 @@ struct Ring {
     }
 };
 
+static void DrawCameraAnglePreview(float& yawDeg,
+                                   float& pitchDeg,
+                                   float sourceX01,
+                                   float sourceY01,
+                                   float sourceZ01,
+                                   float sourceRadius01,
+                                   const char* label,
+                                   float size = 140.0f) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 end(origin.x + size, origin.y + size);
+    const ImVec2 center(origin.x + size * 0.5f, origin.y + size * 0.5f);
+
+    ImGui::InvisibleButton("##camAnglePreview", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f);
+
+    if (dragging) {
+        const ImVec2 d = ImGui::GetIO().MouseDelta;
+        const float speed = ImGui::GetIO().KeyShift ? 0.68f : 0.36f;
+        yawDeg   += d.x * speed;
+        pitchDeg  = std::clamp(pitchDeg - d.y * speed, -89.0f, 89.0f);
+        if (yawDeg > 180.0f)  yawDeg -= 360.0f;
+        if (yawDeg < -180.0f) yawDeg += 360.0f;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    } else if (hovered) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+
+    dl->AddRectFilled(origin, end, ImGui::GetColorU32(ImGuiCol_FrameBg), 4.0f);
+    dl->AddRect(origin, end,
+                hovered ? ImGui::GetColorU32(ImGuiCol_BorderShadow) : ImGui::GetColorU32(ImGuiCol_Border),
+                4.0f);
+
+    const float yaw   = yawDeg   * 3.14159265f / 180.0f;
+    const float pitch = pitchDeg * 3.14159265f / 180.0f;
+    const float cY = std::cos(yaw),   sY = std::sin(yaw);
+    const float cP = std::cos(pitch), sP = std::sin(pitch);
+    const float scale = size * 0.26f;
+
+    auto project = [&](float x, float y, float z, ImVec2& p, float& depth) {
+        const float x1 =  cY * x + sY * z;
+        const float z1 = -sY * x + cY * z;
+        const float ry =  cP * y - sP * z1;
+        const float rz =  sP * y + cP * z1;
+        p = ImVec2(center.x + x1 * scale, center.y - ry * scale);
+        depth = rz;
+    };
+
+    static const float V[8][3] = {
+        {-1,-1,-1}, {+1,-1,-1}, {+1,+1,-1}, {-1,+1,-1},
+        {-1,-1,+1}, {+1,-1,+1}, {+1,+1,+1}, {-1,+1,+1},
+    };
+    ImVec2 P[8];
+    float  Z[8];
+    for (int i = 0; i < 8; ++i) project(V[i][0], V[i][1], V[i][2], P[i], Z[i]);
+
+    dl->AddQuadFilled(P[0], P[1], P[5], P[4], IM_COL32(120, 150, 200, 40));
+
+    static const int E[12][2] = {
+        {0,1},{1,2},{2,3},{3,0},
+        {4,5},{5,6},{6,7},{7,4},
+        {0,4},{1,5},{2,6},{3,7},
+    };
+    const ImU32 edgeNear = IM_COL32(230, 210, 120, 255);
+    const ImU32 edgeFar  = IM_COL32(130, 130, 150, 110);
+    for (int i = 0; i < 12; ++i) {
+        const int a = E[i][0], b = E[i][1];
+        const bool isNear = 0.5f * (Z[a] + Z[b]) >= 0.0f;
+        dl->AddLine(P[a], P[b], isNear ? edgeNear : edgeFar, isNear ? 2.0f : 1.0f);
+    }
+
+    const float sx = std::clamp(sourceX01, 0.0f, 1.0f) * 2.0f - 1.0f;
+    const float sy = std::clamp(sourceY01, 0.0f, 1.0f) * 2.0f - 1.0f;
+    const float sz = std::clamp(sourceZ01, 0.0f, 1.0f) * 2.0f - 1.0f;
+    ImVec2 sp; float sDepth;
+    project(sx, sy, sz, sp, sDepth);
+    const float r = std::max(2.0f, std::clamp(sourceRadius01, 0.001f, 0.5f) * 2.0f * scale);
+    const ImU32 srcFillCol = (sDepth >= 0.0f)
+        ? IM_COL32(90, 220, 140, 180)
+        : IM_COL32(90, 220, 140, 80);
+    const ImU32 srcRingCol = (sDepth >= 0.0f)
+        ? IM_COL32(40, 255, 160, 255)
+        : IM_COL32(40, 255, 160, 140);
+    dl->AddCircleFilled(sp, r, srcFillCol, 24);
+    dl->AddCircle(sp, r, srcRingCol, 24, 1.5f);
+    dl->AddCircleFilled(sp, 2.5f, srcRingCol);
+
+    const float camDist = 2.2f;
+    const float camWx = sY * cP * camDist;
+    const float camWy = -sP * camDist;
+    const float camWz = cY * cP * camDist;
+    ImVec2 camP; float camZ;
+    project(camWx, camWy, camWz, camP, camZ);
+    dl->AddLine(camP, center, IM_COL32(230, 90, 90, 180), 1.5f);
+    dl->AddCircleFilled(camP, 4.0f, IM_COL32(230, 90, 90, 255));
+
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%s  yaw %.0f  pitch %.0f", label ? label : "", yawDeg, pitchDeg);
+    dl->AddText(ImVec2(origin.x + 6.0f, origin.y + size - ImGui::GetTextLineHeight() - 4.0f),
+                ImGui::GetColorU32(ImGuiCol_Text), buf);
+}
+
 enum StatID {
     STAT_DT,
     STAT_MAXDIV_BEFORE,
@@ -848,6 +951,43 @@ static void DrawSettingsWindow(Settings& ui,
     }
 
     ImGui::Spacing();
+    DrawInspectorSectionLabel("3D Grid Resolution",
+                              "Voxel density for Smoke 3D and Water 3D. Changes only the grid cell count — the simulation domain and window are unchanged. Applies to both live simulation and offline bakes.");
+
+    ImGui::TextDisabled("Smoke 3D");
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Smoke 3D grid X##settings", &ui.smoke3DNX, 8, 32);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Smoke 3D grid Y##settings", &ui.smoke3DNY, 8, 32);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Smoke 3D grid Z##settings", &ui.smoke3DNZ, 8, 32);
+    ui.smoke3DNX = std::max(1, ui.smoke3DNX);
+    ui.smoke3DNY = std::max(1, ui.smoke3DNY);
+    ui.smoke3DNZ = std::max(1, ui.smoke3DNZ);
+    ImGui::TextDisabled("Total cells: %lld",
+                        (long long)ui.smoke3DNX * (long long)ui.smoke3DNY * (long long)ui.smoke3DNZ);
+    if (ImGui::Button("Apply Smoke 3D grid##settings", ImVec2(220.0f, 0.0f))) {
+        actions.applySmoke3DGridRequested = true;
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Water 3D");
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Water 3D grid X##settings", &ui.water3DNX, 8, 32);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Water 3D grid Y##settings", &ui.water3DNY, 8, 32);
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::InputInt("Water 3D grid Z##settings", &ui.water3DNZ, 8, 32);
+    ui.water3DNX = std::max(1, ui.water3DNX);
+    ui.water3DNY = std::max(1, ui.water3DNY);
+    ui.water3DNZ = std::max(1, ui.water3DNZ);
+    ImGui::TextDisabled("Total cells: %lld",
+                        (long long)ui.water3DNX * (long long)ui.water3DNY * (long long)ui.water3DNZ);
+    if (ImGui::Button("Apply Water 3D grid##settings", ImVec2(220.0f, 0.0f))) {
+        actions.applyWater3DGridRequested = true;
+    }
+
+    ImGui::Spacing();
     DrawInspectorSectionLabel("Offline Bake", "Run a fixed-timestep hidden job, save numbered frames, and optionally assemble a preview video with ffmpeg.");
     ImGui::Checkbox("Use current live simulation state", &ui.offlineBakeUseCurrentState);
     if (ui.offlineBakeUseCurrentState) {
@@ -859,6 +999,19 @@ static void DrawSettingsWindow(Settings& ui,
         ui.offlineBakeWorkspace = std::clamp(ui.offlineBakeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
         ImGui::Combo("Offline workspace", &ui.offlineBakeWorkspace, offlineWorkspaceItems, 5);
         ImGui::TextWrapped("A clean hidden scene will be booted for the selected workspace, so you do not need to paint or simulate anything in the live viewport first.");
+    }
+
+    {
+        const int bakeWs = ui.offlineBakeUseCurrentState
+            ? std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled)
+            : std::clamp(ui.offlineBakeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
+        if (bakeWs == kWorkspaceSmoke3D) {
+            ImGui::TextDisabled("Bake grid: %d x %d x %d (Smoke 3D) — change in Settings > 3D Grid Resolution",
+                                ui.smoke3DNX, ui.smoke3DNY, ui.smoke3DNZ);
+        } else if (bakeWs == kWorkspaceWater3D) {
+            ImGui::TextDisabled("Bake grid: %d x %d x %d (Water 3D) — change in Settings > 3D Grid Resolution",
+                                ui.water3DNX, ui.water3DNY, ui.water3DNZ);
+        }
     }
 
     ImGui::BeginDisabled(ui.offlineBakeRunning);
@@ -890,6 +1043,26 @@ static void DrawSettingsWindow(Settings& ui,
     ImGui::Checkbox("Keep image sequence", &ui.offlineBakeKeepImageSequence);
     ImGui::Checkbox("Include 2D water/coupled particles", &ui.offlineBakeIncludeParticles);
 
+    {
+        const int bakeWorkspace = ui.offlineBakeUseCurrentState
+            ? std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled)
+            : std::clamp(ui.offlineBakeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
+        const bool isSmoke3D = (bakeWorkspace == kWorkspaceSmoke3D);
+        const bool isWater3D = (bakeWorkspace == kWorkspaceWater3D);
+        if (isSmoke3D || isWater3D) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("Render angle preview (drag to rotate)");
+            float& yawRef = isSmoke3D ? ui.smoke3DViewYawDeg   : ui.water3DViewYawDeg;
+            float& pitRef = isSmoke3D ? ui.smoke3DViewPitchDeg : ui.water3DViewPitchDeg;
+            DrawCameraAnglePreview(yawRef, pitRef,
+                                   ui.offlineBakeSourcePosX,
+                                   ui.offlineBakeSourcePosY,
+                                   ui.offlineBakeSourcePosZ,
+                                   ui.offlineBakeSourceRadius,
+                                   isSmoke3D ? "Smoke 3D" : "Water 3D");
+        }
+    }
+
     if (!ui.offlineBakeUseCurrentState) {
         ImGui::Separator();
         DrawInspectorSectionLabel("Offline scene bootstrap", "Source placement is normalized to the simulation domain. Y=0 is the bottom of the domain.");
@@ -900,8 +1073,8 @@ static void DrawSettingsWindow(Settings& ui,
         ImGui::Checkbox("Inject procedural source", &ui.offlineBakeInjectSource);
         if (ui.offlineBakeInjectSource) {
             ImGui::SetNextItemWidth(180.0f);
-            ImGui::InputInt("Source duration (frames)", &ui.offlineBakeSourceDurationFrames, 1, 16);
-            ui.offlineBakeSourceDurationFrames = std::clamp(ui.offlineBakeSourceDurationFrames, 0, ui.offlineBakeFrameCount);
+            ImGui::InputInt("Source stays for (frames)", &ui.offlineBakeSourceDurationFrames, 1, 16);
+            ui.offlineBakeSourceDurationFrames = std::max(0, ui.offlineBakeSourceDurationFrames);
 
             ImGui::SliderFloat("Source X", &ui.offlineBakeSourcePosX, 0.0f, 1.0f, "%.2f");
             ImGui::SliderFloat("Source Y", &ui.offlineBakeSourcePosY, 0.0f, 1.0f, "%.2f");
@@ -909,7 +1082,7 @@ static void DrawSettingsWindow(Settings& ui,
             if (workspaceIs3D) {
                 ImGui::SliderFloat("Source Z", &ui.offlineBakeSourcePosZ, 0.0f, 1.0f, "%.2f");
             }
-            ImGui::SliderFloat("Source radius", &ui.offlineBakeSourceRadius, 0.01f, 0.35f, "%.2f");
+            ImGui::SliderFloat("Source radius", &ui.offlineBakeSourceRadius, 0.01f, 0.50f, "%.2f");
 
             if (ui.offlineBakeWorkspace == kWorkspaceSmoke2D ||
                 ui.offlineBakeWorkspace == kWorkspaceSmoke3D ||
@@ -2882,10 +3055,10 @@ Actions DrawAll(MAC2D& sim,
     {
         Actions inspectorActions = drawControls(sim, water, water3D, smoke3D, coupled, ui);
         a.resetRequested = a.resetRequested || inspectorActions.resetRequested;
-        a.resetSmoke3DRequested = inspectorActions.resetSmoke3DRequested;
-        a.applySmoke3DGridRequested = inspectorActions.applySmoke3DGridRequested;
-        a.resetWater3DRequested = inspectorActions.resetWater3DRequested;
-        a.applyWater3DGridRequested = inspectorActions.applyWater3DGridRequested;
+        a.resetSmoke3DRequested = a.resetSmoke3DRequested || inspectorActions.resetSmoke3DRequested;
+        a.applySmoke3DGridRequested = a.applySmoke3DGridRequested || inspectorActions.applySmoke3DGridRequested;
+        a.resetWater3DRequested = a.resetWater3DRequested || inspectorActions.resetWater3DRequested;
+        a.applyWater3DGridRequested = a.applyWater3DGridRequested || inspectorActions.applyWater3DGridRequested;
         a.dropWaterTextRequested = a.dropWaterTextRequested || inspectorActions.dropWaterTextRequested;
         a.applyGrid2DRequested = a.applyGrid2DRequested || inspectorActions.applyGrid2DRequested;
         a.applyWindowResolutionRequested = a.applyWindowResolutionRequested || inspectorActions.applyWindowResolutionRequested;

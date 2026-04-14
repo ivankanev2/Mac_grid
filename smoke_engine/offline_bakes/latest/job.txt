@@ -1,21 +1,21 @@
 Vizior Offline Bake
 Mode: self-contained hidden scene
-Workspace: Water 3D
+Workspace: Smoke 3D
 Frames: 240
 Output resolution: 1920 x 1080
 Video FPS: 30
-Sim steps per frame: 4
+Sim steps per frame: 2
 Fixed sim dt: 0.00833333
 Frame prefix: frame
 Encode video: yes
 Keep image sequence: yes
-Warmup steps: 8
+Warmup steps: 24
 Procedural source: yes
-Source duration (frames): 240
-Source pos: (0.5, 0.18, 0.5)
-Source radius: 0.08
-Smoke amount: 0.2
-Heat amount: 0.5
+Source duration (frames): 180
+Source pos: (0.5, 0.69, 0.5)
+Source radius: 0.14
+Smoke amount: 0.6
+Heat amount: 1.2
 Water amount: 0.2
-Source velocity: (0, 2, 0)
-Created: Tue Apr 14 12:47:20 2026
+Source velocity: (0, 3, 0)
+Created: Tue Apr 14 22:51:15 2026

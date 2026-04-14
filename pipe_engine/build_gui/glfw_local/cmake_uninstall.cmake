@@ -1,9 +1,9 @@
 
-if (NOT EXISTS "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/install_manifest.txt")
-  message(FATAL_ERROR "Cannot find install manifest: \"/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/install_manifest.txt\"")
+if (NOT EXISTS "/Users/delyan.hristov/Documents/projects/Fluid simulation/MAC/Mac_grid/pipe_engine/build_gui/glfw_local/install_manifest.txt")
+  message(FATAL_ERROR "Cannot find install manifest: \"/Users/delyan.hristov/Documents/projects/Fluid simulation/MAC/Mac_grid/pipe_engine/build_gui/glfw_local/install_manifest.txt\"")
 endif()
 
-file(READ "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/build_gui/glfw_local/install_manifest.txt" files)
+file(READ "/Users/delyan.hristov/Documents/projects/Fluid simulation/MAC/Mac_grid/pipe_engine/build_gui/glfw_local/install_manifest.txt" files)
 string(REGEX REPLACE "\n" ";" files "${files}")
 
 foreach (file ${files})
