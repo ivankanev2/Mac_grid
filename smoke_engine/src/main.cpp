@@ -980,10 +980,25 @@ int main()
         activateWorkspace(activeWorkspace);
     };
 
+    const int initialOfflineNX = std::max(32, ui.sim2DNX);
+    const int initialOfflineNY = std::max(32, ui.sim2DNY);
+    const float initialOfflineDX = 1.0f / std::max(1, initialOfflineNX);
+
+    PressureSolver offlineSharedPressureSolver;
+    MAC2D offlineSmoke2D(initialOfflineNX, initialOfflineNY, initialOfflineDX, dt_initial);
+    MACWater offlineWater2D(initialOfflineNX, initialOfflineNY, initialOfflineDX, dt_initial);
+    MACSmoke3D offlineSmoke3D(1, 1, 1, 1.0f, dt_initial);
+    MACWater3D offlineWater3D(1, 1, 1, 1.0f, dt_initial);
+    MACCoupledSim offlineCoupled(initialOfflineNX, initialOfflineNY, initialOfflineDX, dt_initial);
+    offlineSmoke2D.setSharedPressureSolver(&offlineSharedPressureSolver);
+    offlineWater2D.setSharedPressureSolver(&offlineSharedPressureSolver);
+    offlineCoupled.setSharedPressureSolver(&offlineSharedPressureSolver);
+
     SmokeRenderer offlineBakeRenderer(1, 1);
     struct OfflineBakeRuntime {
         bool running = false;
         bool cancelRequested = false;
+        bool useLiveState = false;
         int nextFrame = 0;
         int totalFrames = 0;
         int workspace = UI::kWorkspaceSmoke2D;
@@ -1008,12 +1023,307 @@ int main()
     };
     setOfflineStatus("Idle");
 
+    auto configureOffline2DScene = [&](const UI::Settings& cfg,
+                                       MAC2D& smoke2DRef,
+                                       MACWater& water2DRef,
+                                       MACCoupledSim& coupledRef) {
+        smoke2DRef.setDt(cfg.offlineBakeFixedDt);
+        smoke2DRef.useMacCormack = sim.useMacCormack;
+        smoke2DRef.setOpenTop(sim.getOpenTop());
+        smoke2DRef.setValveOpen(false);
+        smoke2DRef.inletSpeed = sim.inletSpeed;
+        smoke2DRef.inletSmoke = sim.inletSmoke;
+        smoke2DRef.inletTemp = sim.inletTemp;
+        smoke2DRef.smokeDissipation = cfg.smokeDissipation;
+        smoke2DRef.tempDissipation = cfg.tempDissipation;
+        smoke2DRef.velDamping = sim.velDamping;
+        smoke2DRef.tempCoolRate = sim.tempCoolRate;
+        smoke2DRef.tempDiffusivity = sim.tempDiffusivity;
+        smoke2DRef.viscosity = sim.viscosity;
+        smoke2DRef.smokeDiffusivity = sim.smokeDiffusivity;
+        smoke2DRef.diffuseIters = sim.diffuseIters;
+        smoke2DRef.diffuseOmega = sim.diffuseOmega;
+        smoke2DRef.gravity_g = sim.gravity_g;
+        smoke2DRef.ambientTempK = sim.ambientTempK;
+        smoke2DRef.buoyancyScale = sim.buoyancyScale;
+        smoke2DRef.pressureMGVCycles = cfg.smoke2DPressureMGVCycles;
+        smoke2DRef.pressureMGCoarseIters = cfg.smoke2DPressureMGCoarseIters;
+        smoke2DRef.pressureMGRelativeTol = sim.pressureMGRelativeTol;
+
+        water2DRef.setDt(cfg.offlineBakeFixedDt);
+        water2DRef.waterDissipation = cfg.waterDissipation;
+        water2DRef.waterGravity = cfg.waterGravity;
+        water2DRef.velDamping = cfg.waterVelDamping;
+        water2DRef.openTop = cfg.waterOpenTop;
+        water2DRef.waterHeld = false;
+        water2DRef.viscosity = waterSim.viscosity;
+        water2DRef.diffuseIters = waterSim.diffuseIters;
+        water2DRef.diffuseOmega = waterSim.diffuseOmega;
+        water2DRef.particlesPerCell = waterSim.particlesPerCell;
+        water2DRef.flipBlend = waterSim.flipBlend;
+        water2DRef.useAPIC = waterSim.useAPIC;
+        water2DRef.borderThickness = waterSim.borderThickness;
+        water2DRef.maxParticles = waterSim.maxParticles;
+        water2DRef.maskDilations = waterSim.maskDilations;
+        water2DRef.extrapolationIters = waterSim.extrapolationIters;
+        water2DRef.pressureMaxIters = waterSim.pressureMaxIters;
+        water2DRef.pressureTol = waterSim.pressureTol;
+        water2DRef.volumePreserveRhsMean = waterSim.volumePreserveRhsMean;
+        water2DRef.volumePreserveStrength = waterSim.volumePreserveStrength;
+        water2DRef.syncSolidsFrom(smoke2DRef);
+
+        coupledRef.setDt(cfg.offlineBakeFixedDt);
+        coupledRef.waterDissipation = cfg.waterDissipation;
+        coupledRef.waterGravity = cfg.waterGravity;
+        coupledRef.velDamping = cfg.waterVelDamping;
+        coupledRef.setOpenTop(false);
+        coupledRef.setValveOpen(false);
+        coupledRef.pressureMGVCycles = cfg.smoke2DPressureMGVCycles;
+        coupledRef.pressureMGCoarseIters = cfg.smoke2DPressureMGCoarseIters;
+        coupledRef.smokeDissipation = cfg.smokeDissipation;
+        coupledRef.tempDissipation = cfg.tempDissipation;
+        coupledRef.useMacCormack = sim.useMacCormack;
+        coupledRef.inletSpeed = coupled.inletSpeed;
+        coupledRef.inletSmoke = coupled.inletSmoke;
+        coupledRef.inletTemp = coupled.inletTemp;
+        coupledRef.rhoAir = coupled.rhoAir;
+        coupledRef.rhoWater = coupled.rhoWater;
+        coupledRef.pipe.radius = coupled.pipe.radius;
+        coupledRef.pipe.wall = coupled.pipe.wall;
+        coupledRef.enforceBoundaries();
+    };
+
+    auto configureOfflineSmoke3DScene = [&](const UI::Settings& cfg, MACSmoke3D& smoke3DRef) {
+        smoke3DRef.setDt(cfg.offlineBakeFixedDt);
+        MACSmoke3D::Params s3 = smoke3DRef.params;
+        s3.smokeDissipation = cfg.smokeDissipation;
+        s3.tempDissipation = cfg.tempDissipation;
+        s3.gravity = cfg.smoke3DGravity;
+        s3.buoyancyScale = cfg.smoke3DBuoyancyScale;
+        s3.velDamping = cfg.smoke3DVelDamping;
+        s3.viscosity = cfg.smoke3DViscosity;
+        s3.smokeDiffusivity = cfg.smoke3DSmokeDiffusivity;
+        s3.tempDiffusivity = cfg.smoke3DTempDiffusivity;
+        s3.openTop = cfg.smoke3DOpenTop;
+        s3.pressureIters = cfg.smoke3DPressureIters;
+        s3.pressureSolverMode = cfg.smoke3DPressureSolverMode;
+        s3.pressureOmega = cfg.smoke3DPressureOmega;
+        s3.pressureMGOmega = cfg.smoke3DPressureMGOmega;
+        s3.pressureMGVCycles = cfg.smoke3DPressureMGVCycles;
+        s3.pressureMGCoarseIters = cfg.smoke3DPressureMGCoarseIters;
+        smoke3DRef.setParams(s3);
+    };
+
+    auto configureOfflineWater3DScene = [&](const UI::Settings& cfg, MACWater3D& water3DRef) {
+        water3DRef.setDt(cfg.offlineBakeFixedDt);
+        MACWater3D::Params p3 = water3DRef.params;
+        p3.waterDissipation = cfg.waterDissipation;
+        p3.gravity = cfg.waterGravity;
+        p3.velDamping = cfg.waterVelDamping;
+        p3.openTop = cfg.waterOpenTop;
+        p3.pressureIters = cfg.water3DPressureIters;
+        p3.pressureSolverMode = cfg.water3DPressureSolverMode;
+        p3.useAPIC = cfg.water3DUseAPIC;
+        p3.flipBlend = cfg.water3DFlipBlend;
+        p3.pressureOmega = cfg.water3DPressureOmega;
+        p3.pressureMGOmega = cfg.water3DPressureMGOmega;
+        p3.pressureMGVCycles = cfg.water3DPressureMGVCycles;
+        p3.pressureMGCoarseIters = cfg.water3DPressureMGCoarseIters;
+        p3.volumePreserveRhsMean = cfg.water3DVolumePreserve;
+        p3.volumePreserveStrength = cfg.water3DVolumePreserveStrength;
+        p3.reseedRelaxIters = cfg.water3DRelaxIters;
+        p3.reseedRelaxStrength = cfg.water3DRelaxStrength;
+        water3DRef.setParams(p3);
+
+        MACWater3D::BackendPreference requestedWaterBackend = MACWater3D::BackendPreference::Auto;
+        switch (cfg.water3DBackendMode) {
+            case 1: requestedWaterBackend = MACWater3D::BackendPreference::CPU; break;
+            case 2: requestedWaterBackend = MACWater3D::BackendPreference::CUDA; break;
+            default: break;
+        }
+        water3DRef.setBackendPreference(requestedWaterBackend);
+    };
+
+    auto stepOfflineWorkspace = [&](int workspace,
+                                    const UI::Settings& cfg,
+                                    float dt,
+                                    MAC2D& smoke2DRef,
+                                    MACWater& water2DRef,
+                                    MACSmoke3D& smoke3DRef,
+                                    MACWater3D& water3DRef,
+                                    MACCoupledSim& coupledRef) {
+        switch (workspace) {
+            case UI::kWorkspaceWater2D:
+                water2DRef.setDt(dt);
+                water2DRef.syncSolidsFrom(smoke2DRef);
+                water2DRef.step();
+                break;
+            case UI::kWorkspaceSmoke3D:
+                smoke3DRef.setDt(dt);
+                smoke3DRef.step();
+                break;
+            case UI::kWorkspaceWater3D:
+                water3DRef.setDt(dt);
+                water3DRef.step();
+                break;
+            case UI::kWorkspaceCoupled:
+                coupledRef.setDt(dt);
+                coupledRef.stepCoupled(cfg.vortEps);
+                break;
+            case UI::kWorkspaceSmoke2D:
+            default:
+                smoke2DRef.setDt(dt);
+                smoke2DRef.step(cfg.vortEps);
+                break;
+        }
+    };
+
+    auto applyOfflineSource = [&](int workspace,
+                                  const UI::Settings& cfg,
+                                  MAC2D& smoke2DRef,
+                                  MACWater& water2DRef,
+                                  MACSmoke3D& smoke3DRef,
+                                  MACWater3D& water3DRef,
+                                  MACCoupledSim& coupledRef) {
+        if (!cfg.offlineBakeInjectSource) return;
+
+        const float px = std::clamp(cfg.offlineBakeSourcePosX, 0.0f, 1.0f);
+        const float py = std::clamp(cfg.offlineBakeSourcePosY, 0.0f, 1.0f);
+        const float pz = std::clamp(cfg.offlineBakeSourcePosZ, 0.0f, 1.0f);
+        const float radiusNorm = std::max(0.001f, cfg.offlineBakeSourceRadius);
+
+        switch (workspace) {
+            case UI::kWorkspaceSmoke2D: {
+                const float domainX = smoke2DRef.nx * smoke2DRef.dx;
+                const float domainY = smoke2DRef.ny * smoke2DRef.dx;
+                const float radius = std::max(smoke2DRef.dx, radiusNorm * std::min(domainX, domainY));
+                const float cx = px * domainX;
+                const float cy = py * domainY;
+                smoke2DRef.addSmokeSource(cx, cy, radius, cfg.offlineBakeSmokeAmount);
+                smoke2DRef.addHeatSource(cx, cy, radius, cfg.offlineBakeHeatAmount);
+                break;
+            }
+            case UI::kWorkspaceWater2D: {
+                const float domainX = water2DRef.nx * water2DRef.dx;
+                const float domainY = water2DRef.ny * water2DRef.dx;
+                const float radius = std::max(water2DRef.dx, radiusNorm * std::min(domainX, domainY));
+                const float cx = px * domainX;
+                const float cy = py * domainY;
+                water2DRef.addWaterSource(cx, cy, radius, cfg.offlineBakeWaterAmount);
+                break;
+            }
+            case UI::kWorkspaceSmoke3D: {
+                const float domainX = smoke3DRef.nx * smoke3DRef.dx;
+                const float domainY = smoke3DRef.ny * smoke3DRef.dx;
+                const float domainZ = smoke3DRef.nz * smoke3DRef.dx;
+                const float radius = std::max(smoke3DRef.dx, radiusNorm * std::min({domainX, domainY, domainZ}));
+                const MACSmoke3D::Vec3 center{px * domainX, py * domainY, pz * domainZ};
+                const MACSmoke3D::Vec3 velocity{cfg.offlineBakeSourceVelX, cfg.offlineBakeSourceVelY, cfg.offlineBakeSourceVelZ};
+                smoke3DRef.addSmokeSourceSphere(center, radius, cfg.offlineBakeSmokeAmount, velocity);
+                smoke3DRef.addHeatSourceSphere(center, radius, cfg.offlineBakeHeatAmount);
+                break;
+            }
+            case UI::kWorkspaceWater3D: {
+                const float domainX = water3DRef.nx * water3DRef.dx;
+                const float domainY = water3DRef.ny * water3DRef.dx;
+                const float domainZ = water3DRef.nz * water3DRef.dx;
+                const float radius = std::max(water3DRef.dx, radiusNorm * std::min({domainX, domainY, domainZ}));
+                const MACWater3D::Vec3 center{px * domainX, py * domainY, pz * domainZ};
+                const MACWater3D::Vec3 velocity{cfg.offlineBakeSourceVelX, cfg.offlineBakeSourceVelY, cfg.offlineBakeSourceVelZ};
+                water3DRef.addWaterSourceSphere(center, radius, velocity);
+                break;
+            }
+            case UI::kWorkspaceCoupled: {
+                const float domainX = coupledRef.nx * coupledRef.dx;
+                const float domainY = coupledRef.ny * coupledRef.dx;
+                const float radius = std::max(coupledRef.dx, radiusNorm * std::min(domainX, domainY));
+                const float cx = px * domainX;
+                const float cy = py * domainY;
+                coupledRef.addWaterSource(cx, cy, radius, cfg.offlineBakeWaterAmount);
+
+                const float r2 = radius * radius;
+                for (int j = 0; j < coupledRef.ny; ++j) {
+                    for (int i = 0; i < coupledRef.nx; ++i) {
+                        const int id = coupledRef.idxP(i, j);
+                        if (coupledRef.solidMask()[(std::size_t)id]) continue;
+                        const float x = (i + 0.5f) * coupledRef.dx;
+                        const float y = (j + 0.5f) * coupledRef.dx;
+                        const float dx0 = x - cx;
+                        const float dy0 = y - cy;
+                        if (dx0 * dx0 + dy0 * dy0 > r2) continue;
+                        coupledRef.smoke[(std::size_t)id] = std::min(1.0f, coupledRef.smoke[(std::size_t)id] + cfg.offlineBakeSmokeAmount);
+                        coupledRef.temp[(std::size_t)id] += cfg.offlineBakeHeatAmount;
+                        coupledRef.age[(std::size_t)id] = 0.0f;
+                    }
+                }
+                coupledRef.enforceBoundaries();
+                break;
+            }
+        }
+    };
+
+    auto initializeOfflineScene = [&](const OfflineBakeRuntime& job, std::string& outError) {
+        outError.clear();
+
+        const int nx2 = std::max(32, job.snapshot.sim2DNX);
+        const int ny2 = std::max(32, job.snapshot.sim2DNY);
+        const float dx2 = 1.0f / std::max(1, nx2);
+
+        offlineSmoke2D = MAC2D(nx2, ny2, dx2, job.fixedDt);
+        offlineWater2D = MACWater(nx2, ny2, dx2, job.fixedDt);
+        offlineCoupled = MACCoupledSim(nx2, ny2, dx2, job.fixedDt);
+        offlineSmoke2D.setSharedPressureSolver(&offlineSharedPressureSolver);
+        offlineWater2D.setSharedPressureSolver(&offlineSharedPressureSolver);
+        offlineCoupled.setSharedPressureSolver(&offlineSharedPressureSolver);
+
+        offlineSmoke3D.reset(1, 1, 1, 1.0f, job.fixedDt);
+        offlineWater3D.reset(1, 1, 1, 1.0f, job.fixedDt);
+
+        if (job.workspace == UI::kWorkspaceSmoke3D) {
+            const int nx3 = std::max(1, job.snapshot.smoke3DNX);
+            const int ny3 = std::max(1, job.snapshot.smoke3DNY);
+            const int nz3 = std::max(1, job.snapshot.smoke3DNZ);
+            offlineSmoke3D.reset(nx3, ny3, nz3, dxForGrid(nx3, ny3, nz3), job.fixedDt);
+        } else if (job.workspace == UI::kWorkspaceWater3D) {
+            const int nx3 = std::max(1, job.snapshot.water3DNX);
+            const int ny3 = std::max(1, job.snapshot.water3DNY);
+            const int nz3 = std::max(1, job.snapshot.water3DNZ);
+            offlineWater3D.reset(nx3, ny3, nz3, dxForGrid(nx3, ny3, nz3), job.fixedDt);
+        }
+
+        configureOffline2DScene(job.snapshot, offlineSmoke2D, offlineWater2D, offlineCoupled);
+        configureOfflineSmoke3DScene(job.snapshot, offlineSmoke3D);
+        configureOfflineWater3DScene(job.snapshot, offlineWater3D);
+
+        const int warmupSteps = std::max(0, job.snapshot.offlineBakeWarmupSteps);
+        for (int step = 0; step < warmupSteps; ++step) {
+            if (job.snapshot.offlineBakeInjectSource && job.snapshot.offlineBakeSourceDurationFrames > 0) {
+                applyOfflineSource(job.workspace, job.snapshot,
+                                   offlineSmoke2D, offlineWater2D,
+                                   offlineSmoke3D, offlineWater3D,
+                                   offlineCoupled);
+            }
+            stepOfflineWorkspace(job.workspace, job.snapshot, job.fixedDt,
+                                 offlineSmoke2D, offlineWater2D,
+                                 offlineSmoke3D, offlineWater3D,
+                                 offlineCoupled);
+        }
+
+        if (job.snapshot.offlineBakeInjectSource && job.snapshot.offlineBakeSourceDurationFrames > 0) {
+            applyOfflineSource(job.workspace, job.snapshot,
+                               offlineSmoke2D, offlineWater2D,
+                               offlineSmoke3D, offlineWater3D,
+                               offlineCoupled);
+        }
+    };
+
     auto writeOfflineBakeManifest = [&](const OfflineBakeRuntime& job) {
         try {
             std::ofstream manifest(job.jobDir / "job.txt", std::ios::out | std::ios::trunc);
             if (!manifest) return;
             const std::time_t nowTs = std::time(nullptr);
             manifest << "Vizior Offline Bake\n";
+            manifest << "Mode: " << (job.useLiveState ? "current live state" : "self-contained hidden scene") << "\n";
             manifest << "Workspace: " << UI::ActiveWorkspaceLabel(job.workspace) << "\n";
             manifest << "Frames: " << job.totalFrames << "\n";
             manifest << "Output resolution: " << job.outputWidth << " x " << job.outputHeight << "\n";
@@ -1023,6 +1333,25 @@ int main()
             manifest << "Frame prefix: " << job.framePrefix << "\n";
             manifest << "Encode video: " << (job.encodeVideo ? "yes" : "no") << "\n";
             manifest << "Keep image sequence: " << (job.keepImageSequence ? "yes" : "no") << "\n";
+            if (!job.useLiveState) {
+                manifest << "Warmup steps: " << job.snapshot.offlineBakeWarmupSteps << "\n";
+                manifest << "Procedural source: " << (job.snapshot.offlineBakeInjectSource ? "yes" : "no") << "\n";
+                if (job.snapshot.offlineBakeInjectSource) {
+                    manifest << "Source duration (frames): " << job.snapshot.offlineBakeSourceDurationFrames << "\n";
+                    manifest << "Source pos: ("
+                             << job.snapshot.offlineBakeSourcePosX << ", "
+                             << job.snapshot.offlineBakeSourcePosY << ", "
+                             << job.snapshot.offlineBakeSourcePosZ << ")\n";
+                    manifest << "Source radius: " << job.snapshot.offlineBakeSourceRadius << "\n";
+                    manifest << "Smoke amount: " << job.snapshot.offlineBakeSmokeAmount << "\n";
+                    manifest << "Heat amount: " << job.snapshot.offlineBakeHeatAmount << "\n";
+                    manifest << "Water amount: " << job.snapshot.offlineBakeWaterAmount << "\n";
+                    manifest << "Source velocity: ("
+                             << job.snapshot.offlineBakeSourceVelX << ", "
+                             << job.snapshot.offlineBakeSourceVelY << ", "
+                             << job.snapshot.offlineBakeSourceVelZ << ")\n";
+                }
+            }
             manifest << "Created: " << std::asctime(std::localtime(&nowTs));
         } catch (...) {
         }
@@ -1056,7 +1385,10 @@ int main()
         }
 
         OfflineBakeRuntime job;
-        job.workspace = activeWorkspace;
+        job.useLiveState = ui.offlineBakeUseCurrentState;
+        job.workspace = job.useLiveState
+            ? activeWorkspace
+            : std::clamp(ui.offlineBakeWorkspace, (int)UI::kWorkspaceSmoke2D, (int)UI::kWorkspaceCoupled);
         job.totalFrames = std::max(1, ui.offlineBakeFrameCount);
         job.outputWidth = std::max(64, ui.offlineBakeWidth);
         job.outputHeight = std::max(64, ui.offlineBakeHeight);
@@ -1071,7 +1403,9 @@ int main()
         job.keepImageSequence = ui.offlineBakeKeepImageSequence;
         job.framePrefix = framePrefix;
         job.snapshot = ui;
-        job.snapshot.activeWorkspace = activeWorkspace;
+        job.snapshot.activeWorkspace = job.workspace;
+        job.snapshot.offlineBakeSourceDurationFrames = std::clamp(job.snapshot.offlineBakeSourceDurationFrames, 0, job.totalFrames);
+        job.snapshot.offlineBakeWarmupSteps = std::max(0, job.snapshot.offlineBakeWarmupSteps);
         job.jobDir = std::filesystem::path(outputDir);
         job.framesDir = job.jobDir / "frames";
         job.videoPath = job.jobDir / videoFile;
@@ -1090,6 +1424,15 @@ int main()
             return;
         }
 
+        if (!job.useLiveState) {
+            std::string initError;
+            initializeOfflineScene(job, initError);
+            if (!initError.empty()) {
+                setOfflineStatus(std::string("Bake setup failed: ") + initError);
+                return;
+            }
+        }
+
         offlineBake = std::move(job);
         offlineBake.running = true;
         ui.playing = false;
@@ -1098,36 +1441,10 @@ int main()
         writeOfflineBakeManifest(offlineBake);
 
         std::ostringstream oss;
-        oss << "Bake ready: " << UI::ActiveWorkspaceLabel(offlineBake.workspace)
+        oss << (offlineBake.useLiveState ? "Bake ready from live state: " : "Bake ready from hidden scene: ")
+            << UI::ActiveWorkspaceLabel(offlineBake.workspace)
             << " -> " << offlineBake.jobDir.generic_string();
         setOfflineStatus(oss.str());
-    };
-
-    auto stepOfflineWorkspace = [&](int workspace, const UI::Settings& cfg, float dt) {
-        switch (workspace) {
-            case UI::kWorkspaceWater2D:
-                waterSim.setDt(dt);
-                waterSim.syncSolidsFrom(sim);
-                waterSim.step();
-                break;
-            case UI::kWorkspaceSmoke3D:
-                smoke3D.setDt(dt);
-                smoke3D.step();
-                break;
-            case UI::kWorkspaceWater3D:
-                water3D.setDt(dt);
-                water3D.step();
-                break;
-            case UI::kWorkspaceCoupled:
-                coupled.setDt(dt);
-                coupled.stepCoupled(cfg.vortEps);
-                break;
-            case UI::kWorkspaceSmoke2D:
-            default:
-                sim.setDt(dt);
-                sim.step(cfg.vortEps);
-                break;
-        }
     };
 
     auto processOfflineBakeChunk = [&]() {
@@ -1136,16 +1453,22 @@ int main()
         const double chunkStart = glfwGetTime();
         int framesDone = 0;
 
+        MAC2D& bakeSmoke2D = offlineBake.useLiveState ? sim : offlineSmoke2D;
+        MACWater& bakeWater2D = offlineBake.useLiveState ? waterSim : offlineWater2D;
+        MACSmoke3D& bakeSmoke3D = offlineBake.useLiveState ? smoke3D : offlineSmoke3D;
+        MACWater3D& bakeWater3D = offlineBake.useLiveState ? water3D : offlineWater3D;
+        MACCoupledSim& bakeCoupled = offlineBake.useLiveState ? coupled : offlineCoupled;
+
         while (offlineBake.running && !offlineBake.cancelRequested && offlineBake.nextFrame < offlineBake.totalFrames) {
             OfflineFrameImage frame;
             std::string frameError;
             if (!captureWorkspaceFrame(offlineBake.workspace,
                                        offlineBake.snapshot,
-                                       sim,
-                                       waterSim,
-                                       smoke3D,
-                                       water3D,
-                                       coupled,
+                                       bakeSmoke2D,
+                                       bakeWater2D,
+                                       bakeSmoke3D,
+                                       bakeWater3D,
+                                       bakeCoupled,
                                        offlineBakeRenderer,
                                        offlineBake.outputWidth,
                                        offlineBake.outputHeight,
@@ -1168,7 +1491,25 @@ int main()
 
             if (offlineBake.nextFrame < offlineBake.totalFrames) {
                 for (int step = 0; step < offlineBake.simStepsPerFrame; ++step) {
-                    stepOfflineWorkspace(offlineBake.workspace, offlineBake.snapshot, offlineBake.fixedDt);
+                    if (!offlineBake.useLiveState &&
+                        offlineBake.snapshot.offlineBakeInjectSource &&
+                        offlineBake.nextFrame < offlineBake.snapshot.offlineBakeSourceDurationFrames) {
+                        applyOfflineSource(offlineBake.workspace,
+                                           offlineBake.snapshot,
+                                           bakeSmoke2D,
+                                           bakeWater2D,
+                                           bakeSmoke3D,
+                                           bakeWater3D,
+                                           bakeCoupled);
+                    }
+                    stepOfflineWorkspace(offlineBake.workspace,
+                                         offlineBake.snapshot,
+                                         offlineBake.fixedDt,
+                                         bakeSmoke2D,
+                                         bakeWater2D,
+                                         bakeSmoke3D,
+                                         bakeWater3D,
+                                         bakeCoupled);
                 }
             }
 

@@ -848,9 +848,18 @@ static void DrawSettingsWindow(Settings& ui,
     }
 
     ImGui::Spacing();
-    DrawInspectorSectionLabel("Offline Bake", "Simulate and render the active workspace to an image sequence, then optionally assemble a video with ffmpeg.");
-    ImGui::TextDisabled("Active workspace: %s", ActiveWorkspaceLabel(std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled)));
-    ImGui::TextWrapped("The bake starts from the current simulation state, advances using a fixed timestep, saves numbered frames, and can optionally encode an MP4 preview when it finishes.");
+    DrawInspectorSectionLabel("Offline Bake", "Run a fixed-timestep hidden job, save numbered frames, and optionally assemble a preview video with ffmpeg.");
+    ImGui::Checkbox("Use current live simulation state", &ui.offlineBakeUseCurrentState);
+    if (ui.offlineBakeUseCurrentState) {
+        ImGui::TextDisabled("Bake source: live viewport state (%s)",
+                            ActiveWorkspaceLabel(std::clamp(ui.activeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled)));
+        ImGui::TextWrapped("This keeps the previous workflow: the bake starts from the currently active workspace and its current state.");
+    } else {
+        static const char* offlineWorkspaceItems[] = { "Smoke 2D", "Water 2D", "Smoke 3D", "Water 3D", "Coupled" };
+        ui.offlineBakeWorkspace = std::clamp(ui.offlineBakeWorkspace, (int)kWorkspaceSmoke2D, (int)kWorkspaceCoupled);
+        ImGui::Combo("Offline workspace", &ui.offlineBakeWorkspace, offlineWorkspaceItems, 5);
+        ImGui::TextWrapped("A clean hidden scene will be booted for the selected workspace, so you do not need to paint or simulate anything in the live viewport first.");
+    }
 
     ImGui::BeginDisabled(ui.offlineBakeRunning);
     ImGui::InputText("Output directory", ui.offlineBakeOutputDir, IM_ARRAYSIZE(ui.offlineBakeOutputDir));
@@ -880,6 +889,55 @@ static void DrawSettingsWindow(Settings& ui,
     ImGui::Checkbox("Encode MP4 with ffmpeg", &ui.offlineBakeAutoEncodeVideo);
     ImGui::Checkbox("Keep image sequence", &ui.offlineBakeKeepImageSequence);
     ImGui::Checkbox("Include 2D water/coupled particles", &ui.offlineBakeIncludeParticles);
+
+    if (!ui.offlineBakeUseCurrentState) {
+        ImGui::Separator();
+        DrawInspectorSectionLabel("Offline scene bootstrap", "Source placement is normalized to the simulation domain. Y=0 is the bottom of the domain.");
+        ImGui::SetNextItemWidth(180.0f);
+        ImGui::InputInt("Warmup steps", &ui.offlineBakeWarmupSteps, 1, 16);
+        ui.offlineBakeWarmupSteps = std::clamp(ui.offlineBakeWarmupSteps, 0, 200000);
+
+        ImGui::Checkbox("Inject procedural source", &ui.offlineBakeInjectSource);
+        if (ui.offlineBakeInjectSource) {
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::InputInt("Source duration (frames)", &ui.offlineBakeSourceDurationFrames, 1, 16);
+            ui.offlineBakeSourceDurationFrames = std::clamp(ui.offlineBakeSourceDurationFrames, 0, ui.offlineBakeFrameCount);
+
+            ImGui::SliderFloat("Source X", &ui.offlineBakeSourcePosX, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Source Y", &ui.offlineBakeSourcePosY, 0.0f, 1.0f, "%.2f");
+            const bool workspaceIs3D = (ui.offlineBakeWorkspace == kWorkspaceSmoke3D || ui.offlineBakeWorkspace == kWorkspaceWater3D);
+            if (workspaceIs3D) {
+                ImGui::SliderFloat("Source Z", &ui.offlineBakeSourcePosZ, 0.0f, 1.0f, "%.2f");
+            }
+            ImGui::SliderFloat("Source radius", &ui.offlineBakeSourceRadius, 0.01f, 0.35f, "%.2f");
+
+            if (ui.offlineBakeWorkspace == kWorkspaceSmoke2D ||
+                ui.offlineBakeWorkspace == kWorkspaceSmoke3D ||
+                ui.offlineBakeWorkspace == kWorkspaceCoupled) {
+                ImGui::SliderFloat("Smoke amount", &ui.offlineBakeSmokeAmount, 0.0f, 1.0f, "%.2f");
+                ImGui::SliderFloat("Heat amount", &ui.offlineBakeHeatAmount, 0.0f, 2.0f, "%.2f");
+            }
+            if (ui.offlineBakeWorkspace == kWorkspaceWater2D ||
+                ui.offlineBakeWorkspace == kWorkspaceCoupled) {
+                ImGui::SliderFloat("Water amount", &ui.offlineBakeWaterAmount, 0.0f, 1.0f, "%.2f");
+            }
+            ImGui::SliderFloat("Source vel X", &ui.offlineBakeSourceVelX, -5.0f, 5.0f, "%.2f");
+            ImGui::SliderFloat("Source vel Y", &ui.offlineBakeSourceVelY, -5.0f, 5.0f, "%.2f");
+            if (workspaceIs3D) {
+                ImGui::SliderFloat("Source vel Z", &ui.offlineBakeSourceVelZ, -5.0f, 5.0f, "%.2f");
+            }
+
+            ui.offlineBakeSourceRadius = std::clamp(ui.offlineBakeSourceRadius, 0.001f, 0.50f);
+            ui.offlineBakeSmokeAmount = std::clamp(ui.offlineBakeSmokeAmount, 0.0f, 1.0f);
+            ui.offlineBakeHeatAmount = std::clamp(ui.offlineBakeHeatAmount, 0.0f, 10.0f);
+            ui.offlineBakeWaterAmount = std::clamp(ui.offlineBakeWaterAmount, 0.0f, 1.0f);
+            ui.offlineBakeSourcePosX = std::clamp(ui.offlineBakeSourcePosX, 0.0f, 1.0f);
+            ui.offlineBakeSourcePosY = std::clamp(ui.offlineBakeSourcePosY, 0.0f, 1.0f);
+            ui.offlineBakeSourcePosZ = std::clamp(ui.offlineBakeSourcePosZ, 0.0f, 1.0f);
+        }
+
+        ImGui::TextDisabled("The hidden scene still uses the current workspace render/runtime settings where applicable, but it no longer depends on the live viewport state.");
+    }
     ImGui::EndDisabled();
 
     const float progress = (ui.offlineBakeFrameCount > 0)
@@ -893,7 +951,11 @@ static void DrawSettingsWindow(Settings& ui,
             actions.startOfflineBakeRequested = true;
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("The bake uses the current workspace and current simulation state.");
+        if (ui.offlineBakeUseCurrentState) {
+            ImGui::TextDisabled("The bake uses the current workspace and current simulation state.");
+        } else {
+            ImGui::TextDisabled("The bake boots a clean hidden scene from the selected workspace and source settings.");
+        }
     } else {
         if (ImGui::Button("Cancel bake", ImVec2(220.0f, 0.0f))) {
             actions.cancelOfflineBakeRequested = true;
