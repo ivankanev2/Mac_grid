@@ -221,8 +221,18 @@ void PressureSolver3D::detectCompactDenseBox()
     const int j1 = maxJ + 1;
     const int k0 = minK;
     const int k1 = maxK + 1;
-    const int boxVolume = (i1 - i0) * (j1 - j0) * (k1 - k0);
+    const int extentI = i1 - i0;
+    const int extentJ = j1 - j0;
+    const int extentK = k1 - k0;
+    const int boxVolume = extentI * extentJ * extentK;
     if (boxVolume != fluidCount) return;
+
+    // The structured dense-box fast path is safe for genuinely volumetric blocks,
+    // but one-cell-thick slabs can appear in settled free-surface water. On those
+    // degenerate boxes, the specialized multigrid smoothing/transfer kernels can
+    // over-amplify pressure corrections and blow up the solve. Fall back to the
+    // generic masked path for any axis with only a single active cell.
+    if (extentI <= 1 || extentJ <= 1 || extentK <= 1) return;
 
     for (int k = k0; k < k1; ++k) {
         for (int j = j0; j < j1; ++j) {

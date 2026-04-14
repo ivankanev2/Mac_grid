@@ -1412,6 +1412,9 @@ static Actions drawControls(MAC2D& sim,
         const char* waterViewItems[] = { "Volume", "Slice", "Surface" };
         ui.water3DViewMode = std::clamp(ui.water3DViewMode, 0, 2);
         ImGui::Combo("Water 3D view mode", &ui.water3DViewMode, waterViewItems, 3);
+        const char* waterDisplayItems[] = { "Overlay only", "Particles only", "Overlay + particles" };
+        ui.water3DDisplayMode = std::clamp(ui.water3DDisplayMode, 0, 2);
+        ImGui::Combo("Water 3D display", &ui.water3DDisplayMode, waterDisplayItems, 3);
         if (ui.water3DViewMode == 1) {
             const char* axisItems[] = { "XY", "XZ", "YZ" };
             ui.water3DSliceAxis = std::clamp(ui.water3DSliceAxis, 0, 2);
@@ -2399,20 +2402,38 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
         ui.water3DViewportWidth = std::max(160.0f, avail.x);
         ui.water3DViewportHeight = std::max(160.0f, avail.y);
     }
-    const int texW = std::max(1, renderer.width());
-    const int texH = std::max(1, renderer.height());
-    const ImVec2 imageSize = FitViewportImageSize((float)texW, (float)texH, ui.viewScale);
+    const int viewMode = std::clamp(ui.water3DViewMode, 0, 2);
+    const int displayMode = std::clamp(ui.water3DDisplayMode, 0, 2);
+    const bool sliceMode = (viewMode == 1);
+    const bool showWaterOverlay = (displayMode != 1);
+    const bool showParticleOverlay = (displayMode != 0);
+
+    int sourceW = std::max(1, renderer.width());
+    int sourceH = std::max(1, renderer.height());
+    if (!showWaterOverlay) {
+        if (sliceMode) {
+            const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
+            sourceW = (axis == 2) ? std::max(1, water3D.ny) : std::max(1, water3D.nx);
+            sourceH = (axis == 0) ? std::max(1, water3D.ny) : std::max(1, water3D.nz);
+        } else {
+            sourceW = std::max(1, (int)std::round(ui.water3DViewportWidth));
+            sourceH = std::max(1, (int)std::round(ui.water3DViewportHeight));
+        }
+    }
+
+    const ImVec2 imageSize = FitViewportImageSize((float)sourceW, (float)sourceH, ui.viewScale);
     CenterViewportImageHorizontally(imageSize);
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     DrawViewportCanvasBackdrop(imagePos, imageSize);
-    ImGui::Image((ImTextureID)(intptr_t)renderer.waterTex(), imageSize);
+    ImGui::InvisibleButton("##Water3DCanvas", imageSize);
 
     const ImVec2 p0 = ImGui::GetItemRectMin();
     const ImVec2 p1 = ImGui::GetItemRectMax();
+    if (showWaterOverlay) {
+        ImGui::GetWindowDrawList()->AddImage((ImTextureID)(intptr_t)renderer.waterTex(), p0, p1);
+    }
     const bool hovered = ImGui::IsItemHovered();
 
-    const int viewMode = std::clamp(ui.water3DViewMode, 0, 2);
-    const bool sliceMode = (viewMode == 1);
     const float domainX = std::max(1e-6f, water3D.nx * water3D.dx);
     const float domainY = std::max(1e-6f, water3D.ny * water3D.dx);
     const float domainZ = std::max(1e-6f, water3D.nz * water3D.dx);
@@ -2473,7 +2494,7 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
             dl->AddLine(proj[edges[e][0]], proj[edges[e][1]], edgeCol, 1.35f);
         }
 
-        if (ui.showWaterParticles && !water3D.particles.empty()) {
+        if (showParticleOverlay && !water3D.particles.empty()) {
             const size_t maxDraw = 25000;
             const size_t n = water3D.particles.size();
             const size_t stride = std::max<size_t>(1, n / maxDraw);
@@ -2533,7 +2554,7 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
             }
         }
     } else {
-        if (ui.showWaterParticles && !water3D.particles.empty()) {
+        if (showParticleOverlay && !water3D.particles.empty()) {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->PushClipRect(p0, p1, true);
             const float w = p1.x - p0.x;

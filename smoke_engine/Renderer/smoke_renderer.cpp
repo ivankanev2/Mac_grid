@@ -373,7 +373,7 @@ static void fillVerticalGradientBackground(std::vector<uint8_t>& img,
             const uint8_t g = (uint8_t)std::lround(clamp01f(color.y) * 255.0f);
             const uint8_t b = (uint8_t)std::lround(clamp01f(color.z) * 255.0f);
             for (int i = 0; i < w; ++i) {
-                const std::size_t dst = ((std::size_t)(h - 1 - j) * (std::size_t)w + (std::size_t)i) * 4u;
+                const std::size_t dst = ((std::size_t)j * (std::size_t)w + (std::size_t)i) * 4u;
                 img[dst + 0] = r;
                 img[dst + 1] = g;
                 img[dst + 2] = b;
@@ -952,7 +952,7 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
                     }
                 }
 
-                const int dst = ((m_h - 1 - j) * m_w + i) * 4;
+                const int dst = (j * m_w + i) * 4;
                 img[(std::size_t)dst + 0] = (uint8_t)std::lround(clamp01(color.x) * 255.0f);
                 img[(std::size_t)dst + 1] = (uint8_t)std::lround(clamp01(color.y) * 255.0f);
                 img[(std::size_t)dst + 2] = (uint8_t)std::lround(clamp01(color.z) * 255.0f);
@@ -1165,7 +1165,7 @@ void SmokeRenderer::updateWaterFromVolume(const std::vector<float>& values,
                     }
                 }
 
-                const int dst = ((m_h - 1 - j) * m_w + i) * 4;
+                const int dst = (j * m_w + i) * 4;
                 img[(std::size_t)dst + 0] = (uint8_t)std::lround(std::clamp(color.x, 0.0f, 1.0f) * 255.0f);
                 img[(std::size_t)dst + 1] = (uint8_t)std::lround(std::clamp(color.y, 0.0f, 1.0f) * 255.0f);
                 img[(std::size_t)dst + 2] = (uint8_t)std::lround(std::clamp(color.z, 0.0f, 1.0f) * 255.0f);

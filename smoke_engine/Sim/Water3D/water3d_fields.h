@@ -192,6 +192,30 @@ inline void MACWater3D::updateStats(float stepMs) {
         validU.size() * sizeof(uint8_t) +
         validV.size() * sizeof(uint8_t) +
         validW.size() * sizeof(uint8_t) +
+        validUNext.size() * sizeof(uint8_t) +
+        validVNext.size() * sizeof(uint8_t) +
+        validWNext.size() * sizeof(uint8_t) +
+        (extrapFrontierU.size() + extrapFrontierV.size() + extrapFrontierW.size() +
+         extrapNextFrontierU.size() + extrapNextFrontierV.size() + extrapNextFrontierW.size()) * sizeof(int) +
+        (uDiffusionStencil.face.size() + uDiffusionStencil.xm.size() + uDiffusionStencil.xp.size() +
+         uDiffusionStencil.ym.size() + uDiffusionStencil.yp.size() + uDiffusionStencil.zm.size() +
+         uDiffusionStencil.zp.size()) * sizeof(int) + uDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (vDiffusionStencil.face.size() + vDiffusionStencil.xm.size() + vDiffusionStencil.xp.size() +
+         vDiffusionStencil.ym.size() + vDiffusionStencil.yp.size() + vDiffusionStencil.zm.size() +
+         vDiffusionStencil.zp.size()) * sizeof(int) + vDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (wDiffusionStencil.face.size() + wDiffusionStencil.xm.size() + wDiffusionStencil.xp.size() +
+         wDiffusionStencil.ym.size() + wDiffusionStencil.yp.size() + wDiffusionStencil.zm.size() +
+         wDiffusionStencil.zp.size()) * sizeof(int) + wDiffusionStencil.neighborCount.size() * sizeof(uint8_t) +
+        (uDiffusionScratch.r.size() + uDiffusionScratch.z.size() + uDiffusionScratch.p.size() + uDiffusionScratch.q.size() +
+         vDiffusionScratch.r.size() + vDiffusionScratch.z.size() + vDiffusionScratch.p.size() + vDiffusionScratch.q.size() +
+         wDiffusionScratch.r.size() + wDiffusionScratch.z.size() + wDiffusionScratch.p.size() + wDiffusionScratch.q.size()) * sizeof(float) +
+        reseedCounts.size() * sizeof(int) +
+        reseedOccupied.size() * sizeof(uint8_t) +
+        reseedRegion.size() * sizeof(uint8_t) +
+        relaxBucketCounts.size() * sizeof(int) +
+        relaxBucketOffsets.size() * sizeof(int) +
+        relaxBucketCursor.size() * sizeof(int) +
+        relaxBucketParticles.size() * sizeof(int) +
         particles.size() * sizeof(Particle);
 
     for (float value : u) lastStats.maxSpeed = std::max(lastStats.maxSpeed, std::fabs(value));

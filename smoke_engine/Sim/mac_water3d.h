@@ -208,6 +208,69 @@ protected:
     std::vector<uint8_t> validU;
     std::vector<uint8_t> validV;
     std::vector<uint8_t> validW;
+    std::vector<uint8_t> validUNext;
+    std::vector<uint8_t> validVNext;
+    std::vector<uint8_t> validWNext;
+    std::vector<int> extrapFrontierU;
+    std::vector<int> extrapFrontierV;
+    std::vector<int> extrapFrontierW;
+    std::vector<int> extrapNextFrontierU;
+    std::vector<int> extrapNextFrontierV;
+    std::vector<int> extrapNextFrontierW;
+
+    struct DiffusionStencilSet {
+        std::vector<int> face;
+        std::vector<int> xm;
+        std::vector<int> xp;
+        std::vector<int> ym;
+        std::vector<int> yp;
+        std::vector<int> zm;
+        std::vector<int> zp;
+        std::vector<uint8_t> neighborCount;
+
+        void clear() {
+            face.clear();
+            xm.clear();
+            xp.clear();
+            ym.clear();
+            yp.clear();
+            zm.clear();
+            zp.clear();
+            neighborCount.clear();
+        }
+
+        std::size_t size() const { return face.size(); }
+    };
+
+    struct DiffusionScratchSet {
+        std::vector<float> r;
+        std::vector<float> z;
+        std::vector<float> p;
+        std::vector<float> q;
+
+        void ensureSize(std::size_t count) {
+            if (r.size() != count) r.resize(count, 0.0f);
+            if (z.size() != count) z.resize(count, 0.0f);
+            if (p.size() != count) p.resize(count, 0.0f);
+            if (q.size() != count) q.resize(count, 0.0f);
+        }
+    };
+
+    DiffusionStencilSet uDiffusionStencil;
+    DiffusionStencilSet vDiffusionStencil;
+    DiffusionStencilSet wDiffusionStencil;
+    DiffusionScratchSet uDiffusionScratch;
+    DiffusionScratchSet vDiffusionScratch;
+    DiffusionScratchSet wDiffusionScratch;
+    bool diffusionStencilDirty = true;
+
+    std::vector<int> reseedCounts;
+    std::vector<uint8_t> reseedOccupied;
+    std::vector<uint8_t> reseedRegion;
+    std::vector<int> relaxBucketCounts;
+    std::vector<int> relaxBucketOffsets;
+    std::vector<int> relaxBucketCursor;
+    std::vector<int> relaxBucketParticles;
 
     inline int idxCell(int i, int j, int k) const {
         return i + nx * (j + ny * k);
@@ -246,6 +309,7 @@ protected:
 
     void particleToGrid();
     void buildLiquidMask(bool applyDilations = true);
+    void rebuildDiffusionStencils();
     void applyExternalForces();
     void diffuseVelocityImplicit();
     void projectLiquid();

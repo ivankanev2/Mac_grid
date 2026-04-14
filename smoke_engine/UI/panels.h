@@ -157,6 +157,7 @@ struct Settings {
     int   water3DNY = 64;
     int   water3DNZ = 48;
     int   water3DViewMode = 0;     // 0=volume, 1=slice, 2=surface
+    int   water3DDisplayMode = 2;  // 0=overlay only, 1=particles only, 2=both
     float water3DViewYawDeg = 35.0f;
     float water3DViewPitchDeg = 20.0f;
     float water3DViewZoom = 1.15f;

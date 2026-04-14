@@ -72,6 +72,39 @@ void MACWater3D::reset() {
     validU.assign((std::size_t)uCount, (uint8_t)0);
     validV.assign((std::size_t)vCount, (uint8_t)0);
     validW.assign((std::size_t)wCount, (uint8_t)0);
+    validUNext.assign((std::size_t)uCount, (uint8_t)0);
+    validVNext.assign((std::size_t)vCount, (uint8_t)0);
+    validWNext.assign((std::size_t)wCount, (uint8_t)0);
+    extrapFrontierU.clear();
+    extrapFrontierV.clear();
+    extrapFrontierW.clear();
+    extrapNextFrontierU.clear();
+    extrapNextFrontierV.clear();
+    extrapNextFrontierW.clear();
+
+    uDiffusionStencil.clear();
+    vDiffusionStencil.clear();
+    wDiffusionStencil.clear();
+    uDiffusionScratch.r.clear();
+    uDiffusionScratch.z.clear();
+    uDiffusionScratch.p.clear();
+    uDiffusionScratch.q.clear();
+    vDiffusionScratch.r.clear();
+    vDiffusionScratch.z.clear();
+    vDiffusionScratch.p.clear();
+    vDiffusionScratch.q.clear();
+    wDiffusionScratch.r.clear();
+    wDiffusionScratch.z.clear();
+    wDiffusionScratch.p.clear();
+    wDiffusionScratch.q.clear();
+    reseedCounts.assign((std::size_t)cellCount, 0);
+    reseedOccupied.assign((std::size_t)cellCount, (uint8_t)0);
+    reseedRegion.assign((std::size_t)cellCount, (uint8_t)0);
+    relaxBucketCounts.assign((std::size_t)cellCount, 0);
+    relaxBucketOffsets.assign((std::size_t)cellCount + 1u, 0);
+    relaxBucketCursor.assign((std::size_t)cellCount, 0);
+    relaxBucketParticles.clear();
+    diffusionStencilDirty = true;
 
     particles.clear();
     stepCounter = 0;
@@ -102,6 +135,7 @@ void MACWater3D::reset(int NX, int NY, int NZ, float DX, float DT) {
 
 void MACWater3D::setParams(const Params& newParams) {
     params = newParams;
+    diffusionStencilDirty = true;
 
     if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
         water3dCudaSetParams(backend, *this);
@@ -362,6 +396,7 @@ void MACWater3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
     }
 
     topologyDirty = true;
+    diffusionStencilDirty = true;
     rebuildBorderSolids();
     removeParticlesInSolids();
     enforceParticleBounds();

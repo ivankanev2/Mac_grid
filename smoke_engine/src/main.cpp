@@ -1792,84 +1792,88 @@ int main()
 
         if (activeWorkspace == UI::kWorkspaceWater3D) {
             const int viewMode = std::clamp(ui.water3DViewMode, 0, 2);
-            if (viewMode == 1) {
-                const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
-                const int field = std::clamp(ui.water3DDebugField, 0, 3);
-                const int maxSlice = (axis == 0)
-                    ? std::max(0, water3D.nz - 1)
-                    : (axis == 1)
-                        ? std::max(0, water3D.ny - 1)
-                        : std::max(0, water3D.nx - 1);
-                ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
+            const int displayMode = std::clamp(ui.water3DDisplayMode, 0, 2);
+            const bool showWaterOverlay = (displayMode != 1);
+            if (showWaterOverlay) {
+                if (viewMode == 1) {
+                    const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
+                    const int field = std::clamp(ui.water3DDebugField, 0, 3);
+                    const int maxSlice = (axis == 0)
+                        ? std::max(0, water3D.nz - 1)
+                        : (axis == 1)
+                            ? std::max(0, water3D.ny - 1)
+                            : std::max(0, water3D.nx - 1);
+                    ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
 
-                auto slice = water3D.copyDebugSlice(
-                    static_cast<MACWater3D::SliceAxis>(axis),
-                    ui.water3DSliceIndex,
-                    static_cast<MACWater3D::DebugField>(field));
-                water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
-                water3DRenderCache = {};
-            } else {
-                const auto target = computeVolumeRenderTargetSize(
-                    win,
-                    ui.water3DViewportWidth,
-                    ui.water3DViewportHeight,
-                    ui.volumeRenderScale);
-                const bool sizeChanged =
-                    water3DRenderer.width() != target.width || water3DRenderer.height() != target.height;
-                if (sizeChanged) {
-                    water3DRenderer.resize(target.width, target.height);
-                }
+                    auto slice = water3D.copyDebugSlice(
+                        static_cast<MACWater3D::SliceAxis>(axis),
+                        ui.water3DSliceIndex,
+                        static_cast<MACWater3D::DebugField>(field));
+                    water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
+                    water3DRenderCache = {};
+                } else {
+                    const auto target = computeVolumeRenderTargetSize(
+                        win,
+                        ui.water3DViewportWidth,
+                        ui.water3DViewportHeight,
+                        ui.volumeRenderScale);
+                    const bool sizeChanged =
+                        water3DRenderer.width() != target.width || water3DRenderer.height() != target.height;
+                    if (sizeChanged) {
+                        water3DRenderer.resize(target.width, target.height);
+                    }
 
-                const bool viewChanged =
-                    !water3DRenderCache.valid ||
-                    water3DRenderCache.lastWidth != target.width ||
-                    water3DRenderCache.lastHeight != target.height ||
-                    water3DRenderCache.lastViewMode != viewMode ||
-                    !nearlyEqual(water3DRenderCache.lastYaw, ui.water3DViewYawDeg) ||
-                    !nearlyEqual(water3DRenderCache.lastPitch, ui.water3DViewPitchDeg) ||
-                    !nearlyEqual(water3DRenderCache.lastZoom, ui.water3DViewZoom) ||
-                    !nearlyEqual(water3DRenderCache.lastDensity, ui.water3DVolumeDensity) ||
-                    !nearlyEqual(water3DRenderCache.lastSurfaceThreshold, ui.water3DSurfaceThreshold);
-                const bool simChanged =
-                    !water3DRenderCache.valid || water3DRenderCache.lastSimVersion != water3DSimVersion;
+                    const bool viewChanged =
+                        !water3DRenderCache.valid ||
+                        water3DRenderCache.lastWidth != target.width ||
+                        water3DRenderCache.lastHeight != target.height ||
+                        water3DRenderCache.lastViewMode != viewMode ||
+                        !nearlyEqual(water3DRenderCache.lastYaw, ui.water3DViewYawDeg) ||
+                        !nearlyEqual(water3DRenderCache.lastPitch, ui.water3DViewPitchDeg) ||
+                        !nearlyEqual(water3DRenderCache.lastZoom, ui.water3DViewZoom) ||
+                        !nearlyEqual(water3DRenderCache.lastDensity, ui.water3DVolumeDensity) ||
+                        !nearlyEqual(water3DRenderCache.lastSurfaceThreshold, ui.water3DSurfaceThreshold);
+                    const bool simChanged =
+                        !water3DRenderCache.valid || water3DRenderCache.lastSimVersion != water3DSimVersion;
 
-                bool needUpdate = false;
-                if (!water3DRenderCache.valid || sizeChanged || viewChanged) {
-                    needUpdate = true;
-                } else if (!ui.playing) {
-                    needUpdate = true;
-                } else if (!ui.water3DThrottleRendering) {
-                    needUpdate = simChanged;
-                } else if (simChanged) {
-                    const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
-                    needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
-                }
+                    bool needUpdate = false;
+                    if (!water3DRenderCache.valid || sizeChanged || viewChanged) {
+                        needUpdate = true;
+                    } else if (!ui.playing) {
+                        needUpdate = true;
+                    } else if (!ui.water3DThrottleRendering) {
+                        needUpdate = simChanged;
+                    } else if (simChanged) {
+                        const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
+                        needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
+                    }
 
-                if (needUpdate) {
-                    water3DRenderer.updateWaterFromVolume(
-                        water3D.water,
-                        water3D.solid,
-                        water3D.nx,
-                        water3D.ny,
-                        water3D.nz,
-                        viewMode,
-                        ui.water3DViewYawDeg,
-                        ui.water3DViewPitchDeg,
-                        ui.water3DViewZoom,
-                        ui.water3DVolumeDensity,
-                        ui.water3DSurfaceThreshold,
-                        wr);
-                    water3DRenderCache.valid = true;
-                    water3DRenderCache.lastRenderTime = now;
-                    water3DRenderCache.lastSimVersion = water3DSimVersion;
-                    water3DRenderCache.lastWidth = target.width;
-                    water3DRenderCache.lastHeight = target.height;
-                    water3DRenderCache.lastViewMode = viewMode;
-                    water3DRenderCache.lastYaw = ui.water3DViewYawDeg;
-                    water3DRenderCache.lastPitch = ui.water3DViewPitchDeg;
-                    water3DRenderCache.lastZoom = ui.water3DViewZoom;
-                    water3DRenderCache.lastDensity = ui.water3DVolumeDensity;
-                    water3DRenderCache.lastSurfaceThreshold = ui.water3DSurfaceThreshold;
+                    if (needUpdate) {
+                        water3DRenderer.updateWaterFromVolume(
+                            water3D.water,
+                            water3D.solid,
+                            water3D.nx,
+                            water3D.ny,
+                            water3D.nz,
+                            viewMode,
+                            ui.water3DViewYawDeg,
+                            ui.water3DViewPitchDeg,
+                            ui.water3DViewZoom,
+                            ui.water3DVolumeDensity,
+                            ui.water3DSurfaceThreshold,
+                            wr);
+                        water3DRenderCache.valid = true;
+                        water3DRenderCache.lastRenderTime = now;
+                        water3DRenderCache.lastSimVersion = water3DSimVersion;
+                        water3DRenderCache.lastWidth = target.width;
+                        water3DRenderCache.lastHeight = target.height;
+                        water3DRenderCache.lastViewMode = viewMode;
+                        water3DRenderCache.lastYaw = ui.water3DViewYawDeg;
+                        water3DRenderCache.lastPitch = ui.water3DViewPitchDeg;
+                        water3DRenderCache.lastZoom = ui.water3DViewZoom;
+                        water3DRenderCache.lastDensity = ui.water3DVolumeDensity;
+                        water3DRenderCache.lastSurfaceThreshold = ui.water3DSurfaceThreshold;
+                    }
                 }
             }
         }
