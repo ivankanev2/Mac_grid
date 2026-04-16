@@ -218,6 +218,54 @@ protected:
     std::vector<int> extrapNextFrontierV;
     std::vector<int> extrapNextFrontierW;
 
+    struct PressureRegionScratch {
+        int i0 = 0;
+        int i1 = 0;
+        int j0 = 0;
+        int j1 = 0;
+        int k0 = 0;
+        int k1 = 0;
+        bool previousBoxValid = false;
+        int prevI0 = 0;
+        int prevI1 = 0;
+        int prevJ0 = 0;
+        int prevJ1 = 0;
+        int prevK0 = 0;
+        int prevK1 = 0;
+        std::vector<uint8_t> solid;
+        std::vector<uint8_t> fluid;
+        std::vector<float> rhs;
+        std::vector<float> pressure;
+        std::vector<float> tmp;
+
+        void ensureSize(std::size_t count) {
+            if (solid.size() != count) solid.resize(count, (uint8_t)0);
+            if (fluid.size() != count) fluid.resize(count, (uint8_t)0);
+            if (rhs.size() != count) rhs.resize(count, 0.0f);
+            if (pressure.size() != count) pressure.resize(count, 0.0f);
+        }
+
+        void ensureTmpSize(std::size_t count) {
+            if (tmp.size() != count) tmp.resize(count, 0.0f);
+        }
+
+        void clear() {
+            i0 = i1 = j0 = j1 = k0 = k1 = 0;
+            previousBoxValid = false;
+            prevI0 = prevI1 = prevJ0 = prevJ1 = prevK0 = prevK1 = 0;
+            solid.clear();
+            fluid.clear();
+            rhs.clear();
+            pressure.clear();
+            tmp.clear();
+        }
+    };
+
+    PressureRegionScratch pressureRegion;
+    std::vector<int> pressureComponentLabel;
+    std::vector<int> pressureComponentQueue;
+    std::vector<int> pressureComponentCells;
+
     struct DiffusionStencilSet {
         std::vector<int> face;
         std::vector<int> xm;

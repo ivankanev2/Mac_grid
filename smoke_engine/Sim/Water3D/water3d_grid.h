@@ -168,13 +168,6 @@ inline void MACWater3D::velAt(
 }
 
 inline void MACWater3D::particleToGrid() {
-    std::fill(u.begin(), u.end(), 0.0f);
-    std::fill(v.begin(), v.end(), 0.0f);
-    std::fill(w.begin(), w.end(), 0.0f);
-    std::fill(uWeight.begin(), uWeight.end(), 0.0f);
-    std::fill(vWeight.begin(), vWeight.end(), 0.0f);
-    std::fill(wWeight.begin(), wWeight.end(), 0.0f);
-
     const bool apic = params.useAPIC;
 
     auto scatterFace = [&](const Particle& p,
@@ -230,26 +223,65 @@ inline void MACWater3D::particleToGrid() {
         }
     };
 
-    for (const Particle& p : particles) {
-        scatterFace(p, 0.0f, 0.5f, 0.5f, nx + 1, ny, nz,
-                    [&](int i, int j, int k) { return idxU(i, j, k); },
-                    u, uWeight, p.u, p.c00, p.c01, p.c02);
-        scatterFace(p, 0.5f, 0.0f, 0.5f, nx, ny + 1, nz,
-                    [&](int i, int j, int k) { return idxV(i, j, k); },
-                    v, vWeight, p.v, p.c10, p.c11, p.c12);
-        scatterFace(p, 0.5f, 0.5f, 0.0f, nx, ny, nz + 1,
-                    [&](int i, int j, int k) { return idxW(i, j, k); },
-                    w, wWeight, p.w, p.c20, p.c21, p.c22);
-    }
+    auto processU = [&]() {
+        std::fill(u.begin(), u.end(), 0.0f);
+        std::fill(uWeight.begin(), uWeight.end(), 0.0f);
+        for (const Particle& p : particles) {
+            scatterFace(p, 0.0f, 0.5f, 0.5f, nx + 1, ny, nz,
+                        [&](int i, int j, int k) { return idxU(i, j, k); },
+                        u, uWeight, p.u, p.c00, p.c01, p.c02);
+        }
+        for (std::size_t i = 0; i < u.size(); ++i) {
+            u[i] = (uWeight[i] > 1e-6f) ? (u[i] / uWeight[i]) : 0.0f;
+        }
+    };
 
-    for (std::size_t i = 0; i < u.size(); ++i) {
-        u[i] = (uWeight[i] > 1e-6f) ? (u[i] / uWeight[i]) : 0.0f;
-    }
-    for (std::size_t i = 0; i < v.size(); ++i) {
-        v[i] = (vWeight[i] > 1e-6f) ? (v[i] / vWeight[i]) : 0.0f;
-    }
-    for (std::size_t i = 0; i < w.size(); ++i) {
-        w[i] = (wWeight[i] > 1e-6f) ? (w[i] / wWeight[i]) : 0.0f;
+    auto processV = [&]() {
+        std::fill(v.begin(), v.end(), 0.0f);
+        std::fill(vWeight.begin(), vWeight.end(), 0.0f);
+        for (const Particle& p : particles) {
+            scatterFace(p, 0.5f, 0.0f, 0.5f, nx, ny + 1, nz,
+                        [&](int i, int j, int k) { return idxV(i, j, k); },
+                        v, vWeight, p.v, p.c10, p.c11, p.c12);
+        }
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            v[i] = (vWeight[i] > 1e-6f) ? (v[i] / vWeight[i]) : 0.0f;
+        }
+    };
+
+    auto processW = [&]() {
+        std::fill(w.begin(), w.end(), 0.0f);
+        std::fill(wWeight.begin(), wWeight.end(), 0.0f);
+        for (const Particle& p : particles) {
+            scatterFace(p, 0.5f, 0.5f, 0.0f, nx, ny, nz + 1,
+                        [&](int i, int j, int k) { return idxW(i, j, k); },
+                        w, wWeight, p.w, p.c20, p.c21, p.c22);
+        }
+        for (std::size_t i = 0; i < w.size(); ++i) {
+            w[i] = (wWeight[i] > 1e-6f) ? (w[i] / wWeight[i]) : 0.0f;
+        }
+    };
+
+    const std::size_t totalFaces = u.size() + v.size() + w.size();
+    const bool parallelComponents = (water3dWorkerPool().maxWorkers() > 1) &&
+                                    (particles.size() >= 4096u) &&
+                                    (totalFaces >= 65536u);
+
+    if (parallelComponents) {
+        water3dWorkerPool().parallelFor(3, 1, [&](int begin, int end) {
+            for (int component = begin; component < end; ++component) {
+                switch (component) {
+                    case 0: processU(); break;
+                    case 1: processV(); break;
+                    case 2: processW(); break;
+                    default: break;
+                }
+            }
+        });
+    } else {
+        processU();
+        processV();
+        processW();
     }
 
     applyBoundary();

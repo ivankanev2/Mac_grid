@@ -104,6 +104,9 @@ void MACWater3D::reset() {
     relaxBucketOffsets.assign((std::size_t)cellCount + 1u, 0);
     relaxBucketCursor.assign((std::size_t)cellCount, 0);
     relaxBucketParticles.clear();
+    pressureComponentLabel.assign((std::size_t)cellCount, -1);
+    pressureComponentQueue.clear();
+    pressureComponentCells.clear();
     diffusionStencilDirty = true;
 
     particles.clear();
@@ -111,6 +114,7 @@ void MACWater3D::reset() {
     targetMass = 0.0f;
     desiredMass = -1.0f;
     topologyDirty = true;
+    pressureRegion.clear();
 
     rebuildBorderSolids();
     applyBoundary();

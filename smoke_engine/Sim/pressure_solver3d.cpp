@@ -13,6 +13,13 @@ constexpr int kPressure3DParallelThreshold = 65536;
 constexpr int kPressure3DMinChunk = 4096;
 constexpr int kPressure3DTransferRowParallelThreshold = 128;
 constexpr int kPressure3DTransferMinRows = 4;
+// Dense Cholesky on the coarsest MG level is excellent for small systems, but
+// for large free-surface water regions the coarsest compact mask can still have
+// hundreds or thousands of unknowns. Building an O(n^2) dense matrix and doing
+// an O(n^3) factorization every frame then causes catastrophic pressure spikes.
+// Keep the direct solve only for genuinely small coarse systems and fall back to
+// the existing coarse RBGS smoother otherwise.
+constexpr int kPressure3DCoarseDirectMaxUnknowns = 256;
 
 inline int pressure3DResolvedChunkSize(ChunkWorkerPool& pool, int count, int minChunk) {
     const int safeMinChunk = std::max(1, minChunk);
@@ -1142,6 +1149,7 @@ void PressureSolver3D::buildDirectCoarseSolve(MGLevel& L) const
     const int fluidCount = (int)L.fluidCells.size();
     const int n = (int)L.stencils.size();
     if (n <= 0 || fluidCount <= 0) return;
+    if (n > kPressure3DCoarseDirectMaxUnknowns) return;
 
     L.directSolveCells.resize((std::size_t)n);
     L.directSolveCompactIndex.assign((std::size_t)fluidCount, -1);

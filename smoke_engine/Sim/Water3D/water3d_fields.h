@@ -209,6 +209,12 @@ inline void MACWater3D::updateStats(float stepMs) {
         (uDiffusionScratch.r.size() + uDiffusionScratch.z.size() + uDiffusionScratch.p.size() + uDiffusionScratch.q.size() +
          vDiffusionScratch.r.size() + vDiffusionScratch.z.size() + vDiffusionScratch.p.size() + vDiffusionScratch.q.size() +
          wDiffusionScratch.r.size() + wDiffusionScratch.z.size() + wDiffusionScratch.p.size() + wDiffusionScratch.q.size()) * sizeof(float) +
+        pressureRegion.solid.size() * sizeof(uint8_t) +
+        pressureRegion.fluid.size() * sizeof(uint8_t) +
+        (pressureRegion.rhs.size() + pressureRegion.pressure.size() + pressureRegion.tmp.size()) * sizeof(float) +
+        pressureComponentLabel.size() * sizeof(int) +
+        pressureComponentQueue.size() * sizeof(int) +
+        pressureComponentCells.size() * sizeof(int) +
         reseedCounts.size() * sizeof(int) +
         reseedOccupied.size() * sizeof(uint8_t) +
         reseedRegion.size() * sizeof(uint8_t) +
