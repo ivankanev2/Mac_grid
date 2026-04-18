@@ -809,6 +809,9 @@ CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/print \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/unistd.h \
   /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry/mesh_generator.h \
+  /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer/voxelizer.h \
+  /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer/../Geometry/pipe_network.h \
+  /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer/../Geometry/vec3.h \
   /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Renderer/camera.h \
   /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Renderer/../Geometry/vec3.h \
   /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Renderer/mesh_renderer.h \
@@ -817,5 +820,5 @@ CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.o: \
   /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim/pressure_solver3d.h \
   /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim/sim_stage_timing.h \
   /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim/mac_water3d.h \
-  /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Renderer/smoke_renderer.h \
-  /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include/pipe_fluid/pipe_fluid_scene.h
+  /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include/pipe_fluid/pipe_fluid_scene.h \
+  /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include/pipe_fluid/volume_renderer.h

@@ -72,7 +72,7 @@ if(MSVC)
     target_compile_options(pipe_fluid_sim_lib PRIVATE /Zc:preprocessor)
 endif()
 
-# ---- pipe_fluid_core: the integration library ------------------------------
+# ---- pipe_fluid_core: the integration library (no OpenGL) ------------------
 add_library(pipe_fluid_core STATIC
     src/pipe_fluid_scene.cpp
     src/pipe_solid_adapter.cpp
@@ -89,6 +89,28 @@ target_link_libraries(pipe_fluid_core PUBLIC pipe_fluid_sim_lib)
 
 if(APPLE)
     target_compile_definitions(pipe_fluid_core PRIVATE GL_SILENCE_DEPRECATION)
+endif()
+
+# ---- pipe_fluid_render: backend-independent volume overlay renderer --------
+# Depends on OpenGL. Kept separate from pipe_fluid_core so headless tools
+# can use the sim + voxelizer without pulling GL.
+if(PIPEFLUID_BUILD_GUI)
+    find_package(OpenGL REQUIRED)
+    add_library(pipe_fluid_render STATIC
+        src/volume_renderer.cpp
+        src/cpu_volume_renderer.cpp
+        src/gpu_volume_renderer.cpp
+    )
+    target_include_directories(pipe_fluid_render PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(pipe_fluid_render
+        PUBLIC  pipe_fluid_core
+        PRIVATE OpenGL::GL
+    )
+    if(APPLE)
+        target_compile_definitions(pipe_fluid_render PRIVATE GL_SILENCE_DEPRECATION)
+    endif()
 endif()
 
 # ============================================================================
@@ -170,7 +192,6 @@ if(PIPEFLUID_BUILD_GUI)
 
     add_executable(PipeFluidEngine
         viewer/main_gui.cpp
-        ${SMOKE_ENGINE_ROOT}/Renderer/smoke_renderer.cpp
     )
     target_include_directories(PipeFluidEngine PRIVATE
         ${PIPE_ENGINE_ROOT}/Geometry
@@ -178,10 +199,10 @@ if(PIPEFLUID_BUILD_GUI)
         ${PIPE_ENGINE_ROOT}/Voxelizer
         ${PIPE_ENGINE_ROOT}/Blueprint
         ${PIPE_ENGINE_ROOT}/UI
-        ${SMOKE_ENGINE_ROOT}/Renderer
     )
     target_link_libraries(PipeFluidEngine PRIVATE
         pipe_fluid_core
+        pipe_fluid_render
         pipe_fluid_imgui
         glfw
         OpenGL::GL

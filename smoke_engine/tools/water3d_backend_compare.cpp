@@ -147,6 +147,8 @@ int main(int argc, char** argv) {
     std::cout << "cuda_active=" << (cudaActive ? "true" : "false") << "\n";
     std::cout << "cpu_step_ms=" << cpu.stats().lastStepMs << "\n";
     std::cout << "gpu_step_ms=" << gpu.stats().lastStepMs << "\n";
+    std::cout << "cpu_pressure_ms=" << cpu.stats().pressureMs << " cpu_pressure_iters=" << cpu.stats().pressureIters << "\n";
+    std::cout << "gpu_pressure_ms=" << gpu.stats().pressureMs << " gpu_pressure_iters=" << gpu.stats().pressureIters << "\n";
     std::cout << "cpu_particles=" << cpu.stats().particleCount << " gpu_particles=" << gpu.stats().particleCount << "\n";
     std::cout << "cpu_liquid_cells=" << cpu.stats().liquidCells << " gpu_liquid_cells=" << gpu.stats().liquidCells << "\n";
 

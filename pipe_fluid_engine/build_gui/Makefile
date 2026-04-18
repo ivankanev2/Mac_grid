@@ -188,6 +188,19 @@ pipe_fluid_core/fast:
 .PHONY : pipe_fluid_core/fast
 
 #=============================================================================
+# Target rules for targets named pipe_fluid_render
+
+# Build rule for target.
+pipe_fluid_render: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pipe_fluid_render
+.PHONY : pipe_fluid_render
+
+# fast build rule for target.
+pipe_fluid_render/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/build
+.PHONY : pipe_fluid_render/fast
+
+#=============================================================================
 # Target rules for targets named pipe_fluid_imgui
 
 # Build rule for target.
@@ -251,30 +264,6 @@ glfw: cmake_check_build_system
 glfw/fast:
 	$(MAKE) $(MAKESILENT) -f glfw_local/src/CMakeFiles/glfw.dir/build.make glfw_local/src/CMakeFiles/glfw.dir/build
 .PHONY : glfw/fast
-
-Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.o: Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.o
-.PHONY : Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.o
-
-# target to build an object file
-Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/PipeFluidEngine.dir/build.make CMakeFiles/PipeFluidEngine.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.o
-.PHONY : Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.o
-
-Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.i: Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.i
-.PHONY : Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.i
-
-# target to preprocess a source file
-Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/PipeFluidEngine.dir/build.make CMakeFiles/PipeFluidEngine.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.i
-.PHONY : Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.i
-
-Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.s: Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.s
-.PHONY : Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.s
-
-# target to generate assembly for a file
-Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/PipeFluidEngine.dir/build.make CMakeFiles/PipeFluidEngine.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.s
-.PHONY : Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.cpp.s
 
 Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.o: Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.cpp.o
 .PHONY : Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.o
@@ -804,6 +793,54 @@ src/blueprint_loader.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_core.dir/build.make CMakeFiles/pipe_fluid_core.dir/src/blueprint_loader.cpp.s
 .PHONY : src/blueprint_loader.cpp.s
 
+src/cpu_volume_renderer.o: src/cpu_volume_renderer.cpp.o
+.PHONY : src/cpu_volume_renderer.o
+
+# target to build an object file
+src/cpu_volume_renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.o
+.PHONY : src/cpu_volume_renderer.cpp.o
+
+src/cpu_volume_renderer.i: src/cpu_volume_renderer.cpp.i
+.PHONY : src/cpu_volume_renderer.i
+
+# target to preprocess a source file
+src/cpu_volume_renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.i
+.PHONY : src/cpu_volume_renderer.cpp.i
+
+src/cpu_volume_renderer.s: src/cpu_volume_renderer.cpp.s
+.PHONY : src/cpu_volume_renderer.s
+
+# target to generate assembly for a file
+src/cpu_volume_renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.s
+.PHONY : src/cpu_volume_renderer.cpp.s
+
+src/gpu_volume_renderer.o: src/gpu_volume_renderer.cpp.o
+.PHONY : src/gpu_volume_renderer.o
+
+# target to build an object file
+src/gpu_volume_renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.o
+.PHONY : src/gpu_volume_renderer.cpp.o
+
+src/gpu_volume_renderer.i: src/gpu_volume_renderer.cpp.i
+.PHONY : src/gpu_volume_renderer.i
+
+# target to preprocess a source file
+src/gpu_volume_renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.i
+.PHONY : src/gpu_volume_renderer.cpp.i
+
+src/gpu_volume_renderer.s: src/gpu_volume_renderer.cpp.s
+.PHONY : src/gpu_volume_renderer.s
+
+# target to generate assembly for a file
+src/gpu_volume_renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.s
+.PHONY : src/gpu_volume_renderer.cpp.s
+
 src/pipe_fluid_scene.o: src/pipe_fluid_scene.cpp.o
 .PHONY : src/pipe_fluid_scene.o
 
@@ -852,6 +889,30 @@ src/pipe_solid_adapter.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_core.dir/build.make CMakeFiles/pipe_fluid_core.dir/src/pipe_solid_adapter.cpp.s
 .PHONY : src/pipe_solid_adapter.cpp.s
 
+src/volume_renderer.o: src/volume_renderer.cpp.o
+.PHONY : src/volume_renderer.o
+
+# target to build an object file
+src/volume_renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.o
+.PHONY : src/volume_renderer.cpp.o
+
+src/volume_renderer.i: src/volume_renderer.cpp.i
+.PHONY : src/volume_renderer.i
+
+# target to preprocess a source file
+src/volume_renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.i
+.PHONY : src/volume_renderer.cpp.i
+
+src/volume_renderer.s: src/volume_renderer.cpp.s
+.PHONY : src/volume_renderer.s
+
+# target to generate assembly for a file
+src/volume_renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pipe_fluid_render.dir/build.make CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.s
+.PHONY : src/volume_renderer.cpp.s
+
 viewer/main_gui.o: viewer/main_gui.cpp.o
 .PHONY : viewer/main_gui.o
 
@@ -894,10 +955,8 @@ help:
 	@echo "... glfw"
 	@echo "... pipe_fluid_core"
 	@echo "... pipe_fluid_imgui"
+	@echo "... pipe_fluid_render"
 	@echo "... pipe_fluid_sim_lib"
-	@echo "... Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.o"
-	@echo "... Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.i"
-	@echo "... Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Renderer/smoke_renderer.s"
 	@echo "... Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.o"
 	@echo "... Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.i"
 	@echo "... Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.s"
@@ -964,12 +1023,21 @@ help:
 	@echo "... src/blueprint_loader.o"
 	@echo "... src/blueprint_loader.i"
 	@echo "... src/blueprint_loader.s"
+	@echo "... src/cpu_volume_renderer.o"
+	@echo "... src/cpu_volume_renderer.i"
+	@echo "... src/cpu_volume_renderer.s"
+	@echo "... src/gpu_volume_renderer.o"
+	@echo "... src/gpu_volume_renderer.i"
+	@echo "... src/gpu_volume_renderer.s"
 	@echo "... src/pipe_fluid_scene.o"
 	@echo "... src/pipe_fluid_scene.i"
 	@echo "... src/pipe_fluid_scene.s"
 	@echo "... src/pipe_solid_adapter.o"
 	@echo "... src/pipe_solid_adapter.i"
 	@echo "... src/pipe_solid_adapter.s"
+	@echo "... src/volume_renderer.o"
+	@echo "... src/volume_renderer.i"
+	@echo "... src/volume_renderer.s"
 	@echo "... viewer/main_gui.o"
 	@echo "... viewer/main_gui.i"
 	@echo "... viewer/main_gui.s"

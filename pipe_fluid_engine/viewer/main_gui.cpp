@@ -34,16 +34,17 @@
 #include "vec3.h"
 #include "pipe_network.h"
 #include "mesh_generator.h"
+#include "voxelizer.h"
 #include "camera.h"
 #include "mesh_renderer.h"
 
-// smoke_engine (3D sims + renderer)
+// smoke_engine (3D sims)
 #include "mac_smoke3d.h"
 #include "mac_water3d.h"
-#include "smoke_renderer.h"
 
 // pipe_fluid_engine
 #include "pipe_fluid/pipe_fluid_scene.h"
+#include "pipe_fluid/volume_renderer.h"
 
 #include <cstdio>
 #include <cstring>
@@ -55,10 +56,10 @@
 // ============================================================================
 // Global state (needed in GLFW callbacks)
 // ============================================================================
-static MeshRenderer*               g_renderer      = nullptr;
-static SmokeRenderer*              g_fluidRenderer = nullptr;
-static pipe_fluid::PipeFluidScene* g_scene         = nullptr;
-static GLFWwindow*                 g_win            = nullptr;
+static MeshRenderer*                       g_renderer      = nullptr;
+static pipe_fluid::VolumeOverlayRenderer*  g_volRenderer   = nullptr;
+static pipe_fluid::PipeFluidScene*         g_scene         = nullptr;
+static GLFWwindow*                         g_win            = nullptr;
 
 // Viewer state
 struct ViewerState {
@@ -88,9 +89,17 @@ struct ViewerState {
     std::string status;
     double statusExpires = 0.0;
 
-    // Fluid overlay controls (camera angles are auto-synced to the main view)
+    // Fluid overlay controls (camera matrices are auto-synced to the main view)
     float fluidDensity   = 3.0f;
     bool  fluidColorMode = false;
+    float fluidAlpha     = 1.0f;
+    int   fluidRenderScale = 1;   // 1=full-res, 2=half-res (good on weak GPU)
+
+    // Volume renderer backend: 0=Auto, 1=CPU, 2=GPU.
+    // The viewer recreates the renderer when this changes.
+    int   backendChoice = 0;
+    int   backendChoiceApplied = -1;
+    const char* currentBackendName = "?";
 
     // Blueprint path input buffer
     char blueprintPath[512] = "../examples/demo_L.pipe";
@@ -292,7 +301,17 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
 
     ImGui::SeparatorText("Overlay");
     ImGui::SliderFloat("fluid density",  &g_ui.fluidDensity, 0.5f, 20.f, "%.1f");
+    ImGui::SliderFloat("alpha scale",    &g_ui.fluidAlpha,   0.0f, 2.0f, "%.2f");
     ImGui::Checkbox("color mode",        &g_ui.fluidColorMode);
+
+    // Backend selector — lets the user flip between CPU and GPU at runtime.
+    // "Auto" picks based on the GL vendor string (see pickAutoBackend()).
+    const char* backends[] = {"Auto", "CPU", "GPU"};
+    ImGui::Combo("renderer", &g_ui.backendChoice, backends, IM_ARRAYSIZE(backends));
+    ImGui::SliderInt("render scale", &g_ui.fluidRenderScale, 1, 3);
+    if (g_volRenderer) {
+        ImGui::TextDisabled("active: %s", g_volRenderer->backendName());
+    }
 
     ImGui::SeparatorText("Fluid source (world coords)");
     ImGui::InputFloat3("centre",   &g_ui.sourceX);
@@ -403,8 +422,30 @@ int main(int argc, char* argv[]) {
     if (!renderer.init()) { std::cerr << "Renderer init failed\n"; return 1; }
     g_renderer = &renderer;
 
-    SmokeRenderer fluidRenderer(512, 512);
-    g_fluidRenderer = &fluidRenderer;
+    // Volume overlay: picks backend according to g_ui.backendChoice.
+    // The renderer lives in a unique_ptr so we can recreate it mid-session
+    // when the user flips backends.
+    std::unique_ptr<pipe_fluid::VolumeOverlayRenderer> volRenderer;
+    auto rebuildVolumeRenderer = [&]() {
+        if (volRenderer) { volRenderer->shutdown(); volRenderer.reset(); }
+        pipe_fluid::VolumeOverlayRenderer::Backend want;
+        switch (g_ui.backendChoice) {
+            case 1: want = pipe_fluid::VolumeOverlayRenderer::Backend::CPU; break;
+            case 2: want = pipe_fluid::VolumeOverlayRenderer::Backend::GPU; break;
+            default: want = pipe_fluid::pickAutoBackend(); break;
+        }
+        volRenderer = pipe_fluid::makeVolumeRenderer(want);
+        g_volRenderer = volRenderer.get();
+        g_ui.backendChoiceApplied = g_ui.backendChoice;
+        g_ui.currentBackendName = volRenderer ? volRenderer->backendName() : "none";
+        std::cout << "[PipeFluidEngine] Volume renderer: "
+                  << g_ui.currentBackendName << "\n";
+    };
+    rebuildVolumeRenderer();
+    if (!volRenderer) {
+        std::cerr << "Volume renderer init failed (both backends unavailable)\n";
+        return 1;
+    }
 
     pipe_fluid::PipeFluidScene::Config cfg;
     cfg.cellSize    = 0.015f;   // 1.5 cm
@@ -469,51 +510,57 @@ int main(int argc, char* argv[]) {
         int fbW, fbH; glfwGetFramebufferSize(win, &fbW, &fbH);
         renderer.render(fbW, fbH);
 
-        // ---- Fluid overlay ---------------------------------------------------
-        // Sync the fluid renderer's camera to the main orbit camera so the
-        // volume render is from the same viewpoint as the pipe geometry.
-        // Then composite the smoke/water texture on top as a transparent layer.
-        if (g_fluidRenderer) {
-            // Resize fluid renderer to match framebuffer
-            if (g_fluidRenderer->width()  != fbW ||
-                g_fluidRenderer->height() != fbH)
-                g_fluidRenderer->resize(fbW, fbH);
+        // ---- Volume overlay (world-space raymarch, shared with pipe camera) --
+        // Recreate renderer if the user flipped backends.
+        if (g_ui.backendChoice != g_ui.backendChoiceApplied) {
+            rebuildVolumeRenderer();
+        }
 
-            SmokeRenderSettings sr;
-            sr.transparentBackground = true;   // key: lets pipe geometry show through
-            sr.useColor   = g_ui.fluidColorMode;
-            sr.alphaScale = g_ui.fluidDensity / 3.0f;   // map density slider to alphaScale
+        if (volRenderer) {
+            // Build the same proj/view the pipe mesh was just drawn with.
+            pipe_fluid::VolumeView vv;
+            const float aspect = (float)fbW / std::max(1.f, (float)fbH);
+            renderer.camera.buildProjMatrix(vv.proj, aspect);
+            renderer.camera.buildViewMatrix(vv.view);
+            Vec3 camPos = renderer.camera.position();
+            vv.camPosX = camPos.x;
+            vv.camPosY = camPos.y;
+            vv.camPosZ = camPos.z;
 
-            WaterRenderSettings wr;
+            // World-space AABB of the voxel grid.
+            const VoxelGrid& vg = scene.voxels();
+            vv.originX = vg.origin.x;
+            vv.originY = vg.origin.y;
+            vv.originZ = vg.origin.z;
+            vv.dx = vg.dx;
+            vv.nx = vg.nx; vv.ny = vg.ny; vv.nz = vg.nz;
+            vv.fbWidth = fbW;
+            vv.fbHeight = fbH;
 
-            const float yaw   = g_renderer->camera.yawDeg;
-            const float pitch = g_renderer->camera.pitchDeg;
-            const float zoom  = 1.0f;   // SmokeRenderer zoom is relative to its own box
+            pipe_fluid::VolumeSettings vs;
+            vs.useColor     = g_ui.fluidColorMode;
+            vs.alphaScale   = g_ui.fluidAlpha;
+            vs.densityScale = g_ui.fluidDensity;
+            vs.renderScale  = std::max(1, g_ui.fluidRenderScale);
+            vs.stepsPerPixel = 96;
 
+            // Smoke first, then water on top (if both enabled).
             if (scene.smoke()) {
                 auto* s = scene.smoke();
-                g_fluidRenderer->updateSmokeFromVolume(
-                    s->smoke, s->temp, s->solid,
-                    s->nx, s->ny, s->nz,
-                    yaw, pitch, zoom, g_ui.fluidDensity, sr);
-
-                // Draw as fullscreen transparent overlay via ImGui background list
-                ImGui::GetBackgroundDrawList()->AddImage(
-                    static_cast<ImTextureID>(g_fluidRenderer->smokeTex()),
-                    ImVec2(0, 0), ImVec2((float)fbW, (float)fbH),
-                    ImVec2(0, 1), ImVec2(1, 0));   // flip Y to match OpenGL convention
+                volRenderer->setVolume(s->smoke, s->temp, s->solid,
+                                       s->nx, s->ny, s->nz);
+                volRenderer->render(vv, vs);
             }
             if (scene.water()) {
                 auto* w = scene.water();
-                g_fluidRenderer->updateWaterFromVolume(
-                    w->water, w->solid,
-                    w->nx, w->ny, w->nz,
-                    0, yaw, pitch, zoom, g_ui.fluidDensity, 0.5f, wr);
-
-                ImGui::GetBackgroundDrawList()->AddImage(
-                    static_cast<ImTextureID>(g_fluidRenderer->waterTex()),
-                    ImVec2(0, 0), ImVec2((float)fbW, (float)fbH),
-                    ImVec2(0, 1), ImVec2(1, 0));
+                // Water has no temperature field; pass an empty temp.
+                static const std::vector<float> kEmptyTemp;
+                volRenderer->setVolume(w->water, kEmptyTemp, w->solid,
+                                       w->nx, w->ny, w->nz);
+                pipe_fluid::VolumeSettings wsv = vs;
+                wsv.useColor = false;            // blue-ish tint not yet in transfer fn
+                wsv.alphaScale *= 0.6f;
+                volRenderer->render(vv, wsv);
             }
         }
         // ----------------------------------------------------------------------
@@ -524,6 +571,8 @@ int main(int argc, char* argv[]) {
         glfwSwapBuffers(win);
     }
 
+    if (volRenderer) { volRenderer->shutdown(); volRenderer.reset(); }
+    g_volRenderer = nullptr;
     renderer.cleanup();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

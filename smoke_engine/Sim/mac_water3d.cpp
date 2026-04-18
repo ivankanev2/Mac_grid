@@ -11,25 +11,173 @@
 #include "Water3D/water3d_slices.h"
 #include "Water3D/water3d_cuda_backend.h"
 
+class MACWater3DBackend {
+public:
+    virtual ~MACWater3DBackend() = default;
+    virtual bool available() const = 0;
+    virtual const char* name() const = 0;
+    virtual void activate(MACWater3D& sim) = 0;
+    virtual void setParams(MACWater3D& sim) = 0;
+    virtual void step(MACWater3D& sim) = 0;
+    virtual void addWaterSourceSphere(MACWater3D& sim,
+                                      const MACWater3D::Vec3& center,
+                                      float radius,
+                                      const MACWater3D::Vec3& velocity) = 0;
+    virtual void setVoxelSolids(MACWater3D& sim,
+                                const std::vector<uint8_t>& mask) = 0;
+};
+
+static inline void clearTransientStats(MACWater3D& sim, float stepMs = 0.0f) {
+    sim.lastStats.lastStepMs = stepMs;
+    sim.lastStats.pressureMs = 0.0f;
+    sim.lastStats.pressureIters = 0;
+    sim.lastStats.timings.reset();
+    sim.lastStats.timings.totalMs = stepMs;
+}
+
+class Water3DBackendCpu final : public MACWater3DBackend {
+public:
+    bool available() const override { return true; }
+    const char* name() const override { return "CPU MAC 3D"; }
+
+    void activate(MACWater3D& sim) override {
+        sim.updateStats(0.0f);
+        clearTransientStats(sim, 0.0f);
+    }
+
+    void setParams(MACWater3D& sim) override {
+        sim.setParamsCpu();
+    }
+
+    void step(MACWater3D& sim) override {
+        sim.stepCpu();
+    }
+
+    void addWaterSourceSphere(MACWater3D& sim,
+                              const MACWater3D::Vec3& center,
+                              float radius,
+                              const MACWater3D::Vec3& velocity) override {
+        sim.addWaterSourceSphereCpu(center, radius, velocity);
+    }
+
+    void setVoxelSolids(MACWater3D& sim,
+                        const std::vector<uint8_t>& mask) override {
+        sim.setVoxelSolidsCpu(mask);
+    }
+};
+
+class Water3DBackendCuda final : public MACWater3DBackend {
+public:
+    Water3DBackendCuda() {
+        backend_ = water3dCreateCudaBackend();
+    }
+
+    ~Water3DBackendCuda() override {
+        if (backend_ != nullptr) {
+            water3dDestroyCudaBackend(backend_);
+            backend_ = nullptr;
+        }
+    }
+
+    bool available() const override {
+        return backend_ != nullptr;
+    }
+
+    const char* name() const override { return "CUDA MAC 3D"; }
+
+    void activate(MACWater3D& sim) override {
+        if (backend_ == nullptr) {
+            sim.updateStats(0.0f);
+            clearTransientStats(sim, 0.0f);
+            return;
+        }
+        water3dCudaReset(backend_, sim);
+        sim.derivedFieldsDirty = false;
+    }
+
+    void setParams(MACWater3D& sim) override {
+        if (backend_ == nullptr) {
+            sim.setParamsCpu();
+            return;
+        }
+        water3dCudaSetParams(backend_, sim);
+        sim.derivedFieldsDirty = false;
+    }
+
+    void step(MACWater3D& sim) override {
+        if (backend_ == nullptr) {
+            sim.stepCpu();
+            return;
+        }
+        water3dCudaStep(backend_, sim);
+        sim.derivedFieldsDirty = false;
+    }
+
+    void addWaterSourceSphere(MACWater3D& sim,
+                              const MACWater3D::Vec3& center,
+                              float radius,
+                              const MACWater3D::Vec3& velocity) override {
+        if (backend_ == nullptr) {
+            sim.addWaterSourceSphereCpu(center, radius, velocity);
+            return;
+        }
+        water3dCudaAddWaterSourceSphere(backend_, sim, center, radius, velocity);
+        sim.derivedFieldsDirty = false;
+    }
+
+    void setVoxelSolids(MACWater3D& sim,
+                        const std::vector<uint8_t>& mask) override {
+        if (backend_ == nullptr) {
+            sim.setVoxelSolidsCpu(mask);
+            return;
+        }
+
+        const int cellCount = std::max(1, sim.nx * sim.ny * sim.nz);
+        sim.solidUser.assign((std::size_t)cellCount, (uint8_t)0);
+        if ((int)mask.size() == cellCount) {
+            sim.solidUser = mask;
+        }
+
+        water3dCudaSetVoxelSolids(backend_, sim);
+        sim.derivedFieldsDirty = false;
+    }
+
+private:
+    MACWater3DCudaBackend* backend_ = nullptr;
+};
+
+
 MACWater3D::MACWater3D(int NX, int NY, int NZ, float DX, float DT)
-    : nx(NX), ny(NY), nz(NZ), dx(DX), dt(DT) {
-#if SMOKE_ENABLE_CUDA
-    cudaBackend = water3dCreateCudaBackend();
-#endif
+    : nx(NX), ny(NY), nz(NZ), dx(DX), dt(DT),
+      cpuBackendImpl(std::make_unique<Water3DBackendCpu>()),
+      cudaBackendImpl(std::make_unique<Water3DBackendCuda>()) {
     reset();
 }
 
-MACWater3D::~MACWater3D() {
-    if (cudaBackend != nullptr) {
-        water3dDestroyCudaBackend(cudaBackend);
-        cudaBackend = nullptr;
+MACWater3D::~MACWater3D() = default;
+
+MACWater3DBackend* MACWater3D::activeBackend() const {
+    MACWater3DBackend* cpu = cpuBackendImpl.get();
+    MACWater3DBackend* cuda = cudaBackendImpl.get();
+    const bool canUseCuda = (cuda != nullptr) && cuda->available();
+
+    switch (backendPreference) {
+        case BackendPreference::CPU:
+            return cpu;
+        case BackendPreference::CUDA:
+            return canUseCuda ? cuda : cpu;
+        case BackendPreference::Auto:
+        default:
+            return canUseCuda ? cuda : cpu;
     }
 }
 
-MACWater3DCudaBackend* MACWater3D::activeCudaBackend() const {
-    if (cudaBackend == nullptr) return nullptr;
-    if (backendPreference == BackendPreference::CPU) return nullptr;
-    return cudaBackend;
+bool MACWater3D::isCudaAvailable() const {
+    return cudaBackendImpl != nullptr && cudaBackendImpl->available();
+}
+
+bool MACWater3D::isCudaEnabled() const {
+    return isCudaAvailable() && activeBackend() == cudaBackendImpl.get();
 }
 
 void MACWater3D::reset() {
@@ -120,11 +268,12 @@ void MACWater3D::reset() {
     applyBoundary();
     buildLiquidMask();
     rasterizeWaterField();
-    updateStats(0.0f);
 
-    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
-        water3dCudaReset(backend, *this);
-        derivedFieldsDirty = false;
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->activate(*this);
+    } else {
+        updateStats(0.0f);
+        clearTransientStats(*this, 0.0f);
     }
 }
 
@@ -141,18 +290,21 @@ void MACWater3D::setParams(const Params& newParams) {
     params = newParams;
     diffusionStencilDirty = true;
 
-    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
-        water3dCudaSetParams(backend, *this);
-        derivedFieldsDirty = false;
-        return;
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->setParams(*this);
+    } else {
+        setParamsCpu();
     }
+}
 
+void MACWater3D::setParamsCpu() {
     rebuildBorderSolids();
     removeParticlesInSolids();
     enforceParticleBounds();
     buildLiquidMask();
     rasterizeWaterField();
     updateStats(0.0f);
+    clearTransientStats(*this, 0.0f);
 }
 
 void MACWater3D::refreshStats(float stepMs) {
@@ -165,26 +317,23 @@ void MACWater3D::refreshStats(float stepMs) {
 }
 
 void MACWater3D::setBackendPreference(BackendPreference newPreference) {
+    MACWater3DBackend* oldBackend = activeBackend();
     backendPreference = newPreference;
-
-    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
-        water3dCudaReset(backend, *this);
-    } else {
-        updateStats(0.0f);
+    MACWater3DBackend* newBackend = activeBackend();
+    if (newBackend != oldBackend && newBackend != nullptr) {
+        newBackend->activate(*this);
     }
 }
 
 void MACWater3D::step() {
-    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
-        water3dCudaStep(backend, *this);
-        derivedFieldsDirty = false;
-        lastStats.pressureMs = 0.0f;
-        lastStats.pressureIters = 0;
-        lastStats.timings.reset();
-        lastStats.timings.totalMs = lastStats.lastStepMs;
-        return;
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->step(*this);
+    } else {
+        stepCpu();
     }
+}
 
+void MACWater3D::stepCpu() {
     using clock = std::chrono::high_resolution_clock;
     const auto frameStart = clock::now();
     auto stageStart = frameStart;
@@ -306,14 +455,15 @@ void MACWater3D::step() {
     lastStats.timings.totalMs = stepMs;
 }
 
-
 void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity) {
-    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
-        water3dCudaAddWaterSourceSphere(backend, *this, center, radius, velocity);
-        derivedFieldsDirty = false;
-        return;
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->addWaterSourceSphere(*this, center, radius, velocity);
+    } else {
+        addWaterSourceSphereCpu(center, radius, velocity);
     }
+}
 
+void MACWater3D::addWaterSourceSphereCpu(const Vec3& center, float radius, const Vec3& velocity) {
     rebuildBorderSolids();
 
     const float r = std::max(0.0f, radius);
@@ -383,16 +533,19 @@ void MACWater3D::addWaterSourceSphere(const Vec3& center, float radius, const Ve
     buildLiquidMask();
     rasterizeWaterField();
     updateStats(0.0f);
+    clearTransientStats(*this, 0.0f);
 }
 
 void MACWater3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
-    if (MACWater3DCudaBackend* backend = activeCudaBackend()) {
-        solidUser = mask;
-        water3dCudaSetVoxelSolids(backend, *this);
-        return;
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->setVoxelSolids(*this, mask);
+    } else {
+        setVoxelSolidsCpu(mask);
     }
+}
 
-    const int cellCount = nx * ny * nz;
+void MACWater3D::setVoxelSolidsCpu(const std::vector<uint8_t>& mask) {
+    const int cellCount = std::max(1, nx * ny * nz);
     solidUser.assign((std::size_t)cellCount, (uint8_t)0);
 
     if ((int)mask.size() == cellCount) {
@@ -408,6 +561,7 @@ void MACWater3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
     applyBoundary();
     rasterizeWaterField();
     updateStats(0.0f);
+    clearTransientStats(*this, 0.0f);
 }
 
 MACWater3D::SliceData MACWater3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) {

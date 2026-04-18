@@ -3,12 +3,13 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "pressure_solver3d.h"
 #include "sim_stage_timing.h"
 
-struct MACWater3DCudaBackend;
+class MACWater3DBackend;
 
 struct MACWater3D {
     struct Vec3 {
@@ -153,7 +154,6 @@ struct MACWater3D {
 
     int stepCounter = 0;
     BackendPreference backendPreference = BackendPreference::Auto;
-    MACWater3DCudaBackend* cudaBackend = nullptr;
 
     MACWater3D(int NX, int NY, int NZ, float DX, float DT);
     ~MACWater3D();
@@ -164,7 +164,7 @@ struct MACWater3D {
     void setParams(const Params& newParams);
     void setBackendPreference(BackendPreference newPreference);
     BackendPreference backendPreferenceMode() const { return backendPreference; }
-    bool isCudaAvailable() const { return cudaBackend != nullptr; }
+    bool isCudaAvailable() const;
     void step();
 
     void addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity);
@@ -175,9 +175,7 @@ struct MACWater3D {
     const std::vector<uint8_t>& userSolidMask() const { return solidUser; }
     void refreshStats(float stepMs);
 
-    bool isCudaEnabled() const {
-        return cudaBackend != nullptr && backendPreference != BackendPreference::CPU;
-    }
+    bool isCudaEnabled() const;
     bool hasFeatureParityWith2D() const {
         // The 3D path now has its own reusable multigrid-capable pressure solve.
         // Keep this simple boolean for the UI while the remaining validation work
@@ -373,7 +371,18 @@ protected:
     void rasterizeDebugFields();
     void ensureDerivedDebugFields();
     void updateStats(float stepMs);
-    MACWater3DCudaBackend* activeCudaBackend() const;
+
+    void setParamsCpu();
+    void stepCpu();
+    void addWaterSourceSphereCpu(const Vec3& center, float radius, const Vec3& velocity);
+    void setVoxelSolidsCpu(const std::vector<uint8_t>& mask);
+    MACWater3DBackend* activeBackend() const;
+
+    std::unique_ptr<MACWater3DBackend> cpuBackendImpl;
+    std::unique_ptr<MACWater3DBackend> cudaBackendImpl;
+
+    friend class Water3DBackendCpu;
+    friend class Water3DBackendCuda;
 
 public:
     void relaxParticlesForCuda(int iters, float strength) { relaxParticles(iters, strength); }

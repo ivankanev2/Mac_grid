@@ -18,4 +18,4 @@ Smoke amount: 0.6
 Heat amount: 1.2
 Water amount: 0.2
 Source velocity: (0, 3, 0)
-Created: Fri Apr 17 18:59:47 2026
+Created: Sat Apr 18 22:56:16 2026
