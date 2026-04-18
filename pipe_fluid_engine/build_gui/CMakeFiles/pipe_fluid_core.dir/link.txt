@@ -1,0 +1,2 @@
+/usr/bin/ar qc libpipe_fluid_core.a CMakeFiles/pipe_fluid_core.dir/src/pipe_fluid_scene.cpp.o CMakeFiles/pipe_fluid_core.dir/src/pipe_solid_adapter.cpp.o CMakeFiles/pipe_fluid_core.dir/src/blueprint_loader.cpp.o
+/usr/bin/ranlib libpipe_fluid_core.a

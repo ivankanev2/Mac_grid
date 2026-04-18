@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/Users/delyan.hristov/Documents/projects/Fluid simulation/MAC/Mac_grid/pipe_engine/src/main.cpp" "CMakeFiles/PipeEngine.dir/src/main.cpp.o" "gcc" "CMakeFiles/PipeEngine.dir/src/main.cpp.o.d"
+  "/Users/ivan.kanev/Desktop/jorge_project/pipe_engine/src/main.cpp" "CMakeFiles/PipeEngine.dir/src/main.cpp.o" "gcc" "CMakeFiles/PipeEngine.dir/src/main.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

@@ -8,6 +8,10 @@ struct MACSmoke3D;
 
 struct SmokeRenderSettings {
     bool useColor = false;
+    // When true the texture background is fully transparent (alpha=0) and
+    // only smoke pixels carry alpha, so the image can be composited as an
+    // overlay on top of another render (e.g. a 3D pipe mesh).
+    bool transparentBackground = false;
 
     float alphaGamma   = 0.70f;
     float alphaScale   = 1.00f;

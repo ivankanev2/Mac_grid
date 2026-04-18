@@ -1,0 +1,13 @@
+# demo_L.pipe — L-shape used by pipe_fluid_engine's viewer
+# 1m upward run, 90-degree elbow toward +X, 0.8m horizontal run.
+
+name pipe_fluid_demo_L
+inner_radius 0.05
+outer_radius 0.06
+
+start 0 0 0
+direction 0 0 1
+
+straight 1.0
+bend90 +x 0.15
+straight 0.8

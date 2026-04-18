@@ -1,0 +1,15 @@
+# demo_U.pipe — U-shaped pipe used by pipe_fluid_engine's viewer.
+# 0.8m up, 90-degree elbow to +X, 0.6m run, 90-degree elbow back down, 0.8m.
+
+name pipe_fluid_demo_U
+inner_radius 0.05
+outer_radius 0.06
+
+start 0 0 0
+direction 0 0 1
+
+straight 0.8
+bend90 +x 0.15
+straight 0.6
+bend90 -z 0.15
+straight 0.8

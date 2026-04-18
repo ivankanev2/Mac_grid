@@ -855,7 +855,9 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
     auto& img = m_rgbaScratch;
 
     if (!activeBounds.hasData) {
-        fillVerticalGradientBackground(img, m_w, m_h, bgA, bgB);
+        if (!smoke.transparentBackground)
+            fillVerticalGradientBackground(img, m_w, m_h, bgA, bgB);
+        // else: leave img all-zeros (fully transparent)
         glBindTexture(GL_TEXTURE_2D, m_smokeTex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_w, m_h, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
@@ -891,6 +893,7 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
 
                 float tmin = 0.0f;
                 float tmax = 0.0f;
+                float pixelAccumA = 0.0f;   // hoisted for transparent-background alpha
                 if (intersectAabb(o, d, activeMin, activeMax, tmin, tmax)) {
                     float t = std::max(0.0f, tmin);
                     float accumR = 0.0f;
@@ -950,13 +953,18 @@ void SmokeRenderer::updateSmokeFromVolume(const std::vector<float>& smokeValues,
                         color.y = color.y * (1.0f - accumA) + accumG;
                         color.z = color.z * (1.0f - accumA) + accumB;
                     }
+                    pixelAccumA = accumA;
                 }
 
                 const int dst = (j * m_w + i) * 4;
                 img[(std::size_t)dst + 0] = (uint8_t)std::lround(clamp01(color.x) * 255.0f);
                 img[(std::size_t)dst + 1] = (uint8_t)std::lround(clamp01(color.y) * 255.0f);
                 img[(std::size_t)dst + 2] = (uint8_t)std::lround(clamp01(color.z) * 255.0f);
-                img[(std::size_t)dst + 3] = 255;
+                // In transparent-background mode the alpha encodes smoke
+                // density so this image can be composited over another render.
+                img[(std::size_t)dst + 3] = smoke.transparentBackground
+                    ? (uint8_t)std::lround(clamp01(pixelAccumA * 2.0f) * 255.0f)
+                    : (uint8_t)255;
             }
         }
     });
