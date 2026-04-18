@@ -1,0 +1,147 @@
+# ============================================================================
+# Pipe Fluid + Gaussian Splatting research project
+# Root .gitignore covers pipe_engine, smoke_engine, pipe_fluid_engine, and
+# gaussian_splatting subfolders. Submodules (see .gitmodules) manage their
+# own contents.
+# ============================================================================
+
+# ---- OS / editor junk ------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- Distribution / backup zips at the repo root ---------------------------
+# The *_engine.zip snapshots are large and rebuildable from source.
+/*.zip
+/*.tar
+/*.tar.gz
+/*.tgz
+
+# ---- CMake / C++ build artifacts (any nested engine) -----------------------
+# Each engine keeps its own build tree; wildcards catch them all.
+build/
+build_*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+Makefile
+*.make
+compile_commands.json
+CTestTestfile.cmake
+install_manifest.txt
+_deps/
+**/_deps/
+
+# CMake / FetchContent local downloads
+**/glfw_local/
+**/glfw-*/
+**/imgui_build/
+
+# Compiled object / archive / shared / executable outputs
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.app/
+*.pdb
+*.ilk
+*.exp
+
+# Specific built binaries we know live in this repo
+pipe_engine/build/PipeEngine
+pipe_fluid_engine/build_gui/PipeFluidEngine
+smoke_engine/build/SmokeEngine
+smoke_engine/build/Water3DBackendCompare
+
+# ---- ImGui / per-user UI layout --------------------------------------------
+# These record the user's docking/window positions — not source.
+imgui.ini
+**/imgui.ini
+*_layout.ini
+pipe_fluid_layout.ini
+vizior_layout.ini
+
+# ---- Generated / baked data (regenerable from source) ----------------------
+# Pipe meshes exported from blueprints
+pipe_engine/generated_meshes/
+# Smoke bakes + diagnostics
+smoke_engine/offline_bakes/
+smoke_engine/build_diag/
+# Any top-level output folders
+output/
+outputs/
+**/output/
+**/outputs/
+
+# ---- Gaussian splatting (Python + CUDA) ------------------------------------
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs and conda envs
+.venv/
+venv/
+env/
+.conda/
+.python-version
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# PyTorch / training artifacts
+*.pt
+*.pth
+*.ckpt
+wandb/
+runs/
+tb_logs/
+logs/
+lightning_logs/
+
+# Trained / rendered assets
+gaussian_splatting/2d-gaussian-splatting/output/
+gaussian_splatting/2d-gaussian-splatting/*/output/
+*.ply
+
+# COLMAP intermediate data
+gaussian_splatting/**/colmap/
+gaussian_splatting/**/sparse/
+gaussian_splatting/**/dense/
+gaussian_splatting/**/distorted/
+gaussian_splatting/**/images_*/
+
+# CUDA compilation artifacts
+*.cubin
+*.fatbin
+*.cu.o
+*.i
+*.ii
+*.ptx
+
+# ---- Logs / cores / temps --------------------------------------------------
+*.log
+core
+core.*
+*.stackdump
+tmp/
+.tmp/
+
+# ---- Secrets (just in case) ------------------------------------------------
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
