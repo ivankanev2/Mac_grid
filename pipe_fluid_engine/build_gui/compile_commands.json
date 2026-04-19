@@ -1,260 +1,260 @@
 [
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_grid_core.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_grid_core.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_grid_core.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_grid_core.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_grid_core.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_grid_core.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_grid_core.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_grid_core.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_advection.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_advection.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_advection.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_advection.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_advection.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_advection.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_advection.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_advection.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_boundaries.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_boundaries.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_boundaries.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_boundaries.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_boundaries.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_boundaries.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_boundaries.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_boundaries.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_core.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_core.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_core.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_core.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_core.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_core.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_core.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_core.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_forces.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_forces.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_forces.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_forces.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_forces.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_forces.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_forces.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_forces.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pipe.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pipe.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pipe.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pipe.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_pipe.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_pipe.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_pipe.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_pipe.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pressure.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pressure.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pressure.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_pressure.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_pressure.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_pressure.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_pressure.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_pressure.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_sampling.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_sampling.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_sampling.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke_sim_sampling.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_sampling.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke_sim_sampling.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_sampling.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke_sim_sampling.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\pressure_solver.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\pressure_solver.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/pressure_solver.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/pressure_solver.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver3d.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver3d.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver3d.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/pressure_solver3d.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\pressure_solver3d.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\pressure_solver3d.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/pressure_solver3d.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/pressure_solver3d.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water_sim.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water_sim.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water_sim.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water_sim.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_water_sim.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_water_sim.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_water_sim.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_water_sim.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water3d.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water3d.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water3d.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_water3d.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_water3d.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_water3d.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_water3d.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_water3d.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke3d.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke3d.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke3d.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_smoke3d.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke3d.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_smoke3d.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke3d.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_smoke3d.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/mac_coupled_sim.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_coupled_sim.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\mac_coupled_sim.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_coupled_sim.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/mac_coupled_sim.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/text_mask.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/text_mask.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/text_mask.cpp",
-  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/Sim/text_mask.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_sim_lib.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_sim_lib.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\text_mask.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\Sim\\text_mask.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/Sim/text_mask.cpp",
+  "output": "CMakeFiles/pipe_fluid_sim_lib.dir/C_/Users/Nitro/Mac_grid/smoke_engine/Sim/text_mask.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_core.dir/src/pipe_fluid_scene.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/pipe_fluid_scene.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/pipe_fluid_scene.cpp",
-  "output": "CMakeFiles/pipe_fluid_core.dir/src/pipe_fluid_scene.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_core.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_core.dir\\src\\pipe_fluid_scene.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\pipe_fluid_engine\\src\\pipe_fluid_scene.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/src/pipe_fluid_scene.cpp",
+  "output": "CMakeFiles/pipe_fluid_core.dir/src/pipe_fluid_scene.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_core.dir/src/pipe_solid_adapter.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/pipe_solid_adapter.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/pipe_solid_adapter.cpp",
-  "output": "CMakeFiles/pipe_fluid_core.dir/src/pipe_solid_adapter.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_core.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_core.dir\\src\\pipe_solid_adapter.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\pipe_fluid_engine\\src\\pipe_solid_adapter.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/src/pipe_solid_adapter.cpp",
+  "output": "CMakeFiles/pipe_fluid_core.dir/src/pipe_solid_adapter.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_core.dir/src/blueprint_loader.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/blueprint_loader.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/blueprint_loader.cpp",
-  "output": "CMakeFiles/pipe_fluid_core.dir/src/blueprint_loader.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_core.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_core.dir\\src\\blueprint_loader.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\pipe_fluid_engine\\src\\blueprint_loader.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/src/blueprint_loader.cpp",
+  "output": "CMakeFiles/pipe_fluid_core.dir/src/blueprint_loader.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/volume_renderer.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/volume_renderer.cpp",
-  "output": "CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_render.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_render.dir\\src\\volume_renderer.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\pipe_fluid_engine\\src\\volume_renderer.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/src/volume_renderer.cpp",
+  "output": "CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/cpu_volume_renderer.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/cpu_volume_renderer.cpp",
-  "output": "CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_render.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_render.dir\\src\\cpu_volume_renderer.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\pipe_fluid_engine\\src\\cpu_volume_renderer.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/src/cpu_volume_renderer.cpp",
+  "output": "CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/gpu_volume_renderer.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/src/gpu_volume_renderer.cpp",
-  "output": "CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/pipe_fluid_render.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_render.dir\\src\\gpu_volume_renderer.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\pipe_fluid_engine\\src\\gpu_volume_renderer.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/src/gpu_volume_renderer.cpp",
+  "output": "CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp",
-  "output": "CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/pipe_fluid_imgui.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_imgui.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui.cpp",
+  "output": "CMakeFiles/pipe_fluid_imgui.dir/C_/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp",
-  "output": "CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_draw.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/pipe_fluid_imgui.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_imgui.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui_draw.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui_draw.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui_draw.cpp",
+  "output": "CMakeFiles/pipe_fluid_imgui.dir/C_/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui_draw.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp",
-  "output": "CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_tables.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/pipe_fluid_imgui.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_imgui.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui_tables.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui_tables.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui_tables.cpp",
+  "output": "CMakeFiles/pipe_fluid_imgui.dir/C_/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui_tables.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp",
-  "output": "CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/imgui_widgets.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/pipe_fluid_imgui.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_imgui.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui_widgets.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\imgui_widgets.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui_widgets.cpp",
+  "output": "CMakeFiles/pipe_fluid_imgui.dir/C_/Users/Nitro/Mac_grid/smoke_engine/external/imgui/imgui_widgets.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp",
-  "output": "CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/pipe_fluid_imgui.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_imgui.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\backends\\imgui_impl_glfw.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\backends\\imgui_impl_glfw.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp",
+  "output": "CMakeFiles/pipe_fluid_imgui.dir/C_/Users/Nitro/Mac_grid/smoke_engine/external/imgui/backends/imgui_impl_glfw.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++  -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp",
-  "output": "CMakeFiles/pipe_fluid_imgui.dir/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/pipe_fluid_imgui.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\pipe_fluid_imgui.dir\\C_\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\backends\\imgui_impl_opengl3.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\external\\imgui\\backends\\imgui_impl_opengl3.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp",
+  "output": "CMakeFiles/pipe_fluid_imgui.dir/C_/Users/Nitro/Mac_grid/smoke_engine/external/imgui/backends/imgui_impl_opengl3.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui",
-  "command": "/usr/bin/c++ -DGL_SILENCE_DEPRECATION -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Geometry -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Renderer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Voxelizer -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/Blueprint -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine/UI -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/include -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../pipe_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/Sim -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/stb -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/../smoke_engine/external/imgui/backends -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -O3 -DNDEBUG -std=c++17 -arch arm64 -o CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.o -c /Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/viewer/main_gui.cpp",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/viewer/main_gui.cpp",
-  "output": "CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DSMOKE_ENABLE_CUDA=0 -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0 @CMakeFiles/PipeFluidEngine.dir/includes_CXX.rsp -std=c++17 -o CMakeFiles\\PipeFluidEngine.dir\\viewer\\main_gui.cpp.obj -c C:\\Users\\Nitro\\Mac_grid\\pipe_fluid_engine\\viewer\\main_gui.cpp",
+  "file": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/viewer/main_gui.cpp",
+  "output": "CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/context.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/context.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/context.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/context.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\context.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\context.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/context.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/context.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/init.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/init.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/init.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/init.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\init.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\init.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/init.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/init.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/input.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/input.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/input.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/input.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\input.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\input.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/input.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/input.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/monitor.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/monitor.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/monitor.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/monitor.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\monitor.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\monitor.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/monitor.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/monitor.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/vulkan.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/vulkan.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/vulkan.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/vulkan.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\vulkan.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\vulkan.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/vulkan.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/vulkan.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/window.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/window.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/window.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/window.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\window.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\window.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/window.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/window.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_init.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_init.m",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_init.m",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_init.m.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\win32_init.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\win32_init.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/win32_init.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/win32_init.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_joystick.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_joystick.m",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_joystick.m",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_joystick.m.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\win32_joystick.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\win32_joystick.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/win32_joystick.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/win32_joystick.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_monitor.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_monitor.m",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_monitor.m",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_monitor.m.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\win32_monitor.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\win32_monitor.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/win32_monitor.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/win32_monitor.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_window.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_window.m",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_window.m",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_window.m.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\win32_time.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\win32_time.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/win32_time.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/win32_time.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/cocoa_time.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_time.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/cocoa_time.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/cocoa_time.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\win32_thread.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\win32_thread.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/win32_thread.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/win32_thread.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_thread.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/posix_thread.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/posix_thread.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/posix_thread.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\win32_window.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\win32_window.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/win32_window.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/win32_window.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/nsgl_context.m.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/nsgl_context.m",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/nsgl_context.m",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/nsgl_context.m.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\wgl_context.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\wgl_context.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/wgl_context.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/wgl_context.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/egl_context.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/egl_context.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/egl_context.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/egl_context.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\egl_context.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\egl_context.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/egl_context.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/egl_context.c.obj"
 },
 {
-  "directory": "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src",
-  "command": "/usr/bin/cc -D_GLFW_USE_CONFIG_H -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/include -I/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src -I/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/build_gui/glfw_local/src -O3 -DNDEBUG -std=gnu99 -arch arm64 -fPIC -Wall -o CMakeFiles/glfw.dir/osmesa_context.c.o -c /Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/osmesa_context.c",
-  "file": "/Users/ivan.kanev/Desktop/jorge_project/smoke_engine/build/_deps/glfw-src/src/osmesa_context.c",
-  "output": "glfw_local/src/CMakeFiles/glfw.dir/osmesa_context.c.o"
+  "directory": "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/build_gui/glfw_local/src",
+  "command": "C:\\msys64\\ucrt64\\bin\\cc.exe -DUNICODE -DWINVER=0x0501 -D_GLFW_USE_CONFIG_H -D_UNICODE @CMakeFiles/glfw.dir/includes_C.rsp -std=gnu99 -Wall -Wdeclaration-after-statement -o CMakeFiles\\glfw.dir\\osmesa_context.c.obj -c C:\\Users\\Nitro\\Mac_grid\\smoke_engine\\build\\_deps\\glfw-src\\src\\osmesa_context.c",
+  "file": "C:/Users/Nitro/Mac_grid/smoke_engine/build/_deps/glfw-src/src/osmesa_context.c",
+  "output": "glfw_local/src/CMakeFiles/glfw.dir/osmesa_context.c.obj"
 }
 ]

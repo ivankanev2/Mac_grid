@@ -1,10 +1,10 @@
 file(REMOVE_RECURSE
-  "CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.o"
-  "CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.o.d"
-  "CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.o"
-  "CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.o.d"
-  "CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.o"
-  "CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.o.d"
+  "CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.obj"
+  "CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.obj.d"
+  "CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.obj"
+  "CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.obj.d"
+  "CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.obj"
+  "CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.obj.d"
   "libpipe_fluid_render.a"
   "libpipe_fluid_render.pdb"
 )

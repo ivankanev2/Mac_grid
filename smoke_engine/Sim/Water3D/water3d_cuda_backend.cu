@@ -1811,6 +1811,9 @@ void ensureAllocatedForSim(MACWater3DCudaBackend* b, const MACWater3D& sim) {
     allocArray(b->d_cellCounts, cellCount);
     allocArray(b->d_particleCount, 1);
 
+    const int zeroParticleCount = 0;
+    CUDA_CHECK(cudaMemcpy(b->d_particleCount, &zeroParticleCount, sizeof(int), cudaMemcpyHostToDevice));
+
     const int initialParticleCapacity = std::max(cellCount * std::max(1, sim.params.particlesPerCell), 1024);
     ensureParticleCapacity(b, initialParticleCapacity);
 }
@@ -2156,23 +2159,38 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
     fillKernel<uint8_t><<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(b->d_occ, b->cellCount, (uint8_t)0);
     particleCount = 0;
     CUDA_CHECK(cudaMemcpy(&particleCount, b->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
-    countParticlesPerCellKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_particles, particleCount, b->d_solid, b->d_cellCounts, b->d_occ,
-        b->nx, b->ny, b->nz, b->dx);
-
-    const int maxNewPerStep = std::max(4096, b->cellCount / 8);
-    int maxParticleCount = particleCount + maxNewPerStep;
-    if (b->params.maxParticles > 0) {
-        maxParticleCount = std::min(maxParticleCount, b->params.maxParticles);
+    if (particleCount > 0) {
+        countParticlesPerCellKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
+            b->d_particles, particleCount, b->d_solid, b->d_cellCounts, b->d_occ,
+            b->nx, b->ny, b->nz, b->dx);
     }
-    maxParticleCount = std::max(maxParticleCount, particleCount);
-    ensureParticleCapacity(b, maxParticleCount);
 
-    spawnReseedParticlesKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
-        b->d_particles, b->d_particleCount, b->particleCapacity,
-        b->d_liquid, b->d_solid, b->d_cellCounts,
-        b->d_u, b->d_v, b->d_w,
-        b->nx, b->ny, b->nz, b->dx, b->params.particlesPerCell, sim.stepCounter, maxParticleCount);
+    buildReseedRegionKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
+        b->d_solid, b->d_occ, b->d_region, b->nx, b->ny, b->nz);
+
+    const int target = std::max(1, b->params.particlesPerCell);
+    int softMaxParticles = (b->params.maxParticles > 0)
+        ? b->params.maxParticles
+        : std::max(particleCount + 256, target);
+    if (sim.desiredMass > 0.0f) {
+        const int desiredCap = std::max(target, (int)std::ceil(sim.desiredMass * 1.15f));
+        softMaxParticles = std::min(softMaxParticles, desiredCap);
+    }
+
+    const int remainingSpawnBudget = std::max(0, softMaxParticles - particleCount);
+    const int baseNewCap = std::max(128, b->cellCount / 64);
+    const int maxNewPerStep = std::min(remainingSpawnBudget, std::min(baseNewCap, 2048));
+
+    if (maxNewPerStep > 0) {
+        const int maxParticleCount = particleCount + maxNewPerStep;
+        ensureParticleCapacity(b, maxParticleCount);
+
+        spawnReseedParticlesKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
+            b->d_particles, b->d_particleCount, b->particleCapacity,
+            b->d_region, b->d_solid, b->d_cellCounts,
+            b->d_u, b->d_v, b->d_w,
+            b->nx, b->ny, b->nz, b->dx, b->params.particlesPerCell, sim.stepCounter, maxParticleCount);
+    }
 
     if (b->params.reseedRelaxIters > 0 && b->params.reseedRelaxStrength > 0.0f) {
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -2184,11 +2202,18 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
     if (b->params.waterDissipation < 0.999999f) {
         particleCount = 0;
         CUDA_CHECK(cudaMemcpy(&particleCount, b->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
-        const float dtRef = 0.02f;
-        const float keepProb = powf(clamp013D(b->params.waterDissipation), b->dt / std::max(1e-6f, dtRef));
-        markDissipatedParticlesKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
-            b->d_particles, particleCount, keepProb, (unsigned int)(sim.stepCounter * 9781 + 17));
-        compactParticles(b);
+        if (particleCount > 0) {
+            const int particleCountBeforeDissipation = particleCount;
+            const float dtRef = 0.02f;
+            const float keepProb = powf(clamp013D(b->params.waterDissipation), b->dt / std::max(1e-6f, dtRef));
+            markDissipatedParticlesKernel<<<(particleCount + kThreads - 1) / kThreads, kThreads>>>(
+                b->d_particles, particleCount, keepProb, (unsigned int)(sim.stepCounter * 9781 + 17));
+            compactParticles(b);
+            CUDA_CHECK(cudaMemcpy(&particleCount, b->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
+            if (sim.desiredMass >= 0.0f && particleCount < particleCountBeforeDissipation) {
+                sim.desiredMass = std::max(0.0f, sim.desiredMass - (float)(particleCountBeforeDissipation - particleCount));
+            }
+        }
     }
 
     launchBuildLiquid(b, true);

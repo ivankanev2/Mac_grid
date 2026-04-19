@@ -1846,254 +1846,6 @@ int main()
             if (steps == workspaceStepCap) accumulator = 0.0;
         }
 
-        // upload textures (do this each frame before NewFrame so ImGui uses latest)
-        SmokeRenderSettings rs;
-        OverlaySettings ov;
-        UI::BuildRenderSettings(ui, rs, ov);
-        WaterRenderSettings wr;
-        UI::BuildWaterRenderSettings(ui, wr);
-
-        if (activeWorkspace == UI::kWorkspaceSmoke2D) {
-            renderer.updateFromSim(sim, rs, ov);
-        } else if (activeWorkspace == UI::kWorkspaceWater2D) {
-            renderer.updateWaterFromSim(waterSim, wr);
-        } else if (activeWorkspace == UI::kWorkspaceCoupled) {
-            coupledRenderer.updateFromSim(coupled, rs, ov);
-            coupledRenderer.updateWaterFromSim(coupled, wr);
-        }
-
-        if (activeWorkspace == UI::kWorkspaceWater3D) {
-            const int viewMode = std::clamp(ui.water3DViewMode, 0, 2);
-            const int displayMode = std::clamp(ui.water3DDisplayMode, 0, 2);
-            const bool showWaterOverlay = (displayMode != 1);
-            if (showWaterOverlay) {
-                const bool simChanged =
-                    !water3DRenderCache.valid || water3DRenderCache.lastSimVersion != water3DSimVersion;
-                if (viewMode == 1) {
-                    const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
-                    const int field = std::clamp(ui.water3DDebugField, 0, 3);
-                    const int maxSlice = (axis == 0)
-                        ? std::max(0, water3D.nz - 1)
-                        : (axis == 1)
-                            ? std::max(0, water3D.ny - 1)
-                            : std::max(0, water3D.nx - 1);
-                    ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
-
-                    const bool sliceChanged =
-                        !water3DRenderCache.valid ||
-                        water3DRenderCache.lastViewMode != viewMode ||
-                        water3DRenderCache.lastSliceAxis != axis ||
-                        water3DRenderCache.lastSliceIndex != ui.water3DSliceIndex ||
-                        water3DRenderCache.lastDebugField != field;
-
-                    bool needUpdate = sliceChanged;
-                    if (!needUpdate && simChanged) {
-                        if (!ui.playing || !ui.water3DThrottleRendering) {
-                            needUpdate = true;
-                        } else {
-                            const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
-                            needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
-                        }
-                    }
-
-                    if (needUpdate) {
-                        auto slice = water3D.copyDebugSlice(
-                            static_cast<MACWater3D::SliceAxis>(axis),
-                            ui.water3DSliceIndex,
-                            static_cast<MACWater3D::DebugField>(field));
-                        water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
-                        water3DRenderCache.valid = true;
-                        water3DRenderCache.lastRenderTime = now;
-                        water3DRenderCache.lastSimVersion = water3DSimVersion;
-                        water3DRenderCache.lastViewMode = viewMode;
-                        water3DRenderCache.lastSliceAxis = axis;
-                        water3DRenderCache.lastSliceIndex = ui.water3DSliceIndex;
-                        water3DRenderCache.lastDebugField = field;
-                    }
-                } else {
-                    const auto target = computeVolumeRenderTargetSize(
-                        win,
-                        ui.water3DViewportWidth,
-                        ui.water3DViewportHeight,
-                        effectiveAdaptiveRenderScale(water3DRenderCache, ui.volumeRenderScale));
-                    const bool sizeChanged =
-                        water3DRenderer.width() != target.width || water3DRenderer.height() != target.height;
-                    if (sizeChanged) {
-                        water3DRenderer.resize(target.width, target.height);
-                    }
-
-                    const bool viewChanged =
-                        !water3DRenderCache.valid ||
-                        water3DRenderCache.lastWidth != target.width ||
-                        water3DRenderCache.lastHeight != target.height ||
-                        water3DRenderCache.lastViewMode != viewMode ||
-                        !nearlyEqual(water3DRenderCache.lastYaw, ui.water3DViewYawDeg) ||
-                        !nearlyEqual(water3DRenderCache.lastPitch, ui.water3DViewPitchDeg) ||
-                        !nearlyEqual(water3DRenderCache.lastZoom, ui.water3DViewZoom) ||
-                        !nearlyEqual(water3DRenderCache.lastDensity, ui.water3DVolumeDensity) ||
-                        !nearlyEqual(water3DRenderCache.lastSurfaceThreshold, ui.water3DSurfaceThreshold);
-
-                    bool needUpdate = !water3DRenderCache.valid || sizeChanged || viewChanged;
-                    if (!needUpdate && simChanged) {
-                        if (!ui.playing || !ui.water3DThrottleRendering) {
-                            needUpdate = true;
-                        } else {
-                            const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
-                            needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
-                        }
-                    }
-
-                    if (needUpdate) {
-                        const double renderStart = glfwGetTime();
-                        water3D.syncHostVolume();
-                        water3DRenderer.updateWaterFromVolume(
-                            water3D.water,
-                            water3D.solid,
-                            water3D.nx,
-                            water3D.ny,
-                            water3D.nz,
-                            viewMode,
-                            ui.water3DViewYawDeg,
-                            ui.water3DViewPitchDeg,
-                            ui.water3DViewZoom,
-                            ui.water3DVolumeDensity,
-                            ui.water3DSurfaceThreshold,
-                            wr);
-                        const float renderMs = (float)((glfwGetTime() - renderStart) * 1000.0);
-                        updateAdaptiveRenderScale(water3DRenderCache,
-                                                  renderMs,
-                                                  renderBudgetMs(ui.water3DThrottleRendering, ui.water3DRenderFPS));
-                        water3DRenderCache.valid = true;
-                        water3DRenderCache.lastRenderTime = now;
-                        water3DRenderCache.lastSimVersion = water3DSimVersion;
-                        water3DRenderCache.lastWidth = target.width;
-                        water3DRenderCache.lastHeight = target.height;
-                        water3DRenderCache.lastViewMode = viewMode;
-                        water3DRenderCache.lastSliceAxis = -1;
-                        water3DRenderCache.lastSliceIndex = -1;
-                        water3DRenderCache.lastDebugField = -1;
-                        water3DRenderCache.lastYaw = ui.water3DViewYawDeg;
-                        water3DRenderCache.lastPitch = ui.water3DViewPitchDeg;
-                        water3DRenderCache.lastZoom = ui.water3DViewZoom;
-                        water3DRenderCache.lastDensity = ui.water3DVolumeDensity;
-                        water3DRenderCache.lastSurfaceThreshold = ui.water3DSurfaceThreshold;
-                    }
-                }
-            }
-        }
-
-        if (activeWorkspace == UI::kWorkspaceSmoke3D) {
-            const int viewMode = std::clamp(ui.smoke3DViewMode, 0, 1);
-            const bool simChanged =
-                !smoke3DRenderCache.valid || smoke3DRenderCache.lastSimVersion != smoke3DSimVersion;
-            if (viewMode == 1) {
-                const int axis = std::clamp(ui.smoke3DSliceAxis, 0, 2);
-                const int field = std::clamp(ui.smoke3DDebugField, 0, 4);
-                const int maxSlice = (axis == 0)
-                    ? std::max(0, smoke3D.nz - 1)
-                    : (axis == 1)
-                        ? std::max(0, smoke3D.ny - 1)
-                        : std::max(0, smoke3D.nx - 1);
-                ui.smoke3DSliceIndex = std::clamp(ui.smoke3DSliceIndex, 0, maxSlice);
-
-                const bool sliceChanged =
-                    !smoke3DRenderCache.valid ||
-                    smoke3DRenderCache.lastViewMode != viewMode ||
-                    smoke3DRenderCache.lastSliceAxis != axis ||
-                    smoke3DRenderCache.lastSliceIndex != ui.smoke3DSliceIndex ||
-                    smoke3DRenderCache.lastDebugField != field;
-
-                bool needUpdate = sliceChanged;
-                if (!needUpdate && simChanged) {
-                    if (!ui.playing || !ui.smoke3DThrottleRendering) {
-                        needUpdate = true;
-                    } else {
-                        const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
-                        needUpdate = (now - smoke3DRenderCache.lastRenderTime) >= interval;
-                    }
-                }
-
-                if (needUpdate) {
-                    auto slice = smoke3D.copyDebugSlice(
-                        static_cast<MACSmoke3D::SliceAxis>(axis),
-                        ui.smoke3DSliceIndex,
-                        static_cast<MACSmoke3D::DebugField>(field));
-                    smoke3DRenderer.updateSmokeFromSlice(slice.values, slice.solid, slice.width, slice.height, field, rs);
-                    smoke3DRenderCache.valid = true;
-                    smoke3DRenderCache.lastRenderTime = now;
-                    smoke3DRenderCache.lastSimVersion = smoke3DSimVersion;
-                    smoke3DRenderCache.lastViewMode = viewMode;
-                    smoke3DRenderCache.lastSliceAxis = axis;
-                    smoke3DRenderCache.lastSliceIndex = ui.smoke3DSliceIndex;
-                    smoke3DRenderCache.lastDebugField = field;
-                }
-            } else {
-                const auto target = computeVolumeRenderTargetSize(
-                    win,
-                    ui.smoke3DViewportWidth,
-                    ui.smoke3DViewportHeight,
-                    effectiveAdaptiveRenderScale(smoke3DRenderCache, ui.volumeRenderScale));
-                const bool sizeChanged =
-                    smoke3DRenderer.width() != target.width || smoke3DRenderer.height() != target.height;
-                if (sizeChanged) {
-                    smoke3DRenderer.resize(target.width, target.height);
-                }
-
-                const bool viewChanged =
-                    !smoke3DRenderCache.valid ||
-                    smoke3DRenderCache.lastWidth != target.width ||
-                    smoke3DRenderCache.lastHeight != target.height ||
-                    smoke3DRenderCache.lastViewMode != viewMode ||
-                    !nearlyEqual(smoke3DRenderCache.lastYaw, ui.smoke3DViewYawDeg) ||
-                    !nearlyEqual(smoke3DRenderCache.lastPitch, ui.smoke3DViewPitchDeg) ||
-                    !nearlyEqual(smoke3DRenderCache.lastZoom, ui.smoke3DViewZoom) ||
-                    !nearlyEqual(smoke3DRenderCache.lastDensity, ui.smoke3DVolumeDensity);
-
-                bool needUpdate = !smoke3DRenderCache.valid || sizeChanged || viewChanged;
-                if (!needUpdate && simChanged) {
-                    if (!ui.playing || !ui.smoke3DThrottleRendering) {
-                        needUpdate = true;
-                    } else {
-                        const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
-                        needUpdate = (now - smoke3DRenderCache.lastRenderTime) >= interval;
-                    }
-                }
-
-                if (needUpdate) {
-                    const double renderStart = glfwGetTime();
-                    smoke3DRenderer.updateSmokeFromVolume(
-                        smoke3D.smoke,
-                        smoke3D.temp,
-                        smoke3D.solid,
-                        smoke3D.nx,
-                        smoke3D.ny,
-                        smoke3D.nz,
-                        ui.smoke3DViewYawDeg,
-                        ui.smoke3DViewPitchDeg,
-                        ui.smoke3DViewZoom,
-                        ui.smoke3DVolumeDensity,
-                        rs);
-                    const float renderMs = (float)((glfwGetTime() - renderStart) * 1000.0);
-                    updateAdaptiveRenderScale(smoke3DRenderCache,
-                                              renderMs,
-                                              renderBudgetMs(ui.smoke3DThrottleRendering, ui.smoke3DRenderFPS));
-                    smoke3DRenderCache.valid = true;
-                    smoke3DRenderCache.lastRenderTime = now;
-                    smoke3DRenderCache.lastSimVersion = smoke3DSimVersion;
-                    smoke3DRenderCache.lastWidth = target.width;
-                    smoke3DRenderCache.lastHeight = target.height;
-                    smoke3DRenderCache.lastViewMode = viewMode;
-                    smoke3DRenderCache.lastSliceAxis = -1;
-                    smoke3DRenderCache.lastSliceIndex = -1;
-                    smoke3DRenderCache.lastDebugField = -1;
-                    smoke3DRenderCache.lastYaw = ui.smoke3DViewYawDeg;
-                    smoke3DRenderCache.lastPitch = ui.smoke3DViewPitchDeg;
-                    smoke3DRenderCache.lastZoom = ui.smoke3DViewZoom;
-                    smoke3DRenderCache.lastDensity = ui.smoke3DVolumeDensity;
-                }
-            }
-        }
-
         } else {
             processOfflineBakeChunk();
         }
@@ -2144,6 +1896,259 @@ int main()
             if (actions.applyGrid2DRequested) {
                 reinit2DGrid();
             }
+        }
+
+        auto refreshLiveViewportTextures = [&](double renderNow) {
+            SmokeRenderSettings rs;
+            OverlaySettings ov;
+            UI::BuildRenderSettings(ui, rs, ov);
+            WaterRenderSettings wr;
+            UI::BuildWaterRenderSettings(ui, wr);
+
+            if (activeWorkspace == UI::kWorkspaceSmoke2D) {
+                renderer.updateFromSim(sim, rs, ov);
+            } else if (activeWorkspace == UI::kWorkspaceWater2D) {
+                renderer.updateWaterFromSim(waterSim, wr);
+            } else if (activeWorkspace == UI::kWorkspaceCoupled) {
+                coupledRenderer.updateFromSim(coupled, rs, ov);
+                coupledRenderer.updateWaterFromSim(coupled, wr);
+            }
+
+            if (activeWorkspace == UI::kWorkspaceWater3D) {
+                const int viewMode = std::clamp(ui.water3DViewMode, 0, 2);
+                const int displayMode = std::clamp(ui.water3DDisplayMode, 0, 2);
+                const bool showWaterOverlay = (displayMode != 1);
+                if (showWaterOverlay) {
+                    const bool simChanged =
+                        !water3DRenderCache.valid || water3DRenderCache.lastSimVersion != water3DSimVersion;
+                    if (viewMode == 1) {
+                        const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
+                        const int field = std::clamp(ui.water3DDebugField, 0, 3);
+                        const int maxSlice = (axis == 0)
+                            ? std::max(0, water3D.nz - 1)
+                            : (axis == 1)
+                                ? std::max(0, water3D.ny - 1)
+                                : std::max(0, water3D.nx - 1);
+                        ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
+
+                        const bool sliceChanged =
+                            !water3DRenderCache.valid ||
+                            water3DRenderCache.lastViewMode != viewMode ||
+                            water3DRenderCache.lastSliceAxis != axis ||
+                            water3DRenderCache.lastSliceIndex != ui.water3DSliceIndex ||
+                            water3DRenderCache.lastDebugField != field;
+
+                        bool needUpdate = sliceChanged;
+                        if (!needUpdate && simChanged) {
+                            if (!ui.playing || !ui.water3DThrottleRendering) {
+                                needUpdate = true;
+                            } else {
+                                const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
+                                needUpdate = (renderNow - water3DRenderCache.lastRenderTime) >= interval;
+                            }
+                        }
+
+                        if (needUpdate) {
+                            auto slice = water3D.copyDebugSlice(
+                                static_cast<MACWater3D::SliceAxis>(axis),
+                                ui.water3DSliceIndex,
+                                static_cast<MACWater3D::DebugField>(field));
+                            water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
+                            water3DRenderCache.valid = true;
+                            water3DRenderCache.lastRenderTime = renderNow;
+                            water3DRenderCache.lastSimVersion = water3DSimVersion;
+                            water3DRenderCache.lastViewMode = viewMode;
+                            water3DRenderCache.lastSliceAxis = axis;
+                            water3DRenderCache.lastSliceIndex = ui.water3DSliceIndex;
+                            water3DRenderCache.lastDebugField = field;
+                        }
+                    } else {
+                        const auto target = computeVolumeRenderTargetSize(
+                            win,
+                            ui.water3DViewportWidth,
+                            ui.water3DViewportHeight,
+                            effectiveAdaptiveRenderScale(water3DRenderCache, ui.volumeRenderScale));
+                        const bool sizeChanged =
+                            water3DRenderer.width() != target.width || water3DRenderer.height() != target.height;
+                        if (sizeChanged) {
+                            water3DRenderer.resize(target.width, target.height);
+                        }
+
+                        const bool viewChanged =
+                            !water3DRenderCache.valid ||
+                            water3DRenderCache.lastWidth != target.width ||
+                            water3DRenderCache.lastHeight != target.height ||
+                            water3DRenderCache.lastViewMode != viewMode ||
+                            !nearlyEqual(water3DRenderCache.lastYaw, ui.water3DViewYawDeg) ||
+                            !nearlyEqual(water3DRenderCache.lastPitch, ui.water3DViewPitchDeg) ||
+                            !nearlyEqual(water3DRenderCache.lastZoom, ui.water3DViewZoom) ||
+                            !nearlyEqual(water3DRenderCache.lastDensity, ui.water3DVolumeDensity) ||
+                            !nearlyEqual(water3DRenderCache.lastSurfaceThreshold, ui.water3DSurfaceThreshold);
+
+                        bool needUpdate = !water3DRenderCache.valid || sizeChanged || viewChanged;
+                        if (!needUpdate && simChanged) {
+                            if (!ui.playing || !ui.water3DThrottleRendering) {
+                                needUpdate = true;
+                            } else {
+                                const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
+                                needUpdate = (renderNow - water3DRenderCache.lastRenderTime) >= interval;
+                            }
+                        }
+
+                        if (needUpdate) {
+                            const double renderStart = glfwGetTime();
+                            water3D.syncHostVolume();
+                            water3DRenderer.updateWaterFromVolume(
+                                water3D.water,
+                                water3D.solid,
+                                water3D.nx,
+                                water3D.ny,
+                                water3D.nz,
+                                viewMode,
+                                ui.water3DViewYawDeg,
+                                ui.water3DViewPitchDeg,
+                                ui.water3DViewZoom,
+                                ui.water3DVolumeDensity,
+                                ui.water3DSurfaceThreshold,
+                                wr);
+                            const float renderMs = (float)((glfwGetTime() - renderStart) * 1000.0);
+                            updateAdaptiveRenderScale(water3DRenderCache,
+                                                      renderMs,
+                                                      renderBudgetMs(ui.water3DThrottleRendering, ui.water3DRenderFPS));
+                            water3DRenderCache.valid = true;
+                            water3DRenderCache.lastRenderTime = renderNow;
+                            water3DRenderCache.lastSimVersion = water3DSimVersion;
+                            water3DRenderCache.lastWidth = target.width;
+                            water3DRenderCache.lastHeight = target.height;
+                            water3DRenderCache.lastViewMode = viewMode;
+                            water3DRenderCache.lastSliceAxis = -1;
+                            water3DRenderCache.lastSliceIndex = -1;
+                            water3DRenderCache.lastDebugField = -1;
+                            water3DRenderCache.lastYaw = ui.water3DViewYawDeg;
+                            water3DRenderCache.lastPitch = ui.water3DViewPitchDeg;
+                            water3DRenderCache.lastZoom = ui.water3DViewZoom;
+                            water3DRenderCache.lastDensity = ui.water3DVolumeDensity;
+                            water3DRenderCache.lastSurfaceThreshold = ui.water3DSurfaceThreshold;
+                        }
+                    }
+                }
+            }
+
+            if (activeWorkspace == UI::kWorkspaceSmoke3D) {
+                const int viewMode = std::clamp(ui.smoke3DViewMode, 0, 1);
+                const bool simChanged =
+                    !smoke3DRenderCache.valid || smoke3DRenderCache.lastSimVersion != smoke3DSimVersion;
+                if (viewMode == 1) {
+                    const int axis = std::clamp(ui.smoke3DSliceAxis, 0, 2);
+                    const int field = std::clamp(ui.smoke3DDebugField, 0, 4);
+                    const int maxSlice = (axis == 0)
+                        ? std::max(0, smoke3D.nz - 1)
+                        : (axis == 1)
+                            ? std::max(0, smoke3D.ny - 1)
+                            : std::max(0, smoke3D.nx - 1);
+                    ui.smoke3DSliceIndex = std::clamp(ui.smoke3DSliceIndex, 0, maxSlice);
+
+                    const bool sliceChanged =
+                        !smoke3DRenderCache.valid ||
+                        smoke3DRenderCache.lastViewMode != viewMode ||
+                        smoke3DRenderCache.lastSliceAxis != axis ||
+                        smoke3DRenderCache.lastSliceIndex != ui.smoke3DSliceIndex ||
+                        smoke3DRenderCache.lastDebugField != field;
+
+                    bool needUpdate = sliceChanged;
+                    if (!needUpdate && simChanged) {
+                        if (!ui.playing || !ui.smoke3DThrottleRendering) {
+                            needUpdate = true;
+                        } else {
+                            const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
+                            needUpdate = (renderNow - smoke3DRenderCache.lastRenderTime) >= interval;
+                        }
+                    }
+
+                    if (needUpdate) {
+                        auto slice = smoke3D.copyDebugSlice(
+                            static_cast<MACSmoke3D::SliceAxis>(axis),
+                            ui.smoke3DSliceIndex,
+                            static_cast<MACSmoke3D::DebugField>(field));
+                        smoke3DRenderer.updateSmokeFromSlice(slice.values, slice.solid, slice.width, slice.height, field, rs);
+                        smoke3DRenderCache.valid = true;
+                        smoke3DRenderCache.lastRenderTime = renderNow;
+                        smoke3DRenderCache.lastSimVersion = smoke3DSimVersion;
+                        smoke3DRenderCache.lastViewMode = viewMode;
+                        smoke3DRenderCache.lastSliceAxis = axis;
+                        smoke3DRenderCache.lastSliceIndex = ui.smoke3DSliceIndex;
+                        smoke3DRenderCache.lastDebugField = field;
+                    }
+                } else {
+                    const auto target = computeVolumeRenderTargetSize(
+                        win,
+                        ui.smoke3DViewportWidth,
+                        ui.smoke3DViewportHeight,
+                        effectiveAdaptiveRenderScale(smoke3DRenderCache, ui.volumeRenderScale));
+                    const bool sizeChanged =
+                        smoke3DRenderer.width() != target.width || smoke3DRenderer.height() != target.height;
+                    if (sizeChanged) {
+                        smoke3DRenderer.resize(target.width, target.height);
+                    }
+
+                    const bool viewChanged =
+                        !smoke3DRenderCache.valid ||
+                        smoke3DRenderCache.lastWidth != target.width ||
+                        smoke3DRenderCache.lastHeight != target.height ||
+                        smoke3DRenderCache.lastViewMode != viewMode ||
+                        !nearlyEqual(smoke3DRenderCache.lastYaw, ui.smoke3DViewYawDeg) ||
+                        !nearlyEqual(smoke3DRenderCache.lastPitch, ui.smoke3DViewPitchDeg) ||
+                        !nearlyEqual(smoke3DRenderCache.lastZoom, ui.smoke3DViewZoom) ||
+                        !nearlyEqual(smoke3DRenderCache.lastDensity, ui.smoke3DVolumeDensity);
+
+                    bool needUpdate = !smoke3DRenderCache.valid || sizeChanged || viewChanged;
+                    if (!needUpdate && simChanged) {
+                        if (!ui.playing || !ui.smoke3DThrottleRendering) {
+                            needUpdate = true;
+                        } else {
+                            const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
+                            needUpdate = (renderNow - smoke3DRenderCache.lastRenderTime) >= interval;
+                        }
+                    }
+
+                    if (needUpdate) {
+                        const double renderStart = glfwGetTime();
+                        smoke3DRenderer.updateSmokeFromVolume(
+                            smoke3D.smoke,
+                            smoke3D.temp,
+                            smoke3D.solid,
+                            smoke3D.nx,
+                            smoke3D.ny,
+                            smoke3D.nz,
+                            ui.smoke3DViewYawDeg,
+                            ui.smoke3DViewPitchDeg,
+                            ui.smoke3DViewZoom,
+                            ui.smoke3DVolumeDensity,
+                            rs);
+                        const float renderMs = (float)((glfwGetTime() - renderStart) * 1000.0);
+                        updateAdaptiveRenderScale(smoke3DRenderCache,
+                                                  renderMs,
+                                                  renderBudgetMs(ui.smoke3DThrottleRendering, ui.smoke3DRenderFPS));
+                        smoke3DRenderCache.valid = true;
+                        smoke3DRenderCache.lastRenderTime = renderNow;
+                        smoke3DRenderCache.lastSimVersion = smoke3DSimVersion;
+                        smoke3DRenderCache.lastWidth = target.width;
+                        smoke3DRenderCache.lastHeight = target.height;
+                        smoke3DRenderCache.lastViewMode = viewMode;
+                        smoke3DRenderCache.lastSliceAxis = -1;
+                        smoke3DRenderCache.lastSliceIndex = -1;
+                        smoke3DRenderCache.lastDebugField = -1;
+                        smoke3DRenderCache.lastYaw = ui.smoke3DViewYawDeg;
+                        smoke3DRenderCache.lastPitch = ui.smoke3DViewPitchDeg;
+                        smoke3DRenderCache.lastZoom = ui.smoke3DViewZoom;
+                        smoke3DRenderCache.lastDensity = ui.smoke3DVolumeDensity;
+                    }
+                }
+            }
+        };
+
+        if (!offlineBake.running) {
+            refreshLiveViewportTextures(glfwGetTime());
         }
 
         // render GL
