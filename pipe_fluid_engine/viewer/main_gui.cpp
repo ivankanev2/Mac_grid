@@ -46,6 +46,7 @@
 #include "pipe_fluid/pipe_fluid_scene.h"
 #include "pipe_fluid/volume_renderer.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -66,7 +67,13 @@ struct ViewerState {
     bool  playing        = false;
     bool  singleStep     = false;
     float simSpeed       = 1.0f;
-    int   stepsPerFrame  = 1;
+    // Substep cap for the CFL-adaptive fluid step loop.  4 is a good
+    // default for a narrow pipe with gravity active: at dx=1.5cm the
+    // CFL-safe dt drops to ~7ms once particles hit ~2m/s, so 4 substeps
+    // cover a full 60Hz frame with headroom.  Raise if the sim looks
+    // like it's running in slow motion (accumulator is maxing out);
+    // lower if the GUI stutters.
+    int   stepsPerFrame  = 4;
 
     // Scene builder inputs
     float builderStartX  = 0.f, builderStartY = 0.f, builderStartZ = 0.f;
@@ -94,6 +101,12 @@ struct ViewerState {
     bool  fluidColorMode = false;
     float fluidAlpha     = 1.0f;
     int   fluidRenderScale = 1;   // 1=full-res, 2=half-res (good on weak GPU)
+
+    // Water rendering mode.  When true, the volume renderer sphere-traces the
+    // narrow-band SDF built from the FLIP particles each step; when false it
+    // falls back to the old density-texture raymarch (which looks blocky at
+    // pipe scale because the pipe is only 6-8 cells wide).
+    bool  waterUseSdf    = true;
 
     // Volume renderer backend: 0=Auto, 1=CPU, 2=GPU.
     // The viewer recreates the renderer when this changes.
@@ -176,7 +189,26 @@ static void applyDarkTheme() {
 
 // ============================================================================
 // Demo scenes
+//
+// Each builder fully re-initialises the PipeFluidScene: it clears the
+// existing network, adds one or more chains, then calls rebuild() so the
+// voxelizer, masks, and render mesh are all in sync.  The viewer is
+// expected to re-upload the pipe mesh afterwards.
+//
+// Conventions used throughout:
+//   - Scenes live near world origin so the default orbit camera frames
+//     them without the user having to pan/zoom manually.
+//   - "bendR" values are chosen to be ~3x the pipe's outer radius, which
+//     gives visually clean elbows at the default (5 cm inner / 6 cm outer)
+//     pipe radii.
+//   - Scenes that branch (T / Y / cross / manifold) use multiple calls to
+//     beginChain() — each chain contributes its own pair of open pipe
+//     mouths, which the voxelizer's open-ends post-pass carves out so
+//     fluid can actually enter/exit the network at every free end.
 // ============================================================================
+
+// --- single-chain shapes ----------------------------------------------------
+
 static void buildDemoL(pipe_fluid::PipeFluidScene& scene) {
     scene.clearNetwork();
     scene.beginNetwork(Vec3{0, 0, 0}, Vec3{0, 0, 1});
@@ -194,6 +226,169 @@ static void buildDemoU(pipe_fluid::PipeFluidScene& scene) {
     scene.addStraight(0.6f);
     scene.addBend90(Vec3{0, 0, -1}, 0.15f);
     scene.addStraight(0.8f);
+    scene.rebuild();
+}
+
+// Z-bend: two 90° turns in opposite senses, like a dog-leg.
+static void buildDemoZ(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    scene.beginNetwork(Vec3{0, 0, 0}, Vec3{0, 0, 1});
+    scene.addStraight(0.7f);
+    scene.addBend90(Vec3{1, 0, 0}, 0.15f);
+    scene.addStraight(0.4f);
+    scene.addBend90(Vec3{0, 0, 1}, 0.15f);
+    scene.addStraight(0.7f);
+    scene.rebuild();
+}
+
+// S-bend: same as Z but with gentler, slightly larger bends - good for
+// showing smooth momentum redirection.
+static void buildDemoS(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    scene.beginNetwork(Vec3{0, 0, 0}, Vec3{0, 0, 1});
+    scene.addStraight(0.5f);
+    scene.addBend90(Vec3{0, 1, 0}, 0.20f);
+    scene.addStraight(0.4f);
+    scene.addBend90(Vec3{0, 0, 1}, 0.20f);
+    scene.addStraight(0.5f);
+    scene.addBend90(Vec3{0,-1, 0}, 0.20f);
+    scene.addStraight(0.4f);
+    scene.addBend90(Vec3{0, 0, 1}, 0.20f);
+    scene.addStraight(0.5f);
+    scene.rebuild();
+}
+
+// Zig-zag: repeated sharp turns in the same plane.
+static void buildDemoZigZag(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    scene.beginNetwork(Vec3{0, 0, 0}, Vec3{0, 0, 1});
+    const float leg = 0.45f;
+    const float bendR = 0.12f;
+    scene.addStraight(leg);
+    scene.addBend90(Vec3{ 1, 0, 0}, bendR);
+    scene.addStraight(leg);
+    scene.addBend90(Vec3{ 0, 0, 1}, bendR);
+    scene.addStraight(leg);
+    scene.addBend90(Vec3{-1, 0, 0}, bendR);
+    scene.addStraight(leg);
+    scene.addBend90(Vec3{ 0, 0, 1}, bendR);
+    scene.addStraight(leg);
+    scene.addBend90(Vec3{ 1, 0, 0}, bendR);
+    scene.addStraight(leg);
+    scene.rebuild();
+}
+
+// Serpentine / flat coil: long snake that folds back on itself.
+// Same topology as zig-zag but with more turns and bigger radii - stresses
+// the solver harder and gives lots of visible flow.
+static void buildDemoSerpentine(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    scene.beginNetwork(Vec3{0, 0, 0}, Vec3{0, 0, 1});
+    const float leg   = 0.60f;
+    const float shelf = 0.25f;
+    const float bR    = 0.15f;
+    for (int k = 0; k < 3; ++k) {
+        scene.addStraight(leg);
+        scene.addBend90(Vec3{1, 0, 0}, bR);
+        scene.addStraight(shelf);
+        scene.addBend90(Vec3{0, 0,-1}, bR);
+        scene.addStraight(leg);
+        scene.addBend90(Vec3{1, 0, 0}, bR);
+        scene.addStraight(shelf);
+        scene.addBend90(Vec3{0, 0, 1}, bR);
+    }
+    scene.addStraight(leg);
+    scene.rebuild();
+}
+
+// 3D spiral: climb up Y while rotating around in XZ.  Four 90° turns per
+// revolution, with a small straight "riser" along Y after each bend.
+static void buildDemoSpiral(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    scene.beginNetwork(Vec3{0, 0, 0}, Vec3{0, 0, 1});
+    const float run  = 0.35f;   // horizontal run between bends
+    const float rise = 0.18f;   // vertical riser between bends
+    const float bR   = 0.12f;
+
+    // Two turns per revolution (approximate helix using axis-aligned bends).
+    const Vec3 steps[] = {
+        Vec3{ 1, 0, 0}, Vec3{ 0, 0,-1},
+        Vec3{-1, 0, 0}, Vec3{ 0, 0, 1}
+    };
+    const int turns = 8;  // 2 full revolutions
+    scene.addStraight(run);
+    for (int i = 0; i < turns; ++i) {
+        scene.addBend90(Vec3{0, 1, 0}, bR);   // tip up to climb
+        scene.addStraight(rise);
+        scene.addBend90(steps[i % 4], bR);    // return to horizontal + rotate
+        scene.addStraight(run);
+    }
+    scene.rebuild();
+}
+
+// --- branching / multi-chain scenes -----------------------------------------
+
+// T-junction: one straight "trunk" from -X to +X, one branch coming down
+// from +Y into the middle of the trunk.  Three open ends.
+static void buildDemoT(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    // Trunk (chain 1): +X horizontal
+    scene.beginNetwork(Vec3{-0.7f, 0.f, 0.f}, Vec3{1, 0, 0});
+    scene.addStraight(1.4f);
+    // Branch (chain 2): down into trunk midpoint
+    scene.beginChain(Vec3{0.f, 0.7f, 0.f}, Vec3{0, -1, 0});
+    scene.addStraight(0.7f);
+    scene.rebuild();
+}
+
+// Y-junction: two inlets converging to a shared outlet.
+// Implemented as three chains that all START at the junction (origin) and
+// run outward.  The outward tangent at the junction endpoint of every chain
+// points INTO the fluid core of the other chains, so the voxelizer's
+// interior-junction guard correctly skips carving at the junction and only
+// carves the three external pipe mouths.
+static void buildDemoY(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    // Outlet: junction -> +X
+    scene.beginNetwork(Vec3{0, 0, 0}, Vec3{1, 0, 0});
+    scene.addStraight(0.70f);
+    // Upper inlet: junction -> upper-left
+    scene.beginChain(Vec3{0, 0, 0}, Vec3{-1, 1, 0});
+    scene.addStraight(0.80f);
+    // Lower inlet: junction -> lower-left
+    scene.beginChain(Vec3{0, 0, 0}, Vec3{-1, -1, 0});
+    scene.addStraight(0.80f);
+    scene.rebuild();
+}
+
+// Cross-junction: two straight pipes intersecting at right angles.  Four
+// open ends.
+static void buildDemoCross(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    // Horizontal bar
+    scene.beginNetwork(Vec3{-0.7f, 0.f, 0.f}, Vec3{1, 0, 0});
+    scene.addStraight(1.4f);
+    // Vertical bar
+    scene.beginChain(Vec3{0.f, -0.7f, 0.f}, Vec3{0, 1, 0});
+    scene.addStraight(1.4f);
+    scene.rebuild();
+}
+
+// Manifold: single inlet splitting into three parallel outlets via T-
+// junction stubs.  Useful to see pressure/mass splitting across branches.
+static void buildDemoManifold(pipe_fluid::PipeFluidScene& scene) {
+    scene.clearNetwork();
+    // Trunk: inlet on the left, sealed on the right by extending past the
+    // last branch.  Single chain across the full width.
+    scene.beginNetwork(Vec3{-0.9f, 0.f, 0.f}, Vec3{1, 0, 0});
+    scene.addStraight(1.8f);
+    // Three branches going down at x = -0.45, 0, +0.45
+    scene.beginChain(Vec3{-0.45f, 0.f, 0.f}, Vec3{0, -1, 0});
+    scene.addStraight(0.55f);
+    scene.beginChain(Vec3{ 0.00f, 0.f, 0.f}, Vec3{0, -1, 0});
+    scene.addStraight(0.55f);
+    scene.beginChain(Vec3{ 0.45f, 0.f, 0.f}, Vec3{0, -1, 0});
+    scene.addStraight(0.55f);
     scene.rebuild();
 }
 
@@ -231,9 +426,32 @@ static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
     if (configChanged) scene.setConfig(nextCfg);
 
     ImGui::SeparatorText("Demo scenes");
-    if (ImGui::Button("L-pipe demo"))       { buildDemoL(scene); g_renderer->uploadMesh(scene.pipeMesh()); g_ui.setStatus("Built L-pipe"); }
-    ImGui::SameLine();
-    if (ImGui::Button("U-bend demo"))       { buildDemoU(scene); g_renderer->uploadMesh(scene.pipeMesh()); g_ui.setStatus("Built U-bend"); }
+    // Helper lambda: run a scene builder and push the new mesh to the GPU.
+    // Centralises the "build -> upload mesh -> status" trio each button needs.
+    auto runScene = [&](const char* label, void (*fn)(pipe_fluid::PipeFluidScene&)) {
+        if (ImGui::Button(label)) {
+            fn(scene);
+            g_renderer->uploadMesh(scene.pipeMesh());
+            g_ui.setStatus(std::string("Built ") + label);
+        }
+    };
+
+    ImGui::TextUnformatted("Simple shapes:");
+    runScene("L-pipe",   buildDemoL);      ImGui::SameLine();
+    runScene("U-bend",   buildDemoU);      ImGui::SameLine();
+    runScene("Z-bend",   buildDemoZ);      ImGui::SameLine();
+    runScene("S-curve",  buildDemoS);
+
+    ImGui::TextUnformatted("Long / stress tests:");
+    runScene("Zig-zag",    buildDemoZigZag);     ImGui::SameLine();
+    runScene("Serpentine", buildDemoSerpentine); ImGui::SameLine();
+    runScene("Spiral",     buildDemoSpiral);
+
+    ImGui::TextUnformatted("Branching (multi-chain):");
+    runScene("T-junction", buildDemoT);        ImGui::SameLine();
+    runScene("Y-junction", buildDemoY);        ImGui::SameLine();
+    runScene("Cross",      buildDemoCross);    ImGui::SameLine();
+    runScene("Manifold",   buildDemoManifold);
 
     ImGui::SeparatorText("Blueprint");
     ImGui::InputText("path", g_ui.blueprintPath, sizeof(g_ui.blueprintPath));
@@ -303,6 +521,10 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
     ImGui::SliderFloat("fluid density",  &g_ui.fluidDensity, 0.5f, 20.f, "%.1f");
     ImGui::SliderFloat("alpha scale",    &g_ui.fluidAlpha,   0.0f, 2.0f, "%.2f");
     ImGui::Checkbox("color mode",        &g_ui.fluidColorMode);
+    // SDF sphere-trace vs. voxel density raymarch for water.  SDF path produces
+    // a continuous liquid surface regardless of pipe voxel resolution; off
+    // falls back to the older density-integration path.
+    ImGui::Checkbox("water: SDF surface", &g_ui.waterUseSdf);
 
     // Backend selector — lets the user flip between CPU and GPU at runtime.
     // "Auto" picks based on the GL vendor string (see pickAutoBackend()).
@@ -349,7 +571,9 @@ static void drawStatsPanel(pipe_fluid::PipeFluidScene& scene) {
     ImGui::Text("Cell:    %.4f m",       scene.cellSize());
     ImGui::Text("Solids:  %d",           s.solidCells);
     ImGui::Text("Fluid:   %d",           s.fluidCells);
+    ImGui::Text("Openings:%d",           s.openingCells);
     ImGui::Separator();
+    ImGui::Text("Chains:      %d",       s.chainCount);
     ImGui::Text("Segments:    %d",       s.segmentCount);
     ImGui::Text("Pipe length: %.3f m",   s.totalPipeLength);
     ImGui::Separator();
@@ -472,11 +696,29 @@ int main(int argc, char* argv[]) {
     // ---- Main loop ---------------------------------------------------------
     double prev = glfwGetTime();
 
+    // CFL-adaptive substepping state.  Mirrors the pattern in smoke_engine's
+    // main loop (see smoke_engine/src/main.cpp:1770–1846).  Without this we
+    // were stepping the fluid ONCE per render frame at a fixed dt=1/60s,
+    // which (at dx=1.5cm and the velocities gravity builds up during free
+    // fall) routinely exceeds CFL=1 and forces the FLIP particles to
+    // advect through more than one cell per step.  That shows up as
+    // "block" motion because the pressure projection can't correct an
+    // advection that already overshot.  Here we accumulate real frame
+    // time and substep the scene with a CFL-safe dt until the accumulator
+    // drains (bounded by a step cap so the sim can't stall the GUI).
+    double simAccumulator = 0.0;
+    constexpr float kCFL       = 0.9f;
+    constexpr float kDtMin     = 1.0f / 1000.0f;  // 1ms floor
+    // "steps per frame" UI slider now controls the substep cap: if the
+    // accumulator would demand more CFL-safe substeps than this, we drop
+    // the remainder.  Higher = better fluid fidelity under fast flow,
+    // lower = better GUI responsiveness if the sim gets expensive.
+
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
         double now = glfwGetTime();
-        float  dt  = (float)(now - prev); prev = now;
-        (void)dt;
+        float  frameDt = (float)(now - prev); prev = now;
+        if (frameDt > 0.1f) frameDt = 0.1f;  // clamp pauses / breakpoints
 
         // ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -489,7 +731,35 @@ int main(int argc, char* argv[]) {
 
         // Step fluid
         if (g_ui.playing || g_ui.singleStep) {
-            for (int i = 0; i < g_ui.stepsPerFrame; ++i) {
+            simAccumulator += (double)frameDt * (double)g_ui.simSpeed;
+
+            // Hard single-step: just take one dt-capped step regardless of
+            // the accumulator.
+            if (g_ui.singleStep) {
+                simAccumulator = std::max(simAccumulator, (double)cfg.dt);
+            }
+
+            int substeps = 0;
+            const float cflDx = scene.cellSize() > 0.f ? scene.cellSize() : cfg.cellSize;
+            const int maxSubsteps = std::max(1, g_ui.stepsPerFrame);
+
+            while (simAccumulator > 0.0 && substeps < maxSubsteps) {
+                // Figure out the fastest thing in the sim so we can pick a
+                // CFL-safe dt.  Particle speed dominates velocity field speed
+                // in FLIP/APIC so we query both.
+                float maxSpeed = 0.f;
+                if (auto* w = scene.water()) {
+                    maxSpeed = std::max(maxSpeed, w->stats().maxSpeed);
+                }
+                if (auto* s = scene.smoke()) {
+                    maxSpeed = std::max(maxSpeed, s->stats().maxSpeed);
+                }
+
+                const float dtCFL = kCFL * cflDx / (maxSpeed + 1e-6f);
+                float dt = std::min(cfg.dt, dtCFL);
+                dt = std::max(dt, kDtMin);
+                if (dt > (float)simAccumulator) dt = (float)simAccumulator;
+
                 // Apply continuous emitters each sub-step
                 if (g_ui.emitSmoke)
                     scene.addSmokeSourceSphere(
@@ -501,9 +771,22 @@ int main(int argc, char* argv[]) {
                         {g_ui.sourceX, g_ui.sourceY, g_ui.sourceZ},
                         g_ui.sourceR,
                         {g_ui.sourceVelX, g_ui.sourceVelY, g_ui.sourceVelZ});
-                scene.step(cfg.dt * g_ui.simSpeed);
+
+                scene.step(dt);
+
+                simAccumulator -= (double)dt;
+                ++substeps;
             }
+
+            // If we hit the cap, drop the remainder so the sim can't lag
+            // forever when it's expensive for a burst of frames.
+            if (substeps == maxSubsteps) simAccumulator = 0.0;
+
             g_ui.singleStep = false;
+        } else {
+            // Paused: keep the accumulator empty so we don't fire a burst
+            // of steps the moment the user hits play.
+            simAccumulator = 0.0;
         }
 
         // Render 3D pipe scene
@@ -555,11 +838,37 @@ int main(int argc, char* argv[]) {
                 auto* w = scene.water();
                 // Water has no temperature field; pass an empty temp.
                 static const std::vector<float> kEmptyTemp;
-                volRenderer->setVolume(w->water, kEmptyTemp, w->solid,
+                // IMPORTANT: pass the WALLS-ONLY mask (not w->solid, which is
+                // the sim's sealed mask where Air cells are marked solid to
+                // keep FLIP particles trapped inside the pipe).  The volume
+                // renderer uses a nearest-neighbour solid lookup to decide
+                // where to terminate rays, so handing it the sealed mask
+                // produces one hard cutoff per Air cell the ray crosses and
+                // the continuous water volume looks chopped into cell-sized
+                // blocks.  The walls-only mask lets rays integrate smoothly
+                // through the density field and only terminate on actual
+                // pipe walls, matching how the smoke renderer works.
+                volRenderer->setVolume(w->water, kEmptyTemp,
+                                       scene.renderSolidMask(),
                                        w->nx, w->ny, w->nz);
+
+                // Upload the narrow-band SDF rebuilt from FLIP particles at
+                // the end of every scene.step().  When useSdf is on, the
+                // renderer sphere-traces this field instead of integrating
+                // the density texture, producing a continuous liquid surface
+                // independent of voxel resolution.  Band matches the clamp
+                // used by buildLiquidSdfFromParticles() in pipe_fluid_scene
+                // (3 * dx).  Passing an empty SDF is a no-op inside the
+                // renderer and lets the density path run as a fallback.
+                const auto& sdf = scene.waterSDF();
+                const float sdfBand = 3.0f * scene.cellSize();
+                volRenderer->setWaterSdf(sdf, scene.nx(), scene.ny(),
+                                         scene.nz(), sdfBand);
+
                 pipe_fluid::VolumeSettings wsv = vs;
                 wsv.useColor = false;            // blue-ish tint not yet in transfer fn
                 wsv.alphaScale *= 0.6f;
+                wsv.useSdf    = g_ui.waterUseSdf;
                 volRenderer->render(vv, wsv);
             }
         }

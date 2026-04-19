@@ -35,8 +35,10 @@
 //     scene.rebuild();
 // ============================================================================
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 // Forward-declare to keep includes light for consumers.
 struct PipeNetwork;           // pipe_engine/Geometry/pipe_network.h
@@ -80,7 +82,14 @@ public:
     PipeFluidScene& operator=(PipeFluidScene&&) noexcept;
 
     // ---- Builder API (wraps PipeNetwork) -----------------------------------
+    //
+    // A scene can contain multiple independent chains.  The first chain is
+    // started with `beginNetwork`; additional branches (for T / Y / cross /
+    // manifold topologies) are started with `beginChain` at a new world
+    // point.  Each chain contributes its OWN pair of open endpoints, so the
+    // voxelizer carves a pipe mouth at each chain's start and end.
     void beginNetwork(const Vec3& start, const Vec3& dir);
+    void beginChain  (const Vec3& start, const Vec3& dir);
     void addStraight(float length);
     void addBend90(const Vec3& newDir, float bendRadius = 0.15f);
     void clearNetwork();
@@ -120,6 +129,25 @@ public:
     MACSmoke3D*        smoke();              // nullptr if not enabled
     MACWater3D*        water();              // nullptr if not enabled
 
+    // The "walls-only" solid mask (Solid->1, everything else ->0).  This is
+    // the mask to pass to the volume RENDERER so raymarch hard-cutoffs only
+    // trigger on actual pipe walls.  The water sim internally uses a sealed
+    // mask that additionally blocks Air cells to keep FLIP particles inside
+    // the pipe; that sealed mask is NOT suitable for rendering because the
+    // per-cell step function produces blocky cutoffs at every Air cell a ray
+    // crosses, even when the water volume is continuous.
+    const std::vector<uint8_t>& renderSolidMask() const;
+
+    // Narrow-band signed distance field built from the FLIP particles, sized
+    // nx*ny*nz in simulator order.  Values are in WORLD UNITS (metres):
+    //   negative = inside the water body (distance to nearest surface)
+    //   positive = outside the water body (distance to nearest particle)
+    //   clamped  = 3 * cellSize above/below the surface.
+    // Use this for SDF sphere-tracing in the volume renderer; it eliminates
+    // the per-voxel density quantisation artefacts that make the voxel path
+    // look blocky at pipe scale.  Rebuilt once at the end of every step().
+    const std::vector<float>& waterSDF() const;
+
     const Config&      config() const;
     void               setConfig(const Config& c);  // takes effect on next rebuild()
 
@@ -129,10 +157,12 @@ public:
     // Diagnostics
     struct Stats {
         int nx = 0, ny = 0, nz = 0;
-        int solidCells = 0;
-        int fluidCells = 0;
+        int solidCells   = 0;
+        int fluidCells   = 0;
+        int openingCells = 0;      // carved by voxelizer's open-ends pass
         float totalPipeLength = 0.f;
         int segmentCount = 0;
+        int chainCount   = 0;      // number of non-empty chains
     };
     Stats stats() const;
 

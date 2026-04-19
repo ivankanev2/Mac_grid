@@ -66,6 +66,11 @@ struct VolumeSettings {
     float tempStrength = 0.75f;   // how much temp tints the color
     float coreDark     = 0.75f;   // darkens dense cores in color mode
 
+    // When true, the water path sphere-traces the SDF uploaded via
+    // setWaterSdf() instead of volume-integrating the density texture.
+    // Only has effect for backends that implement setWaterSdf().
+    bool  useSdf       = true;
+
     // CPU-only knobs (GPU uses fixed values tuned to match CPU output).
     int   stepsPerPixel = 96;     // upper bound on ray-march steps
     int   renderScale   = 1;      // 1=full-res, 2=half-res (interactive Mac)
@@ -88,6 +93,21 @@ public:
                            const std::vector<float>&   temp,
                            const std::vector<uint8_t>& solid,
                            int nx, int ny, int nz) = 0;
+
+    // Upload a narrow-band SDF (values in world metres) to be sphere-traced
+    // as the water surface.  When VolumeSettings::useSdf is true and the
+    // renderer supports SDF, the water path sphere-traces this field instead
+    // of volume-integrating the density texture.  `band` is the positive
+    // clamp value used when building the SDF — cells saturated to +band
+    // are treated as "far from water" by the tracer so it can take big
+    // empty steps.  Pass an empty vector to disable SDF mode.
+    //
+    // Default implementation is a no-op so existing backends keep working
+    // until they opt in.
+    virtual void setWaterSdf(const std::vector<float>& sdf,
+                             int nx, int ny, int nz, float band) {
+        (void)sdf; (void)nx; (void)ny; (void)nz; (void)band;
+    }
 
     // Render into the currently-bound default framebuffer. Expects the pipe
     // mesh to already be drawn for the frame. Uses alpha blend; does not

@@ -22,7 +22,19 @@ namespace pipe_fluid {
 
 // Convert a pipe VoxelGrid into a simulator-ready uint8_t solid mask.
 // `out` is resized to nx*ny*nz. VoxelType::Solid -> 1, everything else -> 0.
+//
+// This "wall-only" mask is appropriate for SMOKE, where the open Air cells
+// outside the pipe act as a sink so smoke can vent past the pipe ends
+// without piling up at the grid boundary.
 void voxelGridToSolidMask(const VoxelGrid& vg, std::vector<uint8_t>& out);
+
+// Water-oriented mask: VoxelType::Fluid (pipe interior) -> 0,
+// VoxelType::Solid AND VoxelType::Air both -> 1.
+//
+// This SEALS the Air pad outside the pipe so water particles cannot leak
+// through voxelizer gaps at bends and free-fall onto the grid floor under
+// gravity. The pipe interior is the only region where particles are allowed.
+void voxelGridToWaterSolidMask(const VoxelGrid& vg, std::vector<uint8_t>& out);
 
 // Push the mask into each fluid simulator.
 // The caller is responsible for ensuring each sim has matching (nx,ny,nz).

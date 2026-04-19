@@ -90,6 +90,70 @@ inline void MACWater3D::rasterizeWaterField() {
         }
     }
 
+    // --- Smooth the rendered density field ---------------------------------
+    // With only a few particles per cell the raw mass splat is noisy at the
+    // cell grid scale, which makes the ray-marched surface look like a mass
+    // of disconnected blocky strands.  A short separable blur over the
+    // `water` field (rendering-only; `liquid` mask and pressure solve are
+    // unaffected) rounds out the density so the renderer's isosurface and
+    // alpha-accumulation paths show a continuous body of liquid.
+    //
+    // Previously we ran 2 passes of a 3x3x3 stencil.  That left visible
+    // cell-scale lumps because each pass only reaches 1 cell outward, so
+    // stochastic variance at cell scale only diffused ~2 cells total, about
+    // the same size as the rasterized chunks themselves.  We now run 4
+    // passes of a separable 1D triangular filter (radius 2), which is
+    // ~equivalent to a 9x9x9 Gaussian-ish blur and kills the blockiness.
+    {
+        const int cellCountAll = nx * ny * nz;
+        static thread_local std::vector<float> blurScratch;
+        if ((int)blurScratch.size() != cellCountAll) {
+            blurScratch.assign((std::size_t)cellCountAll, 0.0f);
+        }
+
+        // Separable 1D triangular kernel with radius 2: weights {1,2,3,2,1}.
+        // Skips Solid neighbours so density can't bleed into pipe walls.
+        auto blurAxis = [&](int axis) {
+            std::copy(water.begin(), water.end(), blurScratch.begin());
+            for (int k = 0; k < nz; ++k) {
+                for (int j = 0; j < ny; ++j) {
+                    for (int i = 0; i < nx; ++i) {
+                        const int id = idxCell(i, j, k);
+                        if (solid[(std::size_t)id]) continue;
+
+                        float acc = 0.0f;
+                        float wsum = 0.0f;
+                        for (int off = -2; off <= 2; ++off) {
+                            int ii = i, jj = j, kk = k;
+                            if      (axis == 0) ii += off;
+                            else if (axis == 1) jj += off;
+                            else                kk += off;
+                            if (ii < 0 || ii >= nx) continue;
+                            if (jj < 0 || jj >= ny) continue;
+                            if (kk < 0 || kk >= nz) continue;
+                            const int nid = idxCell(ii, jj, kk);
+                            if (solid[(std::size_t)nid]) continue;
+                            // Triangular weights: 1,2,3,2,1.
+                            const float wgt = (float)(3 - std::abs(off));
+                            acc  += wgt * blurScratch[(std::size_t)nid];
+                            wsum += wgt;
+                        }
+                        if (wsum > 0.0f) {
+                            water[(std::size_t)id] = acc / wsum;
+                        }
+                    }
+                }
+            }
+        };
+
+        constexpr int BLUR_PASSES = 4;
+        for (int pass = 0; pass < BLUR_PASSES; ++pass) {
+            blurAxis(0);
+            blurAxis(1);
+            blurAxis(2);
+        }
+    }
+
     targetMass = (float)sumMass;
     if (desiredMass < 0.0f && targetMass > 0.0f) {
         desiredMass = targetMass;

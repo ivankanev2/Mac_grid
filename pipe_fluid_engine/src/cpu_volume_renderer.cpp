@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -183,6 +184,30 @@ static uint8_t sampleSolidNearest(const std::vector<uint8_t>& solid,
     return solid[(size_t)i + (size_t)nx * ((size_t)j + (size_t)ny * (size_t)k)];
 }
 
+// Central-difference gradient of a trilinearly-sampled field at normalized
+// [0,1]^3 coords.  Used for gradient-based shading of the water volume: the
+// density field from FLIP rasterisation has ~20-50% cell-scale variance even
+// with 8 particles per cell, which shows up as "blocky strands" when the
+// renderer maps density magnitude directly to brightness.  The gradient
+// (computed across a trilinear field) varies much more smoothly across cells
+// than the magnitude, so N·L / rim-light shading hides the per-cell noise.
+// This mirrors smoke_engine's water renderer (smoke_renderer.cpp line 1122).
+static V3 sampleGradient(const std::vector<float>& vol,
+                         int nx, int ny, int nz,
+                         float ux, float uy, float uz) {
+    // One cell in normalised coordinates along each axis.
+    const float ex = 1.0f / (float)std::max(2, nx - 1);
+    const float ey = 1.0f / (float)std::max(2, ny - 1);
+    const float ez = 1.0f / (float)std::max(2, nz - 1);
+    const float gx = sampleTrilinear(vol, nx, ny, nz, ux + ex, uy, uz)
+                   - sampleTrilinear(vol, nx, ny, nz, ux - ex, uy, uz);
+    const float gy = sampleTrilinear(vol, nx, ny, nz, ux, uy + ey, uz)
+                   - sampleTrilinear(vol, nx, ny, nz, ux, uy - ey, uz);
+    const float gz = sampleTrilinear(vol, nx, ny, nz, ux, uy, uz + ez)
+                   - sampleTrilinear(vol, nx, ny, nz, ux, uy, uz - ez);
+    return v3(gx, gy, gz);
+}
+
 // ---- Fullscreen-quad helpers ----------------------------------------------
 static const char* QUAD_VERT = R"GLSL(
 #version 150 core
@@ -272,6 +297,19 @@ public:
         m_nx = nx; m_ny = ny; m_nz = nz;
     }
 
+    void setWaterSdf(const std::vector<float>& sdf,
+                     int nx, int ny, int nz, float band) override {
+        const size_t expected = (size_t)nx * (size_t)ny * (size_t)nz;
+        if (sdf.size() == expected && band > 0.0f) {
+            m_waterSdf = &sdf;
+            m_sdfNx = nx; m_sdfNy = ny; m_sdfNz = nz;
+            m_sdfBand = band;
+        } else {
+            m_waterSdf = nullptr;
+            m_sdfBand = 0.0f;
+        }
+    }
+
     void render(const VolumeView& V, const VolumeSettings& S) override {
         if (!m_density || m_nx <= 1 || m_ny <= 1 || m_nz <= 1) return;
         if (V.fbWidth <= 0 || V.fbHeight <= 0) return;
@@ -298,10 +336,19 @@ public:
         const V3 bSize  = bmax - bmin;
         if (bSize.x <= 0 || bSize.y <= 0 || bSize.z <= 0) return;
 
-        // March step = ~half a voxel. Capped by VolumeSettings::stepsPerPixel
-        // to bound the worst case when rays skim the AABB diagonally.
-        const float step = 0.5f * V.dx;
-        const int   maxSteps = std::max(16, S.stepsPerPixel);
+        // March step = ~third of a voxel.  Previously this was 0.5*dx which,
+        // combined with every ray starting at exactly tEnter, meant every
+        // pixel's samples hit the cell grid at the SAME relative offsets —
+        // producing coherent step-aliasing stripes parallel to the voxel
+        // faces (the "horizontal banding" on the water volume).  Tighter
+        // step + per-pixel jitter (below) breaks the alignment so samples
+        // land at different phases inside each cell, and trilinear
+        // reconstruction averages out across pixels.
+        const float step = 0.33f * V.dx;
+        // stepsPerPixel is a worst-case clamp for ray traversal; bump it
+        // proportionally to our smaller step so rays of similar world length
+        // still reach the far side of the volume.
+        const int   maxSteps = std::max(24, (int)(S.stepsPerPixel * 3 / 2));
         const float sigmaScale = std::max(0.05f, S.densityScale);
         const bool  useColor = S.useColor;
         const float alphaScale = clamp01(S.alphaScale);
@@ -312,6 +359,15 @@ public:
         const std::vector<float>&   temp    = *m_temp;
         const std::vector<uint8_t>& solid   = *m_solid;
         const int nx = m_nx, ny = m_ny, nz = m_nz;
+
+        // SDF sphere-trace inputs (only enabled when the caller supplied an
+        // SDF, the settings ask for it, and we're in the water path).
+        const bool                 sdfEnabled = S.useSdf && !S.useColor
+                                              && m_waterSdf != nullptr
+                                              && m_sdfBand > 0.f
+                                              && m_sdfNx == nx && m_sdfNy == ny && m_sdfNz == nz;
+        const std::vector<float>*  sdfPtr = sdfEnabled ? m_waterSdf : nullptr;
+        const float                sdfBand = m_sdfBand;
 
         // Row-parallel dispatch.
         const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
@@ -349,50 +405,232 @@ public:
                             continue;
                         }
 
-                        float t = std::max(0.0f, tEnter);
+                        // Shared lighting rig used by both the SDF sphere-trace
+                        // fast path (for Blinn-Phong water shading) and the
+                        // density volume integration fallback below.  Declared
+                        // here so the SDF block can reference them without a
+                        // use-before-declaration error.
+                        const V3  lightDir  = normalize(v3(-0.45f, 0.72f, 0.53f));
+                        const V3  viewLight = normalize(v3(0.0f, 0.0f, 1.0f));
+
+                        // =================================================
+                        // WATER SDF SPHERE-TRACE FAST PATH (CPU).
+                        // =================================================
+                        // When the caller provided a narrow-band SDF of the
+                        // FLIP particle surface, sphere-trace it and shade
+                        // the zero isosurface directly.  This bypasses the
+                        // per-cell density integration (which visualises
+                        // per-cell occupancy and produces the blocky look
+                        // at pipe scale) and produces a continuous liquid
+                        // surface whose smoothness is independent of the
+                        // simulator's cell resolution.
+                        if (sdfPtr) {
+                            const std::vector<float>& sdf = *sdfPtr;
+                            const float stepMin = 0.35f * V.dx;
+                            const float HIT_EPS = 1e-4f;
+                            const int   SDF_MAX = 128;
+
+                            float tt = tEnter + 1e-5f;
+                            bool  hit = false;
+                            V3    hitUV = v3(0,0,0);
+                            float hitT  = 0.f;
+
+                            for (int s = 0; s < SDF_MAX; ++s) {
+                                if (tt >= tExit) break;
+                                V3 p = rayOri + rayDir * tt;
+                                const float ux = (p.x - bmin.x) / bSize.x;
+                                const float uy = (p.y - bmin.y) / bSize.y;
+                                const float uz = (p.z - bmin.z) / bSize.z;
+                                const float d = sampleTrilinear(sdf, nx, ny, nz, ux, uy, uz);
+                                if (d < HIT_EPS) {
+                                    hit = true;
+                                    hitUV = v3(ux, uy, uz);
+                                    hitT  = tt;
+                                    break;
+                                }
+                                // Sphere-trace step, clamped by the narrow
+                                // band's saturation value so we never jump
+                                // past thin fluid features.
+                                float safe = std::max(d, stepMin);
+                                if (safe > sdfBand) safe = sdfBand;
+                                tt += safe;
+                            }
+
+                            if (hit) {
+                                // Gradient-based surface normal from the SDF
+                                // itself.  The SDF gradient points from
+                                // inside->outside, i.e. away from water.
+                                V3 grad = sampleGradient(sdf, nx, ny, nz, hitUV.x, hitUV.y, hitUV.z);
+                                V3 N = normalize(grad);
+                                if (dot(N, rayDir) > 0.f) N = N * -1.f;
+
+                                const float ndl  = clamp01(dot(N, lightDir));
+                                const float rim  = std::pow(clamp01(1.f - std::fabs(dot(N, rayDir))), 2.2f);
+
+                                // Blinn-Phong specular (halfway vector).
+                                V3 halfVec = normalize(v3(lightDir.x + viewLight.x,
+                                                          lightDir.y + viewLight.y,
+                                                          lightDir.z + viewLight.z));
+                                const float spec = std::pow(clamp01(dot(N, halfVec)), 64.0f);
+
+                                // Schlick Fresnel for water (F0 ≈ 0.02).
+                                const float cosTheta = clamp01(1.f - std::fabs(dot(N, rayDir)));
+                                const float F0 = 0.02f;
+                                const float fresnel = F0 + (1.f - F0) * std::pow(cosTheta, 5.f);
+
+                                // Deep-water body tint + thin-surface sheen.
+                                const float deepR = 0.04f, deepG = 0.18f, deepB = 0.44f;
+                                const float sheenR = 0.65f, sheenG = 0.82f, sheenB = 0.95f;
+
+                                const float base = (0.55f + 0.45f * ndl);
+                                const float high = (0.35f * rim + 0.65f * spec) * fresnel;
+
+                                const float r = deepR * base + sheenR * high + 0.08f * ndl;
+                                const float g = deepG * base + sheenG * high + 0.12f * ndl;
+                                const float b = deepB * base + sheenB * high + 0.18f * ndl;
+
+                                // Pre-multiplied alpha output.  Composite
+                                // blend mode is GL_ONE / GL_ONE_MINUS_SRC_ALPHA,
+                                // so RGB is scaled by A before encoding.
+                                // A=0.95 gives a slightly-translucent water
+                                // look consistent with smoke_engine.
+                                const float A = 0.95f;
+                                const int dst = (j * W + i) * 4;
+                                m_rgba[(size_t)dst + 0] = (uint8_t)std::lround(clamp01(r) * A * 255.0f);
+                                m_rgba[(size_t)dst + 1] = (uint8_t)std::lround(clamp01(g) * A * 255.0f);
+                                m_rgba[(size_t)dst + 2] = (uint8_t)std::lround(clamp01(b) * A * 255.0f);
+                                m_rgba[(size_t)dst + 3] = (uint8_t)std::lround(A * 255.0f);
+                            }
+                            // SDF path is authoritative for the water pass:
+                            // even if we missed, do not fall through to the
+                            // density volume integration (which would re-
+                            // draw the pipe-interior density blob and kill
+                            // the SDF surface illusion).
+                            continue;
+                        }
+
+                        // Per-pixel jitter in [0, step) added to the ray
+                        // start.  Without this every ray samples the voxel
+                        // grid at exactly the same relative offset, which
+                        // produces visible banding/stripe artefacts along
+                        // cell faces.  A cheap integer hash of (i,j) is
+                        // stable across frames (no temporal flicker) while
+                        // still being uncorrelated across neighbouring
+                        // pixels, so trilinear reconstruction smooths the
+                        // jitter across pixels into a uniform appearance.
+                        const uint32_t jh = (uint32_t)((i * 73856093u) ^ (j * 19349663u));
+                        const float jitter = (float)(jh & 0xFFFFu) / 65535.0f;
+
+                        float t = std::max(0.0f, tEnter) + jitter * step;
                         float accumR = 0.f, accumG = 0.f, accumB = 0.f, accumA = 0.f;
                         int   steps = 0;
+                        // Track the t where the ray first hit a non-trivial
+                        // density sample.  Used by the water path for a
+                        // depth-fade term (deeper pixels darken) — exact
+                        // match to smoke_engine's water renderer at
+                        // smoke_renderer.cpp line 1131.
+                        float firstSurfaceT = -1.0f;
+                        // lightDir / viewLight were hoisted above the SDF block
+                        // so both paths share the same lighting rig.
                         while (t < tExit && accumA < 0.995f && steps < maxSteps) {
                             V3 p = rayOri + rayDir * t;
                             const float ux = (p.x - bmin.x) / bSize.x;
                             const float uy = (p.y - bmin.y) / bSize.y;
                             const float uz = (p.z - bmin.z) / bSize.z;
 
-                            const uint8_t isSolid = sampleSolidNearest(solid, nx, ny, nz, ux, uy, uz);
-                            if (!isSolid) {
-                                const float d = std::max(0.f, sampleTrilinear(density, nx, ny, nz, ux, uy, uz));
-                                if (d > 1e-4f) {
-                                    const float T = temp.empty()
-                                        ? 0.f
-                                        : std::max(0.f, sampleTrilinear(temp, nx, ny, nz, ux, uy, uz));
+                            const float d = std::max(0.f, sampleTrilinear(density, nx, ny, nz, ux, uy, uz));
+                            // The smoke (useColor=true) path uses
+                            // sampleSolidNearest to hard-gate density
+                            // accumulation.  That is safe for smoke
+                            // because the smoke field extends across
+                            // large open regions and wall silhouettes are
+                            // a small fraction of the rendered volume.
+                            //
+                            // For WATER (useColor=false), however, the
+                            // water field is confined to a narrow pipe
+                            // interior.  A nearest-neighbour solid gate
+                            // produces a cubic wall silhouette at voxel
+                            // resolution — exactly the "blocky chunks"
+                            // visible in the rendered water volume.
+                            //
+                            // The simulator already zeroes water density
+                            // in every solid cell (see
+                            // MACWater3D::rebuildBorderSolids which
+                            // clears water[id]=0 for all solid cells),
+                            // so trilinear sampling of `density` alone
+                            // produces a smooth ramp from fluid density
+                            // to 0 across the wall boundary.  We only
+                            // need the solid gate for smoke.
+                            const bool inWaterPath = !useColor;
+                            const uint8_t isSolid = inWaterPath
+                                ? (uint8_t)0
+                                : sampleSolidNearest(solid, nx, ny, nz, ux, uy, uz);
+                            if (!isSolid && d > 1e-4f) {
+                                const float T = temp.empty()
+                                    ? 0.f
+                                    : std::max(0.f, sampleTrilinear(temp, nx, ny, nz, ux, uy, uz));
 
-                                    const float sigma = d * sigmaScale * 3.0f;
-                                    const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * alphaScale;
+                                // sigma * 3.2 (not 3.0) + step * 3.0 matches
+                                // smoke_engine/Renderer/smoke_renderer.cpp:1119-1120
+                                // which is the exact absorption coefficient
+                                // their water renderer uses.  The 3.2x sigma
+                                // gives the water a richer body vs smoke.
+                                const float sigmaMul = inWaterPath ? 3.2f : 3.0f;
+                                const float sigma = d * sigmaScale * sigmaMul;
+                                const float aStep = (1.0f - std::exp(-sigma * step * 3.0f)) * alphaScale;
 
-                                    float cr, cg, cb;
-                                    if (!useColor) {
-                                        const float gray = 0.22f + 0.68f * std::pow(clamp01(d), 0.60f);
-                                        cr = cg = cb = gray;
-                                    } else {
-                                        const float tCol = clamp01(std::pow(T, 0.55f));
-                                        const float gray = 0.10f + 0.90f * std::pow(clamp01(d), 0.55f);
-                                        cr = gray + tempStrength * tCol * 0.55f;
-                                        cg = gray + tempStrength * tCol * 0.12f;
-                                        cb = gray * (1.0f - 0.35f * tCol);
-                                        const float ageDark = coreDark * clamp01(d * d);
-                                        const float core = 1.0f - ageDark;
-                                        cr *= 0.35f + 0.65f * core;
-                                        cg *= 0.35f + 0.65f * core;
-                                        cb *= 0.35f + 0.65f * core;
-                                    }
+                                float cr, cg, cb;
+                                if (inWaterPath) {
+                                    // Water path: gradient-based shading
+                                    // with N·L + rim + specular + depth-
+                                    // fade.  Direct port of smoke_engine's
+                                    // water renderer (smoke_renderer.cpp
+                                    // lines 1122–1144) including the
+                                    // depthFade term that darkens the
+                                    // interior of thick water bodies.
+                                    if (firstSurfaceT < 0.0f) firstSurfaceT = t;
 
-                                    const float oneMinusA = 1.0f - accumA;
-                                    // Pre-multiplied alpha accumulation.
-                                    accumR += oneMinusA * aStep * cr;
-                                    accumG += oneMinusA * aStep * cg;
-                                    accumB += oneMinusA * aStep * cb;
-                                    accumA += oneMinusA * aStep;
+                                    V3 grad = sampleGradient(density, nx, ny, nz, ux, uy, uz);
+                                    V3 normal = normalize(grad);
+                                    if (dot(normal, rayDir) > 0.f) normal = normal * -1.f;
+
+                                    const float ndl  = clamp01(dot(normal, lightDir));
+                                    const float rim  = std::pow(clamp01(1.f - std::fabs(dot(normal, rayDir))), 2.f);
+                                    const float spec = std::pow(clamp01(dot(normal, viewLight)), 18.0f);
+
+                                    // Depth-fade across the thickness of
+                                    // the water body: front surface stays
+                                    // bright, back surface darkens.
+                                    const float denom = std::max(1e-6f, tExit - firstSurfaceT);
+                                    const float depthFade = 0.92f - 0.20f * clamp01((t - firstSurfaceT) / denom);
+
+                                    // Dark-theme water palette from
+                                    // smoke_renderer.cpp:1137-1139.  Blue
+                                    // with rim highlight and specular
+                                    // bright spot along the view-light
+                                    // direction.
+                                    cr = (0.07f + 0.10f * ndl + 0.08f * rim) * depthFade + 0.22f * spec;
+                                    cg = (0.22f + 0.24f * ndl + 0.10f * rim) * depthFade + 0.18f * spec;
+                                    cb = (0.44f + 0.30f * ndl + 0.12f * rim) * depthFade + 0.20f * spec;
+                                } else {
+                                    const float tCol = clamp01(std::pow(T, 0.55f));
+                                    const float gray = 0.10f + 0.90f * std::pow(clamp01(d), 0.55f);
+                                    cr = gray + tempStrength * tCol * 0.55f;
+                                    cg = gray + tempStrength * tCol * 0.12f;
+                                    cb = gray * (1.0f - 0.35f * tCol);
+                                    const float ageDark = coreDark * clamp01(d * d);
+                                    const float core = 1.0f - ageDark;
+                                    cr *= 0.35f + 0.65f * core;
+                                    cg *= 0.35f + 0.65f * core;
+                                    cb *= 0.35f + 0.65f * core;
                                 }
+
+                                const float oneMinusA = 1.0f - accumA;
+                                // Pre-multiplied alpha accumulation.
+                                accumR += oneMinusA * aStep * cr;
+                                accumG += oneMinusA * aStep * cg;
+                                accumB += oneMinusA * aStep * cb;
+                                accumA += oneMinusA * aStep;
                             }
                             t += step;
                             ++steps;
@@ -476,6 +714,15 @@ private:
     const std::vector<float>*   m_temp    = nullptr;
     const std::vector<uint8_t>* m_solid   = nullptr;
     int m_nx = 0, m_ny = 0, m_nz = 0;
+
+    // Narrow-band SDF of the FLIP water surface, in world metres.  Set by
+    // setWaterSdf(); nullptr disables the SDF sphere-trace fast path and
+    // the renderer falls back to density volume integration.  Sizes are
+    // cached independently of the density sizes so the caller can set one
+    // without the other.
+    const std::vector<float>*   m_waterSdf = nullptr;
+    int   m_sdfNx = 0, m_sdfNy = 0, m_sdfNz = 0;
+    float m_sdfBand = 0.0f;
 
     // GL objects.
     GLuint m_prog = 0;
