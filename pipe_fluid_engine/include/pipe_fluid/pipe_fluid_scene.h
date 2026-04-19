@@ -57,7 +57,13 @@ public:
         // fluid grid dimensions. Keep them in sync: the fluid sims are
         // recreated with the VoxelGrid's resulting (nx,ny,nz,dx).
         float cellSize = 0.01f;   // metres per voxel
-        float padding  = 0.10f;   // metres around the pipe bbox
+        float padding  = 0.10f;   // metres around the pipe bbox (all 6 sides)
+        // Extra padding added only on the -gravity side of the bbox so
+        // water exiting the pipe has an open basin to fall into before
+        // hitting the sealed grid floor.  0.4 m ≈ 27 cells at the default
+        // cellSize, enough for a visible waterfall without bloating the
+        // horizontal dimensions of the grid.
+        float gravityPadding = 0.40f;
 
         bool enableSmoke = true;
         bool enableWater = false;

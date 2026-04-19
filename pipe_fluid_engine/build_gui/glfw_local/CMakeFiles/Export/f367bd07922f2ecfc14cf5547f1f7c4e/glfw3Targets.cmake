@@ -7,7 +7,7 @@ if(CMAKE_VERSION VERSION_LESS "2.8.3")
    message(FATAL_ERROR "CMake >= 2.8.3 required")
 endif()
 cmake_policy(PUSH)
-cmake_policy(VERSION 2.8.3...4.1)
+cmake_policy(VERSION 2.8.3...3.31)
 #----------------------------------------------------------------
 # Generated CMake target import file.
 #----------------------------------------------------------------
@@ -60,6 +60,7 @@ add_library(glfw STATIC IMPORTED)
 
 set_target_properties(glfw PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include"
+  INTERFACE_LINK_LIBRARIES "-framework Cocoa;-framework IOKit;-framework CoreFoundation"
 )
 
 # Load information for each installed configuration.

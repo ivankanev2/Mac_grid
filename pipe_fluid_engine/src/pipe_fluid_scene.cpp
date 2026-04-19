@@ -64,13 +64,14 @@ struct PipeFluidScene::Impl {
     PipeNetwork network;
     VoxelGrid   voxels;
     TriMesh     mesh;
-    // Smoke uses a "wall-only" mask so the open Air pad outside the pipe acts
-    // as an open sink (smoke can vent past the pipe ends). Water uses a
-    // "sealed" mask where Air is also marked solid, so FLIP particles can't
-    // escape through voxelizer gaps at bends and free-fall onto the grid
-    // floor under gravity.
+    // Both fluids use a "wall-only" mask: only the pipe MATERIAL (Solid)
+    // blocks the sim.  Fluid, Opening and Air are all passable.  The open
+    // Air pad around the pipe acts as an open sink for smoke and a free-
+    // fall basin for water exiting the pipe mouth.  The grid borders are
+    // re-sealed each step by MACWater3D::rebuildBorderSolids(), so the
+    // domain stays closed even though the interior Air is permeable.
     std::vector<uint8_t> smokeMask;   // nx*ny*nz: Solid->1, Air/Fluid->0
-    std::vector<uint8_t> waterMask;   // nx*ny*nz: Fluid->0, Solid/Air->1
+    std::vector<uint8_t> waterMask;   // nx*ny*nz: Solid->1, Air/Fluid/Opening->0
 
     std::unique_ptr<MACSmoke3D> smoke;
     std::unique_ptr<MACWater3D> water;
@@ -149,14 +150,17 @@ bool PipeFluidScene::loadBlueprint(const std::string& path, std::string* errorOu
 void PipeFluidScene::rebuild() {
     // 1. Voxelize the pipe network into a VoxelGrid sized by the pipe bbox.
     PipeVoxelizer voxer;
-    voxer.cellSize = p_->cfg.cellSize;
-    voxer.padding  = p_->cfg.padding;
+    voxer.cellSize       = p_->cfg.cellSize;
+    voxer.padding        = p_->cfg.padding;
+    voxer.gravityPadding = p_->cfg.gravityPadding;
     p_->voxels = voxer.voxelize(p_->network);
 
     // 2. Build both simulator-order solid masks.
     //    - smokeMask: walls only, so smoke can vent past the open pipe ends.
-    //    - waterMask: walls + Air pad sealed, so FLIP particles can't free-
-    //      fall through voxelizer gaps onto the grid floor.
+    //    - waterMask: walls only too.  Air cells are passable so water that
+    //      exits the pipe mouth falls through the gravity-side splash basin
+    //      under gravity.  The sealed grid borders (rebuildBorderSolids)
+    //      still contain the fluid within the domain.
     voxelGridToSolidMask(p_->voxels, p_->smokeMask);
     voxelGridToWaterSolidMask(p_->voxels, p_->waterMask);
 

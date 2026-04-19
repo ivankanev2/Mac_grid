@@ -30,20 +30,27 @@ void voxelGridToWaterSolidMask(const VoxelGrid& vg, std::vector<uint8_t>& out) {
         static_cast<std::size_t>(vg.ny) *
         static_cast<std::size_t>(vg.nz);
     out.assign(n, 0);
-    // Water-specific mask.  Passable cells (0) are:
-    //   - VoxelType::Fluid   : the pipe interior
-    //   - VoxelType::Opening : the exit channel carved past each open end
-    // Blocked cells (1) are:
-    //   - VoxelType::Solid   : pipe wall
-    //   - VoxelType::Air     : outside the pipe.  Marking Air as solid
-    //     SEALS the pad so FLIP particles that slip through voxelizer
-    //     gaps at bends can't free-fall through the pad onto the grid
-    //     floor under gravity.  Because Opening is a distinct type, the
-    //     water still has a legal way to leave the pipe through the mouth.
+    // Water-specific mask.  Only the pipe MATERIAL blocks the fluid:
+    //   Passable (0): VoxelType::Fluid   — the pipe interior
+    //                 VoxelType::Opening — exit/fall-through cells
+    //                 VoxelType::Air     — everything outside the pipe
+    //   Blocked  (1): VoxelType::Solid   — the pipe wall
+    //
+    // Previously Air was blocked to SEAL the domain so FLIP particles
+    // couldn't leak through voxelizer gaps at bends and free-fall onto
+    // the grid floor.  The side-effect was that once water passed the
+    // pipe mouth it hit an invisible "Air-is-solid" wall and could only
+    // continue along the narrow Opening fall-through cylinder carved by
+    // the voxelizer — producing a sausage-shaped column of stuck water
+    // past the exit instead of a gravity-driven splash.
+    //
+    // By making Air passable, water that exits the pipe enters open air
+    // and falls under gravity to the grid floor (which is still sealed
+    // by rebuildBorderSolids() so the domain stays closed).  Any minor
+    // leakage at bend wall voxelization simply joins the splash pool
+    // below the pipe and is visually consistent with real plumbing.
     for (std::size_t i = 0; i < n; ++i) {
-        const VoxelType c = vg.cells[i];
-        const bool passable = (c == VoxelType::Fluid) || (c == VoxelType::Opening);
-        out[i] = passable ? 0u : 1u;
+        out[i] = (vg.cells[i] == VoxelType::Solid) ? 1u : 0u;
     }
 }
 

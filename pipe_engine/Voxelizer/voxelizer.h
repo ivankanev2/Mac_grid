@@ -70,6 +70,16 @@ public:
     float padding = 0.1f;   // metres of padding around the pipe bounding box
     float cellSize = 0.01f; // metres per voxel
 
+    // Extra padding added specifically to the -gravity side of the pipe
+    // bounding box.  This creates a "splash basin" of open air below the
+    // pipe exit where water can fall and pool under gravity instead of
+    // hitting the grid floor almost immediately.  The value is added on
+    // TOP of `padding` in the gravity-down direction only, so the grid
+    // doesn't bloat horizontally or upward — only downward.  Default 0
+    // preserves the tight bbox behaviour used by pipe_engine; consumers
+    // that want a fall basin (e.g. PipeFluidScene) set this to ~0.4 m.
+    float gravityPadding = 0.0f;
+
     // When true, voxelize() runs a post-pass that carves out the spherical
     // wall "caps" that otherwise form at every open endpoint of the network.
     // The cap is replaced with VoxelType::Opening inside a cylindrical exit
@@ -94,6 +104,13 @@ public:
     // matching MACWater3D::Params::gravity which is -9.8 along +Y's
     // negative.
     Vec3 gravityDir = Vec3{0.f, -1.f, 0.f};
+
+    // When true, any Air cell that has a Fluid neighbour (26-connected)
+    // is promoted to Solid after the base classification.  This closes
+    // single-cell gaps in the wall that the distance-field classifier
+    // leaves at bends and segment junctions, so water with a permeable
+    // Air mask can't spray out of the pipe body.  Cheap: one grid pass.
+    bool sealWalls = true;
 
     // Compute the minimum distance from a world-space point to the centre-line
     // of a segment, by sampling at `nSamples` points along the segment.
@@ -126,9 +143,24 @@ public:
             }
         }
 
-        // Add padding
+        // Add padding.  Uniform `padding` on all six faces, plus an extra
+        // `gravityPadding` shift on the face pointing DOWN the gravity
+        // vector so water exiting the pipe has an open basin to fall into
+        // rather than slamming into the sealed grid floor after a few cm.
         bmin -= Vec3{padding, padding, padding};
         bmax += Vec3{padding, padding, padding};
+        if (gravityPadding > 0.0f) {
+            // gravityDir is a unit vector pointing in the acceleration
+            // direction (default {0,-1,0}).  Positive components move the
+            // MAX face out; negative components move the MIN face out.
+            // Each component just scales the extra pad along its axis.
+            if (gravityDir.x < 0.0f) bmin.x += gravityDir.x * gravityPadding;
+            else if (gravityDir.x > 0.0f) bmax.x += gravityDir.x * gravityPadding;
+            if (gravityDir.y < 0.0f) bmin.y += gravityDir.y * gravityPadding;
+            else if (gravityDir.y > 0.0f) bmax.y += gravityDir.y * gravityPadding;
+            if (gravityDir.z < 0.0f) bmin.z += gravityDir.z * gravityPadding;
+            else if (gravityDir.z > 0.0f) bmax.z += gravityDir.z * gravityPadding;
+        }
 
         int nx = std::max(1, (int)std::ceil((bmax.x - bmin.x) / cellSize));
         int ny = std::max(1, (int)std::ceil((bmax.y - bmin.y) / cellSize));
@@ -136,7 +168,27 @@ public:
 
         VoxelGrid grid(nx, ny, nz, cellSize, bmin);
 
-        // 2. Classify each voxel
+        // 2. Classify each voxel.
+        //
+        // Wall-rasterization reliability: the distance-to-centre-line test
+        // uses a cell's centre, but a cell physically spans sqrt(3)/2*dx
+        // from centre to far corner.  If the nominal wall thickness
+        // (outerR - innerR) is close to dx — which is the default case
+        // here (wall=1cm, dx=1cm) — the one-cell-thick Solid shell can
+        // have sub-cell holes wherever the wall surface happens to pass
+        // between two neighbouring cell centres on the outer side.  With
+        // a permeable-Air water mask, each such hole becomes a visible
+        // spray of water escaping the pipe body.
+        //
+        // Fix: extend the Solid classification to `outerR + wallBuffer`
+        // (default wallBuffer = 1*dx).  That turns the wall from a
+        // nominal 1-cell shell into a nominal 2-cell shell, eliminating
+        // 1-cell aliasing gaps across the entire pipe body.  The buffer
+        // cells were Air before, so nothing is lost — they just become
+        // part of the sealed wall.  The value matches the cap-shell
+        // tolerance `outerR + dx` used by carveOpenEnds(), so the mouth
+        // carve still opens the full thickened dome correctly.
+        const float wallBuffer = 1.0f * cellSize;
         for (int k = 0; k < nz; ++k) {
             for (int j = 0; j < ny; ++j) {
                 for (int i = 0; i < nx; ++i) {
@@ -157,12 +209,31 @@ public:
 
                     if (minDist <= innerR) {
                         grid.at(i, j, k) = VoxelType::Fluid;
-                    } else if (minDist <= outerR) {
+                    } else if (minDist <= outerR + wallBuffer) {
                         grid.at(i, j, k) = VoxelType::Solid;
                     }
                     // else Air (default)
                 }
             }
+        }
+
+        // 2b. Wall-seal pass.  The centre-line distance classifier can leave
+        //     single-cell gaps in the wall where a cell sits marginally
+        //     outside outerR but is sandwiched between Fluid (inside) and
+        //     Air (outside) — typical spots are the outside of bends and
+        //     segment junctions where two centre-line arcs join.  With the
+        //     water mask now treating Air as passable (so gravity-driven
+        //     water can fall past the pipe mouth), those gaps become leaks
+        //     that spray fluid through the pipe body.
+        //
+        //     This pass walks every Air cell and promotes it to Solid if
+        //     ANY of its 26 neighbours (6 face + 12 edge + 8 corner) is a
+        //     Fluid cell.  26-connectivity is used rather than 6 because a
+        //     corner-shared Fluid-Air pair forms a diagonal gap that FLIP
+        //     particles can tunnel through during advection.  Scanning one
+        //     extra ring ensures the wall is watertight.
+        if (sealWalls) {
+            sealWallGaps(grid);
         }
 
         // 3. Open-ends post-pass.  The centre-line distance field extends
@@ -178,6 +249,51 @@ public:
     }
 
 private:
+    // Promote any Air cell that touches a Fluid cell (26-connected) to
+    // Solid.  This closes single-cell gaps the centre-line distance
+    // classifier leaves in the wall at bends and segment junctions, so
+    // a permeable-Air water mask doesn't leak water through the pipe
+    // body.  O(nx*ny*nz) with 26 neighbour checks; copies the cells
+    // array once to avoid the update racing with the scan.
+    void sealWallGaps(VoxelGrid& grid) const {
+        const int nx = grid.nx, ny = grid.ny, nz = grid.nz;
+        const std::vector<VoxelType> src = grid.cells;  // snapshot
+        int nSealed = 0;
+        for (int k = 0; k < nz; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int idx = i + nx * (j + ny * k);
+                    if (src[idx] != VoxelType::Air) continue;
+                    bool touchesFluid = false;
+                    for (int dk = -1; dk <= 1 && !touchesFluid; ++dk) {
+                        const int kk = k + dk;
+                        if (kk < 0 || kk >= nz) continue;
+                        for (int dj = -1; dj <= 1 && !touchesFluid; ++dj) {
+                            const int jj = j + dj;
+                            if (jj < 0 || jj >= ny) continue;
+                            for (int di = -1; di <= 1 && !touchesFluid; ++di) {
+                                if (di == 0 && dj == 0 && dk == 0) continue;
+                                const int ii = i + di;
+                                if (ii < 0 || ii >= nx) continue;
+                                if (src[ii + nx * (jj + ny * kk)] == VoxelType::Fluid) {
+                                    touchesFluid = true;
+                                }
+                            }
+                        }
+                    }
+                    if (touchesFluid) {
+                        grid.cells[idx] = VoxelType::Solid;
+                        ++nSealed;
+                    }
+                }
+            }
+        }
+        if (nSealed > 0) {
+            std::cout << "[VoxelGrid] sealWallGaps: promoted "
+                      << nSealed << " Air->Solid cells\n";
+        }
+    }
+
     // Walk each open endpoint (see PipeNetwork::openEnds()) and, in a small
     // neighbourhood around it, convert spurious wall caps into passable
     // cells.  Three disjoint regions are processed per endpoint:

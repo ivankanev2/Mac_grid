@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "C:/Users/Nitro/Mac_grid/pipe_fluid_engine/viewer/main_gui.cpp" "CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.obj" "gcc" "CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.obj.d"
+  "/Users/ivan.kanev/Desktop/jorge_project/pipe_fluid_engine/viewer/main_gui.cpp" "CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.o" "gcc" "CMakeFiles/PipeFluidEngine.dir/viewer/main_gui.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.
