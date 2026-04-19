@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <string>
 #include <filesystem>
+#include <limits>
 
 #include "../Sim/mac_smoke_sim.h"
 #include "../Sim/mac_water_sim.h"
@@ -2340,7 +2341,7 @@ static void drawWaterViewAndInteract(MACWater& water,
         const float domainX = std::max(1e-6f, water.nx * water.dx);
         const float domainY = std::max(1e-6f, water.ny * water.dx);
 
-        const size_t maxDraw = 20000;
+        const size_t maxDraw = 8000;
         const size_t n = water.particles.size();
         const size_t stride = std::max<size_t>(1, n / maxDraw);
         const float radiusPx = std::max(2.0f, 0.35f * scale);
@@ -2581,6 +2582,26 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
     const bool showWaterOverlay = (displayMode != 1);
     const bool showParticleOverlay = (displayMode != 0);
 
+    if (showParticleOverlay) {
+        static int s_lastParticleSyncStepCounter = std::numeric_limits<int>::min();
+        static int s_lastParticleSyncDisplayMode = -1;
+        static double s_lastParticleSyncTime = -1.0;
+
+        const double now = ImGui::GetTime();
+        const bool displayModeChanged = (s_lastParticleSyncDisplayMode != displayMode);
+        const bool simAdvanced = (s_lastParticleSyncStepCounter != water3D.stepCounter);
+        const bool firstSync = (s_lastParticleSyncTime < 0.0);
+        const double minSyncInterval = water3D.lastStats.cudaEnabled ? (1.0 / 8.0) : 0.0;
+        const bool intervalElapsed = firstSync || (now - s_lastParticleSyncTime) >= minSyncInterval;
+
+        if (displayModeChanged || (simAdvanced && intervalElapsed) || firstSync) {
+            water3D.syncHostParticles();
+            s_lastParticleSyncStepCounter = water3D.stepCounter;
+            s_lastParticleSyncDisplayMode = displayMode;
+            s_lastParticleSyncTime = now;
+        }
+    }
+
     int sourceW = std::max(1, renderer.width());
     int sourceH = std::max(1, renderer.height());
     if (!showWaterOverlay) {
@@ -2668,7 +2689,7 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
         }
 
         if (showParticleOverlay && !water3D.particles.empty()) {
-            const size_t maxDraw = 25000;
+            const size_t maxDraw = 10000;
             const size_t n = water3D.particles.size();
             const size_t stride = std::max<size_t>(1, n / maxDraw);
             for (size_t k = 0; k < n; k += stride) {
@@ -2741,7 +2762,7 @@ static void drawWater3DViewAndInteract(MACWater3D& water3D,
             const int sliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
             const float sliceCoord = (sliceIndex + 0.5f) * water3D.dx;
             const float sliceHalfThickness = 0.75f * water3D.dx;
-            const size_t maxDraw = 20000;
+            const size_t maxDraw = 8000;
             const size_t n = water3D.particles.size();
             const size_t stride = std::max<size_t>(1, n / maxDraw);
             const float radiusPx = std::max(1.5f, 0.30f * ui.viewScale);
@@ -2867,7 +2888,7 @@ static void drawCombinedView(MACCoupledSim& coupled,
         const float domainX = std::max(1e-6f, coupled.nx * coupled.dx);
         const float domainY = std::max(1e-6f, coupled.ny * coupled.dx);
 
-        const size_t maxDraw = 20000;
+        const size_t maxDraw = 8000;
         const size_t n = coupled.particles.size();
         const size_t stride = std::max<size_t>(1, n / maxDraw);
 
@@ -3095,9 +3116,6 @@ Actions DrawAll(MAC2D& sim,
             drawSmokeViewAndInteract(sim, renderer, ui, probe, NX, NY);
             break;
     }
-
-    // keep solids consistent between smoke and water sims
-    water.syncSolidsFrom(sim);
 
     return a;
 }

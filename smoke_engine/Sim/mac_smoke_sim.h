@@ -30,7 +30,7 @@ struct MAC2D : public MACGridCore {
     float smokeL2Diff(const std::vector<float>& a, const std::vector<float>& b) const;
     float compareAdvectors(float dissipation);
 
-    bool useMacCormack = true;
+    bool useMacCormack = false;
 
     void setOpenTop(bool on);
 

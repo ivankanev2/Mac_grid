@@ -2,10 +2,10 @@
 #include "Sim/mac_smoke_sim.h"
 #include "Sim/mac_water_sim.h"
 #include "Sim/mac_coupled_sim.h"
+#include "Sim/chunk_worker_pool.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <thread>
 
 #ifdef __APPLE__
   #define GL_SILENCE_DEPRECATION
@@ -237,26 +237,13 @@ static Vec3f themedWaterBgB(int themeMode) {
 
 template <typename Fn>
 static void parallelForRows(int rowCount, Fn&& fn) {
-    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    const int minRowsPerTask = 32;
-    const int maxTasks = std::max(1, std::min<int>((int)hw, rowCount / minRowsPerTask));
-    if (maxTasks <= 1 || rowCount <= minRowsPerTask) {
-        fn(0, rowCount);
-        return;
-    }
+    if (rowCount <= 0) return;
 
-    std::vector<std::thread> workers;
-    workers.reserve((size_t)maxTasks - 1);
-    const int chunk = (rowCount + maxTasks - 1) / maxTasks;
-    for (int task = 1; task < maxTasks; ++task) {
-        const int begin = task * chunk;
-        if (begin >= rowCount) break;
-        const int end = std::min(rowCount, begin + chunk);
-        workers.emplace_back([&, begin, end]() { fn(begin, end); });
-    }
-
-    fn(0, std::min(rowCount, chunk));
-    for (auto& worker : workers) worker.join();
+    constexpr int minRowsPerChunk = 32;
+    sharedChunkWorkerPool().parallelFor(rowCount, minRowsPerChunk,
+                                        [&](int rowBegin, int rowEnd) {
+                                            fn(rowBegin, rowEnd);
+                                        });
 }
 
 struct VolumeActiveBounds {

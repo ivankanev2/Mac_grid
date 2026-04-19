@@ -25,6 +25,11 @@ public:
                                       const MACWater3D::Vec3& velocity) = 0;
     virtual void setVoxelSolids(MACWater3D& sim,
                                 const std::vector<uint8_t>& mask) = 0;
+    virtual void syncHostAll(MACWater3D& sim) = 0;
+    virtual void syncHostVolume(MACWater3D& sim) = 0;
+    virtual void syncHostParticles(MACWater3D& sim) = 0;
+    virtual void syncHostDebugField(MACWater3D& sim,
+                                    MACWater3D::DebugField field) = 0;
 };
 
 static inline void clearTransientStats(MACWater3D& sim, float stepMs = 0.0f) {
@@ -41,6 +46,7 @@ public:
     const char* name() const override { return "CPU MAC 3D"; }
 
     void activate(MACWater3D& sim) override {
+        sim.clearCudaHostStateDirtyAll();
         sim.updateStats(0.0f);
         clearTransientStats(sim, 0.0f);
     }
@@ -63,6 +69,22 @@ public:
     void setVoxelSolids(MACWater3D& sim,
                         const std::vector<uint8_t>& mask) override {
         sim.setVoxelSolidsCpu(mask);
+    }
+
+    void syncHostAll(MACWater3D& sim) override {
+        sim.clearCudaHostStateDirtyAll();
+    }
+
+    void syncHostVolume(MACWater3D& sim) override {
+        sim.clearCudaHostStateDirtyAll();
+    }
+
+    void syncHostParticles(MACWater3D& sim) override {
+        sim.clearCudaHostStateDirtyAll();
+    }
+
+    void syncHostDebugField(MACWater3D& sim, MACWater3D::DebugField) override {
+        sim.clearCudaHostStateDirtyAll();
     }
 };
 
@@ -87,11 +109,13 @@ public:
 
     void activate(MACWater3D& sim) override {
         if (backend_ == nullptr) {
+            sim.clearCudaHostStateDirtyAll();
             sim.updateStats(0.0f);
             clearTransientStats(sim, 0.0f);
             return;
         }
         water3dCudaReset(backend_, sim);
+        sim.clearCudaHostStateDirtyAll();
         sim.derivedFieldsDirty = false;
     }
 
@@ -101,6 +125,7 @@ public:
             return;
         }
         water3dCudaSetParams(backend_, sim);
+        sim.markCudaHostStateDirtyAll();
         sim.derivedFieldsDirty = false;
     }
 
@@ -110,6 +135,7 @@ public:
             return;
         }
         water3dCudaStep(backend_, sim);
+        sim.markCudaHostStateDirtyAll();
         sim.derivedFieldsDirty = false;
     }
 
@@ -122,6 +148,7 @@ public:
             return;
         }
         water3dCudaAddWaterSourceSphere(backend_, sim, center, radius, velocity);
+        sim.markCudaHostStateDirtyAll();
         sim.derivedFieldsDirty = false;
     }
 
@@ -139,6 +166,52 @@ public:
         }
 
         water3dCudaSetVoxelSolids(backend_, sim);
+        sim.markCudaHostStateDirtyAll();
+        sim.derivedFieldsDirty = false;
+    }
+
+    void syncHostAll(MACWater3D& sim) override {
+        if (backend_ == nullptr) {
+            sim.clearCudaHostStateDirtyAll();
+            return;
+        }
+        water3dCudaDownloadHostAll(backend_, sim);
+        sim.clearCudaHostStateDirtyAll();
+        sim.derivedFieldsDirty = false;
+    }
+
+    void syncHostVolume(MACWater3D& sim) override {
+        if (backend_ == nullptr) {
+            sim.clearCudaHostStateDirtyAll();
+            return;
+        }
+        water3dCudaDownloadHostVolume(backend_, sim);
+        sim.cudaHostVolumeDirty = false;
+        sim.derivedFieldsDirty = false;
+    }
+
+    void syncHostParticles(MACWater3D& sim) override {
+        if (backend_ == nullptr) {
+            sim.clearCudaHostStateDirtyAll();
+            return;
+        }
+        water3dCudaDownloadHostParticles(backend_, sim);
+        sim.cudaHostParticlesDirty = false;
+    }
+
+    void syncHostDebugField(MACWater3D& sim, MACWater3D::DebugField field) override {
+        if (backend_ == nullptr) {
+            sim.clearCudaHostStateDirtyAll();
+            return;
+        }
+        water3dCudaDownloadHostDebugField(backend_, sim, field);
+        if (field == MACWater3D::DebugField::Water) {
+            sim.cudaHostVolumeDirty = false;
+        } else if (field == MACWater3D::DebugField::Pressure) {
+            sim.cudaHostPressureDirty = false;
+        } else {
+            sim.cudaHostDerivedDirty = false;
+        }
         sim.derivedFieldsDirty = false;
     }
 
@@ -178,6 +251,22 @@ bool MACWater3D::isCudaAvailable() const {
 
 bool MACWater3D::isCudaEnabled() const {
     return isCudaAvailable() && activeBackend() == cudaBackendImpl.get();
+}
+
+void MACWater3D::markCudaHostStateDirtyAll() {
+    cudaHostVelocityDirty = true;
+    cudaHostPressureDirty = true;
+    cudaHostVolumeDirty = true;
+    cudaHostDerivedDirty = true;
+    cudaHostParticlesDirty = true;
+}
+
+void MACWater3D::clearCudaHostStateDirtyAll() {
+    cudaHostVelocityDirty = false;
+    cudaHostPressureDirty = false;
+    cudaHostVolumeDirty = false;
+    cudaHostDerivedDirty = false;
+    cudaHostParticlesDirty = false;
 }
 
 void MACWater3D::reset() {
@@ -272,6 +361,7 @@ void MACWater3D::reset() {
     if (MACWater3DBackend* backend = activeBackend()) {
         backend->activate(*this);
     } else {
+        clearCudaHostStateDirtyAll();
         updateStats(0.0f);
         clearTransientStats(*this, 0.0f);
     }
@@ -303,6 +393,7 @@ void MACWater3D::setParamsCpu() {
     enforceParticleBounds();
     buildLiquidMask();
     rasterizeWaterField();
+    clearCudaHostStateDirtyAll();
     updateStats(0.0f);
     clearTransientStats(*this, 0.0f);
 }
@@ -316,10 +407,63 @@ void MACWater3D::refreshStats(float stepMs) {
     lastStats.timings.totalMs = stepMs;
 }
 
+void MACWater3D::syncHostAll() {
+    if (!isCudaEnabled()) {
+        clearCudaHostStateDirtyAll();
+        return;
+    }
+    if (!cudaHostVelocityDirty && !cudaHostPressureDirty && !cudaHostVolumeDirty &&
+        !cudaHostDerivedDirty && !cudaHostParticlesDirty) {
+        return;
+    }
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->syncHostAll(*this);
+    }
+}
+
+void MACWater3D::syncHostVolume() {
+    if (!isCudaEnabled()) return;
+    if (!cudaHostVolumeDirty) return;
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->syncHostVolume(*this);
+    }
+}
+
+void MACWater3D::syncHostParticles() {
+    if (!isCudaEnabled()) return;
+    if (!cudaHostParticlesDirty) return;
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->syncHostParticles(*this);
+    }
+}
+
+void MACWater3D::syncHostDebugField(DebugField field) {
+    if (!isCudaEnabled()) return;
+    switch (field) {
+        case DebugField::Water:
+            syncHostVolume();
+            return;
+        case DebugField::Pressure:
+            if (!cudaHostPressureDirty) return;
+            break;
+        case DebugField::Divergence:
+        case DebugField::Speed:
+            if (!cudaHostDerivedDirty) return;
+            break;
+    }
+    if (MACWater3DBackend* backend = activeBackend()) {
+        backend->syncHostDebugField(*this, field);
+    }
+}
+
 void MACWater3D::setBackendPreference(BackendPreference newPreference) {
     MACWater3DBackend* oldBackend = activeBackend();
     backendPreference = newPreference;
     MACWater3DBackend* newBackend = activeBackend();
+    if (oldBackend != newBackend && oldBackend == cudaBackendImpl.get()) {
+        oldBackend->syncHostAll(*this);
+        clearCudaHostStateDirtyAll();
+    }
     if (newBackend != oldBackend && newBackend != nullptr) {
         newBackend->activate(*this);
     }
@@ -370,6 +514,7 @@ void MACWater3D::stepCpu() {
         timings.statsMs += std::chrono::duration<float, std::milli>(statsEnd - statsStart).count();
 
         const float stepMs = std::chrono::duration<float, std::milli>(statsEnd - frameStart).count();
+        clearCudaHostStateDirtyAll();
         lastStats.lastStepMs = stepMs;
         lastStats.pressureMs = 0.0f;
         lastStats.pressureIters = 0;
@@ -448,6 +593,7 @@ void MACWater3D::stepCpu() {
     timings.statsMs += std::chrono::duration<float, std::milli>(statsEnd - statsStart).count();
 
     const float stepMs = std::chrono::duration<float, std::milli>(statsEnd - frameStart).count();
+    clearCudaHostStateDirtyAll();
     lastStats.lastStepMs = stepMs;
     lastStats.pressureMs = lastPressureSolveMs;
     lastStats.pressureIters = lastPressureIterations;
@@ -532,6 +678,7 @@ void MACWater3D::addWaterSourceSphereCpu(const Vec3& center, float radius, const
     removeParticlesInSolids();
     buildLiquidMask();
     rasterizeWaterField();
+    clearCudaHostStateDirtyAll();
     updateStats(0.0f);
     clearTransientStats(*this, 0.0f);
 }
@@ -560,21 +707,26 @@ void MACWater3D::setVoxelSolidsCpu(const std::vector<uint8_t>& mask) {
     buildLiquidMask();
     applyBoundary();
     rasterizeWaterField();
+    clearCudaHostStateDirtyAll();
     updateStats(0.0f);
     clearTransientStats(*this, 0.0f);
 }
 
 MACWater3D::SliceData MACWater3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) {
+    if (isCudaEnabled()) {
+        syncHostDebugField(field);
+    }
+
     const std::vector<float>* src = &water;
     switch (field) {
         case DebugField::Water:      src = &water; break;
         case DebugField::Pressure:   src = &pressure; break;
         case DebugField::Divergence:
-            ensureDerivedDebugFields();
+            if (!isCudaEnabled()) ensureDerivedDebugFields();
             src = &divergence;
             break;
         case DebugField::Speed:
-            ensureDerivedDebugFields();
+            if (!isCudaEnabled()) ensureDerivedDebugFields();
             src = &speed;
             break;
     }

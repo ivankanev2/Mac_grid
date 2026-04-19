@@ -174,6 +174,10 @@ struct MACWater3D {
     const Stats& stats() const { return lastStats; }
     const std::vector<uint8_t>& userSolidMask() const { return solidUser; }
     void refreshStats(float stepMs);
+    void syncHostAll();
+    void syncHostVolume();
+    void syncHostParticles();
+    void syncHostDebugField(DebugField field);
 
     bool isCudaEnabled() const;
     bool hasFeatureParityWith2D() const {
@@ -380,6 +384,15 @@ protected:
 
     std::unique_ptr<MACWater3DBackend> cpuBackendImpl;
     std::unique_ptr<MACWater3DBackend> cudaBackendImpl;
+
+    bool cudaHostVelocityDirty = false;
+    bool cudaHostPressureDirty = false;
+    bool cudaHostVolumeDirty = false;
+    bool cudaHostDerivedDirty = false;
+    bool cudaHostParticlesDirty = false;
+
+    void markCudaHostStateDirtyAll();
+    void clearCudaHostStateDirtyAll();
 
     friend class Water3DBackendCpu;
     friend class Water3DBackendCuda;

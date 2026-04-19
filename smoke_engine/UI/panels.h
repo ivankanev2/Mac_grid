@@ -62,8 +62,8 @@ struct Settings {
     float lastAdvectL2 = 0.0f;
 
     // 2D grid resolution (Smoke 2D / Water 2D / Coupled)
-    int   sim2DNX = 256;
-    int   sim2DNY = 256;
+    int   sim2DNX = 160;
+    int   sim2DNY = 160;
     int   windowWidth = 1480;
     int   windowHeight = 920;
 
@@ -97,19 +97,19 @@ struct Settings {
     float waterVelDamping = 0.0f;
     bool  waterOpenTop    = true;
     bool  showWaterView   = true;
-    bool  showWaterParticles = true;
+    bool  showWaterParticles = false;
 
     // View display and volume-render resolution (display only; simulation resolution stays unchanged)
     float viewScale = 1.0f;
-    float volumeRenderScale = 1.0f;
+    float volumeRenderScale = 0.75f;
     float smoke3DViewportWidth = 0.0f;
     float smoke3DViewportHeight = 0.0f;
     float water3DViewportWidth = 0.0f;
     float water3DViewportHeight = 0.0f;
     bool  smoke3DThrottleRendering = true;
-    float smoke3DRenderFPS = 12.0f;
+    float smoke3DRenderFPS = 10.0f;
     bool  water3DThrottleRendering = true;
-    float water3DRenderFPS = 15.0f;
+    float water3DRenderFPS = 10.0f;
 
     bool  showCombinedView = true;
     float combinedWaterAlpha = 0.5f;   // water overlay strength
@@ -157,7 +157,7 @@ struct Settings {
     int   water3DNY = 64;
     int   water3DNZ = 48;
     int   water3DViewMode = 0;     // 0=volume, 1=slice, 2=surface
-    int   water3DDisplayMode = 2;  // 0=overlay only, 1=particles only, 2=both
+    int   water3DDisplayMode = 0;  // 0=overlay only, 1=particles only, 2=both
     float water3DViewYawDeg = 35.0f;
     float water3DViewPitchDeg = 20.0f;
     float water3DViewZoom = 1.15f;

@@ -33,6 +33,13 @@
   #include <GL/gl.h>
 #endif
 
+#if defined(_WIN32)
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 #include "Sim/mac_smoke_sim.h"
 #include "Sim/mac_water_sim.h"
 #include "Sim/mac_water3d.h"
@@ -50,8 +57,8 @@
 
 
 // window size and sim resolution
-static int NX = 256;
-static int NY = 256;
+static int NX = 160;
+static int NY = 160;
 static const int NZ = 64;
 
 // Persistent text mask (reused across resets).
@@ -120,6 +127,19 @@ static float coverageForStroke(float dist, float halfWidth, float aa) {
     if (dist <= halfWidth - aa) return 1.0f;
     if (dist >= halfWidth + aa) return 0.0f;
     return clamp01((halfWidth + aa - dist) / std::max(1.0e-6f, 2.0f * aa));
+}
+
+static int computeWorkspaceStepCap(int workspace, float recentStepMs, int fallbackCap) {
+    fallbackCap = std::max(1, fallbackCap);
+    const bool is2DHeavy = (workspace == UI::kWorkspaceSmoke2D) ||
+                           (workspace == UI::kWorkspaceWater2D) ||
+                           (workspace == UI::kWorkspaceCoupled);
+    if (!is2DHeavy) return fallbackCap;
+
+    if (!(recentStepMs > 0.0f)) return std::min(fallbackCap, 2);
+    if (recentStepMs <= 8.0f)  return std::min(fallbackCap, 4);
+    if (recentStepMs <= 18.0f) return std::min(fallbackCap, 2);
+    return 1;
 }
 
 static void blendOver(unsigned char& dstR,
@@ -306,6 +326,8 @@ struct VolumeRenderCacheState {
     float lastZoom = 0.0f;
     float lastDensity = 0.0f;
     float lastSurfaceThreshold = 0.0f;
+    float dynamicScale = 1.0f;
+    float smoothedRenderMs = 0.0f;
 };
 
 static VolumeRenderTargetSize computeVolumeRenderTargetSize(GLFWwindow* win,
@@ -313,7 +335,7 @@ static VolumeRenderTargetSize computeVolumeRenderTargetSize(GLFWwindow* win,
                                                             float logicalHeight,
                                                             float renderScale,
                                                             int minDim = 192,
-                                                            int maxDim = 1024)
+                                                            int maxDim = 768)
 {
     int fbW = 0;
     int fbH = 0;
@@ -329,7 +351,7 @@ static VolumeRenderTargetSize computeVolumeRenderTargetSize(GLFWwindow* win,
     const float fallbackLogicalH = std::max(220.0f, 0.46f * (float)std::max(1, fbH) / dpiY);
     const float safeLogicalW = (logicalWidth > 1.0f) ? logicalWidth : fallbackLogicalW;
     const float safeLogicalH = (logicalHeight > 1.0f) ? logicalHeight : fallbackLogicalH;
-    const float safeScale = std::clamp(renderScale, 0.35f, 2.0f);
+    const float safeScale = std::clamp(renderScale, 0.25f, 2.0f);
 
     int targetW = (int)std::lround(safeLogicalW * dpiX * safeScale);
     int targetH = (int)std::lround(safeLogicalH * dpiY * safeScale);
@@ -337,6 +359,37 @@ static VolumeRenderTargetSize computeVolumeRenderTargetSize(GLFWwindow* win,
     targetW = std::clamp(targetW, minDim, maxDim);
     targetH = std::clamp(targetH, minDim, maxDim);
     return VolumeRenderTargetSize{targetW, targetH};
+}
+
+static float effectiveAdaptiveRenderScale(const VolumeRenderCacheState& cache, float userScale) {
+    const float dynamicScale = std::clamp(cache.dynamicScale, 0.45f, 1.0f);
+    return std::clamp(userScale * dynamicScale, 0.25f, 2.0f);
+}
+
+static float renderBudgetMs(bool throttled, float renderFps) {
+    if (throttled) {
+        return 1000.0f / std::max(4.0f, renderFps);
+    }
+    return 33.0f;
+}
+
+static void updateAdaptiveRenderScale(VolumeRenderCacheState& cache, float renderMs, float budgetMs) {
+    if (!(renderMs > 0.0f) || !(budgetMs > 0.0f)) return;
+
+    if (cache.smoothedRenderMs <= 0.0f) {
+        cache.smoothedRenderMs = renderMs;
+    } else {
+        cache.smoothedRenderMs = 0.82f * cache.smoothedRenderMs + 0.18f * renderMs;
+    }
+
+    float nextScale = (cache.dynamicScale > 0.0f) ? cache.dynamicScale : 1.0f;
+    if (cache.smoothedRenderMs > budgetMs * 1.20f) {
+        nextScale *= 0.88f;
+    } else if (cache.smoothedRenderMs < budgetMs * 0.55f) {
+        nextScale *= 1.04f;
+    }
+
+    cache.dynamicScale = std::clamp(nextScale, 0.45f, 1.0f);
 }
 
 
@@ -736,6 +789,7 @@ static bool captureWorkspaceFrame(int workspace,
                                       [](std::vector<uint8_t>&, int, int, const OfflineFitRect&) {});
             }
             bakeRenderer.resize(outputWidth, outputHeight);
+            water3D.syncHostVolume();
             bakeRenderer.updateWaterFromVolume(water3D.water, water3D.solid,
                                                water3D.nx, water3D.ny, water3D.nz,
                                                viewMode,
@@ -860,6 +914,9 @@ int main()
     VolumeRenderCacheState water3DRenderCache;
     unsigned long long smoke3DSimVersion = 1;
     unsigned long long water3DSimVersion = 1;
+    float lastSmoke2DStepMs = 0.0f;
+    float lastWater2DStepMs = 0.0f;
+    float lastCoupledStepMs = 0.0f;
     auto invalidate3DRenderCaches = [&]() {
         smoke3DRenderCache = {};
         water3DRenderCache = {};
@@ -911,7 +968,7 @@ int main()
         if (g_textMask.empty()) return;
         sim.addSolidText(g_textMask, g_textMaskW, g_textMaskH);
         waterSim.waterHeld = true;
-        waterSim.addWaterTextParticles(g_textMask, g_textMaskW, g_textMaskH, 4);
+        waterSim.addWaterTextParticles(g_textMask, g_textMaskW, g_textMaskH, 2);
         waterSim.syncSolidsFrom(sim);
     };
 
@@ -1155,7 +1212,6 @@ int main()
         switch (workspace) {
             case UI::kWorkspaceWater2D:
                 water2DRef.setDt(dt);
-                water2DRef.syncSolidsFrom(smoke2DRef);
                 water2DRef.step();
                 break;
             case UI::kWorkspaceSmoke3D:
@@ -1702,8 +1758,17 @@ int main()
         if (ui.playing) {
             accumulator += frameDt * simSpeed;
 
+            float recentStepMs = 0.0f;
+            switch (activeWorkspace) {
+                case UI::kWorkspaceWater2D: recentStepMs = lastWater2DStepMs; break;
+                case UI::kWorkspaceCoupled: recentStepMs = lastCoupledStepMs; break;
+                case UI::kWorkspaceSmoke2D:
+                default: recentStepMs = lastSmoke2DStepMs; break;
+            }
+            const int workspaceStepCap = computeWorkspaceStepCap(activeWorkspace, recentStepMs, maxStepsPerFrame);
+
             int steps = 0;
-            while (accumulator > 0.0 && steps < maxStepsPerFrame) {
+            while (accumulator > 0.0 && steps < workspaceStepCap) {
                 float maxSpeed = sim.maxFaceSpeed();
                 float cflDx = sim.dx;
 
@@ -1739,10 +1804,10 @@ int main()
                     dt = std::max(dt, ui.dtMin);
                 }
 
+                const double stepStartTime = glfwGetTime();
                 switch (activeWorkspace) {
                     case UI::kWorkspaceWater2D:
                         waterSim.setDt(dt);
-                        waterSim.syncSolidsFrom(sim);
                         waterSim.step();
                         break;
                     case UI::kWorkspaceSmoke3D:
@@ -1765,13 +1830,20 @@ int main()
                         sim.step(ui.vortEps);
                         break;
                 }
+                const float stepMs = (float)((glfwGetTime() - stepStartTime) * 1000.0);
+                switch (activeWorkspace) {
+                    case UI::kWorkspaceWater2D: lastWater2DStepMs = stepMs; break;
+                    case UI::kWorkspaceCoupled: lastCoupledStepMs = stepMs; break;
+                    case UI::kWorkspaceSmoke2D:
+                    default: lastSmoke2DStepMs = stepMs; break;
+                }
 
                 accumulator -= dt;
                 steps++;
             }
 
             // optional: if we hit the cap, drop the remainder so it doesn't lag forever
-            if (steps == maxStepsPerFrame) accumulator = 0.0;
+            if (steps == workspaceStepCap) accumulator = 0.0;
         }
 
         // upload textures (do this each frame before NewFrame so ImGui uses latest)
@@ -1795,6 +1867,8 @@ int main()
             const int displayMode = std::clamp(ui.water3DDisplayMode, 0, 2);
             const bool showWaterOverlay = (displayMode != 1);
             if (showWaterOverlay) {
+                const bool simChanged =
+                    !water3DRenderCache.valid || water3DRenderCache.lastSimVersion != water3DSimVersion;
                 if (viewMode == 1) {
                     const int axis = std::clamp(ui.water3DSliceAxis, 0, 2);
                     const int field = std::clamp(ui.water3DDebugField, 0, 3);
@@ -1805,18 +1879,43 @@ int main()
                             : std::max(0, water3D.nx - 1);
                     ui.water3DSliceIndex = std::clamp(ui.water3DSliceIndex, 0, maxSlice);
 
-                    auto slice = water3D.copyDebugSlice(
-                        static_cast<MACWater3D::SliceAxis>(axis),
-                        ui.water3DSliceIndex,
-                        static_cast<MACWater3D::DebugField>(field));
-                    water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
-                    water3DRenderCache = {};
+                    const bool sliceChanged =
+                        !water3DRenderCache.valid ||
+                        water3DRenderCache.lastViewMode != viewMode ||
+                        water3DRenderCache.lastSliceAxis != axis ||
+                        water3DRenderCache.lastSliceIndex != ui.water3DSliceIndex ||
+                        water3DRenderCache.lastDebugField != field;
+
+                    bool needUpdate = sliceChanged;
+                    if (!needUpdate && simChanged) {
+                        if (!ui.playing || !ui.water3DThrottleRendering) {
+                            needUpdate = true;
+                        } else {
+                            const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
+                            needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
+                        }
+                    }
+
+                    if (needUpdate) {
+                        auto slice = water3D.copyDebugSlice(
+                            static_cast<MACWater3D::SliceAxis>(axis),
+                            ui.water3DSliceIndex,
+                            static_cast<MACWater3D::DebugField>(field));
+                        water3DRenderer.updateWaterFromSlice(slice.values, slice.solid, slice.width, slice.height, wr);
+                        water3DRenderCache.valid = true;
+                        water3DRenderCache.lastRenderTime = now;
+                        water3DRenderCache.lastSimVersion = water3DSimVersion;
+                        water3DRenderCache.lastViewMode = viewMode;
+                        water3DRenderCache.lastSliceAxis = axis;
+                        water3DRenderCache.lastSliceIndex = ui.water3DSliceIndex;
+                        water3DRenderCache.lastDebugField = field;
+                    }
                 } else {
                     const auto target = computeVolumeRenderTargetSize(
                         win,
                         ui.water3DViewportWidth,
                         ui.water3DViewportHeight,
-                        ui.volumeRenderScale);
+                        effectiveAdaptiveRenderScale(water3DRenderCache, ui.volumeRenderScale));
                     const bool sizeChanged =
                         water3DRenderer.width() != target.width || water3DRenderer.height() != target.height;
                     if (sizeChanged) {
@@ -1833,22 +1932,20 @@ int main()
                         !nearlyEqual(water3DRenderCache.lastZoom, ui.water3DViewZoom) ||
                         !nearlyEqual(water3DRenderCache.lastDensity, ui.water3DVolumeDensity) ||
                         !nearlyEqual(water3DRenderCache.lastSurfaceThreshold, ui.water3DSurfaceThreshold);
-                    const bool simChanged =
-                        !water3DRenderCache.valid || water3DRenderCache.lastSimVersion != water3DSimVersion;
 
-                    bool needUpdate = false;
-                    if (!water3DRenderCache.valid || sizeChanged || viewChanged) {
-                        needUpdate = true;
-                    } else if (!ui.playing) {
-                        needUpdate = true;
-                    } else if (!ui.water3DThrottleRendering) {
-                        needUpdate = simChanged;
-                    } else if (simChanged) {
-                        const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
-                        needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
+                    bool needUpdate = !water3DRenderCache.valid || sizeChanged || viewChanged;
+                    if (!needUpdate && simChanged) {
+                        if (!ui.playing || !ui.water3DThrottleRendering) {
+                            needUpdate = true;
+                        } else {
+                            const double interval = 1.0 / std::max(1.0f, ui.water3DRenderFPS);
+                            needUpdate = (now - water3DRenderCache.lastRenderTime) >= interval;
+                        }
                     }
 
                     if (needUpdate) {
+                        const double renderStart = glfwGetTime();
+                        water3D.syncHostVolume();
                         water3DRenderer.updateWaterFromVolume(
                             water3D.water,
                             water3D.solid,
@@ -1862,12 +1959,19 @@ int main()
                             ui.water3DVolumeDensity,
                             ui.water3DSurfaceThreshold,
                             wr);
+                        const float renderMs = (float)((glfwGetTime() - renderStart) * 1000.0);
+                        updateAdaptiveRenderScale(water3DRenderCache,
+                                                  renderMs,
+                                                  renderBudgetMs(ui.water3DThrottleRendering, ui.water3DRenderFPS));
                         water3DRenderCache.valid = true;
                         water3DRenderCache.lastRenderTime = now;
                         water3DRenderCache.lastSimVersion = water3DSimVersion;
                         water3DRenderCache.lastWidth = target.width;
                         water3DRenderCache.lastHeight = target.height;
                         water3DRenderCache.lastViewMode = viewMode;
+                        water3DRenderCache.lastSliceAxis = -1;
+                        water3DRenderCache.lastSliceIndex = -1;
+                        water3DRenderCache.lastDebugField = -1;
                         water3DRenderCache.lastYaw = ui.water3DViewYawDeg;
                         water3DRenderCache.lastPitch = ui.water3DViewPitchDeg;
                         water3DRenderCache.lastZoom = ui.water3DViewZoom;
@@ -1880,6 +1984,8 @@ int main()
 
         if (activeWorkspace == UI::kWorkspaceSmoke3D) {
             const int viewMode = std::clamp(ui.smoke3DViewMode, 0, 1);
+            const bool simChanged =
+                !smoke3DRenderCache.valid || smoke3DRenderCache.lastSimVersion != smoke3DSimVersion;
             if (viewMode == 1) {
                 const int axis = std::clamp(ui.smoke3DSliceAxis, 0, 2);
                 const int field = std::clamp(ui.smoke3DDebugField, 0, 4);
@@ -1890,18 +1996,43 @@ int main()
                         : std::max(0, smoke3D.nx - 1);
                 ui.smoke3DSliceIndex = std::clamp(ui.smoke3DSliceIndex, 0, maxSlice);
 
-                auto slice = smoke3D.copyDebugSlice(
-                    static_cast<MACSmoke3D::SliceAxis>(axis),
-                    ui.smoke3DSliceIndex,
-                    static_cast<MACSmoke3D::DebugField>(field));
-                smoke3DRenderer.updateSmokeFromSlice(slice.values, slice.solid, slice.width, slice.height, field, rs);
-                smoke3DRenderCache = {};
+                const bool sliceChanged =
+                    !smoke3DRenderCache.valid ||
+                    smoke3DRenderCache.lastViewMode != viewMode ||
+                    smoke3DRenderCache.lastSliceAxis != axis ||
+                    smoke3DRenderCache.lastSliceIndex != ui.smoke3DSliceIndex ||
+                    smoke3DRenderCache.lastDebugField != field;
+
+                bool needUpdate = sliceChanged;
+                if (!needUpdate && simChanged) {
+                    if (!ui.playing || !ui.smoke3DThrottleRendering) {
+                        needUpdate = true;
+                    } else {
+                        const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
+                        needUpdate = (now - smoke3DRenderCache.lastRenderTime) >= interval;
+                    }
+                }
+
+                if (needUpdate) {
+                    auto slice = smoke3D.copyDebugSlice(
+                        static_cast<MACSmoke3D::SliceAxis>(axis),
+                        ui.smoke3DSliceIndex,
+                        static_cast<MACSmoke3D::DebugField>(field));
+                    smoke3DRenderer.updateSmokeFromSlice(slice.values, slice.solid, slice.width, slice.height, field, rs);
+                    smoke3DRenderCache.valid = true;
+                    smoke3DRenderCache.lastRenderTime = now;
+                    smoke3DRenderCache.lastSimVersion = smoke3DSimVersion;
+                    smoke3DRenderCache.lastViewMode = viewMode;
+                    smoke3DRenderCache.lastSliceAxis = axis;
+                    smoke3DRenderCache.lastSliceIndex = ui.smoke3DSliceIndex;
+                    smoke3DRenderCache.lastDebugField = field;
+                }
             } else {
                 const auto target = computeVolumeRenderTargetSize(
                     win,
                     ui.smoke3DViewportWidth,
                     ui.smoke3DViewportHeight,
-                    ui.volumeRenderScale);
+                    effectiveAdaptiveRenderScale(smoke3DRenderCache, ui.volumeRenderScale));
                 const bool sizeChanged =
                     smoke3DRenderer.width() != target.width || smoke3DRenderer.height() != target.height;
                 if (sizeChanged) {
@@ -1917,22 +2048,19 @@ int main()
                     !nearlyEqual(smoke3DRenderCache.lastPitch, ui.smoke3DViewPitchDeg) ||
                     !nearlyEqual(smoke3DRenderCache.lastZoom, ui.smoke3DViewZoom) ||
                     !nearlyEqual(smoke3DRenderCache.lastDensity, ui.smoke3DVolumeDensity);
-                const bool simChanged =
-                    !smoke3DRenderCache.valid || smoke3DRenderCache.lastSimVersion != smoke3DSimVersion;
 
-                bool needUpdate = false;
-                if (!smoke3DRenderCache.valid || sizeChanged || viewChanged) {
-                    needUpdate = true;
-                } else if (!ui.playing) {
-                    needUpdate = true;
-                } else if (!ui.smoke3DThrottleRendering) {
-                    needUpdate = simChanged;
-                } else if (simChanged) {
-                    const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
-                    needUpdate = (now - smoke3DRenderCache.lastRenderTime) >= interval;
+                bool needUpdate = !smoke3DRenderCache.valid || sizeChanged || viewChanged;
+                if (!needUpdate && simChanged) {
+                    if (!ui.playing || !ui.smoke3DThrottleRendering) {
+                        needUpdate = true;
+                    } else {
+                        const double interval = 1.0 / std::max(1.0f, ui.smoke3DRenderFPS);
+                        needUpdate = (now - smoke3DRenderCache.lastRenderTime) >= interval;
+                    }
                 }
 
                 if (needUpdate) {
+                    const double renderStart = glfwGetTime();
                     smoke3DRenderer.updateSmokeFromVolume(
                         smoke3D.smoke,
                         smoke3D.temp,
@@ -1945,12 +2073,19 @@ int main()
                         ui.smoke3DViewZoom,
                         ui.smoke3DVolumeDensity,
                         rs);
+                    const float renderMs = (float)((glfwGetTime() - renderStart) * 1000.0);
+                    updateAdaptiveRenderScale(smoke3DRenderCache,
+                                              renderMs,
+                                              renderBudgetMs(ui.smoke3DThrottleRendering, ui.smoke3DRenderFPS));
                     smoke3DRenderCache.valid = true;
                     smoke3DRenderCache.lastRenderTime = now;
                     smoke3DRenderCache.lastSimVersion = smoke3DSimVersion;
                     smoke3DRenderCache.lastWidth = target.width;
                     smoke3DRenderCache.lastHeight = target.height;
                     smoke3DRenderCache.lastViewMode = viewMode;
+                    smoke3DRenderCache.lastSliceAxis = -1;
+                    smoke3DRenderCache.lastSliceIndex = -1;
+                    smoke3DRenderCache.lastDebugField = -1;
                     smoke3DRenderCache.lastYaw = ui.smoke3DViewYawDeg;
                     smoke3DRenderCache.lastPitch = ui.smoke3DViewPitchDeg;
                     smoke3DRenderCache.lastZoom = ui.smoke3DViewZoom;

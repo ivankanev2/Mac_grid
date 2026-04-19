@@ -11,9 +11,14 @@
 #include <cstdlib>
 #include <vector>
 
+#include <thrust/count.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
+#include <cuda/functional>
+#include <thrust/functional.h>
+#include <thrust/iterator/counting_iterator.h>
 #include <thrust/remove.h>
+#include <thrust/transform_reduce.h>
 
 // Runtime-owned CUDA buffers and cached simulation dimensions.
 struct MACWater3DCudaBackend {
@@ -69,6 +74,8 @@ struct MACWater3DCudaBackend {
     int* d_cellCounts = nullptr;
     int* d_particleCount = nullptr;
     MACWater3D::Particle* d_particles = nullptr;
+
+    bool lastUsedDeviceJacobi = false;
 };
 
 namespace {
@@ -366,21 +373,84 @@ inline void resetPressureStats(MACWater3D& sim) {
     sim.lastPressureIterations = 0;
 }
 
-void applyCudaStats(MACWater3DCudaBackend* backend, MACWater3D& sim, float stepMs) {
-    sim.refreshStats(stepMs);
-    sim.lastStats.cudaEnabled = true;
-    sim.lastStats.backendReady = true;
-    sim.lastStats.backendName = "CUDA MAC 3D";
-    sim.lastStats.bytesAllocated = backendBytesAllocated(backend);
-    sim.lastStats.pressureMs = sim.lastPressureSolveMs;
-    sim.lastStats.pressureIters = sim.lastPressureIterations;
+struct AbsFloat {
+    __host__ __device__ float operator()(float v) const {
+        return fabsf(v);
+    }
+};
+
+struct LiquidCellPredicate {
+    const uint8_t* liquid = nullptr;
+    const uint8_t* solid = nullptr;
+
+    __host__ __device__ bool operator()(int idx) const {
+        return liquid[idx] != 0 && solid[idx] == 0;
+    }
+};
+
+float reduceAbsMaxDevice(const float* data, int count) {
+    if (data == nullptr || count <= 0) return 0.0f;
+    thrust::device_ptr<const float> begin = thrust::device_pointer_cast(data);
+    return thrust::transform_reduce(thrust::device, begin, begin + count,
+                                    AbsFloat(), 0.0f, cuda::maximum<float>());
 }
 
-void applyCudaBridgeStats(MACWater3DCudaBackend* backend, MACWater3D& sim) {
+int readParticleCountHost(MACWater3DCudaBackend* backend) {
+    int particleCount = 0;
+    if (backend != nullptr && backend->d_particleCount != nullptr) {
+        CUDA_CHECK(cudaMemcpy(&particleCount, backend->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
+    }
+    return particleCount;
+}
+
+int countLiquidCellsDevice(const MACWater3DCudaBackend* backend) {
+    if (backend == nullptr || backend->cellCount <= 0) return 0;
+    auto begin = thrust::make_counting_iterator<int>(0);
+    auto end = begin + backend->cellCount;
+    return (int)thrust::count_if(thrust::device, begin, end,
+                                 LiquidCellPredicate{backend->d_liquid, backend->d_solid});
+}
+
+const char* cudaBackendName(const MACWater3DCudaBackend* backend) {
+    if (backend == nullptr) return "CUDA MAC 3D";
+    return backend->lastUsedDeviceJacobi
+        ? "CUDA MAC 3D (device Jacobi)"
+        : "CUDA MAC 3D (CPU pressure bridge)";
+}
+
+void applyCudaStats(MACWater3DCudaBackend* backend, MACWater3D& sim, float stepMs) {
+    const int particleCount = readParticleCountHost(backend);
+    const float maxU = reduceAbsMaxDevice(backend->d_u, backend->uCount);
+    const float maxV = reduceAbsMaxDevice(backend->d_v, backend->vCount);
+    const float maxW = reduceAbsMaxDevice(backend->d_w, backend->wCount);
+    const float maxDiv = reduceAbsMaxDevice(backend->d_divergence, backend->cellCount);
+    const int liquidCells = countLiquidCellsDevice(backend);
+
+    sim.targetMass = (float)particleCount;
+    if (sim.desiredMass < 0.0f && sim.targetMass > 0.0f) {
+        sim.desiredMass = sim.targetMass;
+    }
+    sim.derivedFieldsDirty = false;
+
     sim.lastStats.cudaEnabled = true;
     sim.lastStats.backendReady = true;
-    sim.lastStats.backendName = "CUDA bridge (CPU parity)";
+    sim.lastStats.nx = sim.nx;
+    sim.lastStats.ny = sim.ny;
+    sim.lastStats.nz = sim.nz;
+    sim.lastStats.particleCount = particleCount;
+    sim.lastStats.liquidCells = liquidCells;
+    sim.lastStats.maxSpeed = std::max(maxU, std::max(maxV, maxW));
+    sim.lastStats.maxDivergence = maxDiv;
+    sim.lastStats.dt = sim.dt;
+    sim.lastStats.lastStepMs = stepMs;
+    sim.lastStats.pressureMs = sim.lastPressureSolveMs;
+    sim.lastStats.pressureIters = sim.lastPressureIterations;
+    sim.lastStats.targetMass = sim.targetMass;
+    sim.lastStats.desiredMass = sim.desiredMass;
+    sim.lastStats.backendName = cudaBackendName(backend);
     sim.lastStats.bytesAllocated = backendBytesAllocated(backend);
+    sim.lastStats.timings.reset();
+    sim.lastStats.timings.totalMs = stepMs;
 }
 
 void ensureParticleCapacity(MACWater3DCudaBackend* b, int requested) {
@@ -1802,6 +1872,45 @@ void downloadDeviceStateToHost(MACWater3DCudaBackend* b, MACWater3D& sim) {
     }
 }
 
+void downloadVelocityStateToHost(MACWater3DCudaBackend* b, MACWater3D& sim) {
+    CUDA_CHECK(cudaMemcpy(sim.u.data(), b->d_u, (std::size_t)b->uCount * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(sim.v.data(), b->d_v, (std::size_t)b->vCount * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(sim.w.data(), b->d_w, (std::size_t)b->wCount * sizeof(float), cudaMemcpyDeviceToHost));
+}
+
+void downloadVolumeStateToHost(MACWater3DCudaBackend* b, MACWater3D& sim) {
+    CUDA_CHECK(cudaMemcpy(sim.water.data(), b->d_water, (std::size_t)b->cellCount * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(sim.solid.data(), b->d_solid, (std::size_t)b->cellCount * sizeof(uint8_t), cudaMemcpyDeviceToHost));
+}
+
+void downloadPressureStateToHost(MACWater3DCudaBackend* b, MACWater3D& sim) {
+    CUDA_CHECK(cudaMemcpy(sim.pressure.data(), b->d_pressure, (std::size_t)b->cellCount * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(sim.rhs.data(), b->d_rhs, (std::size_t)b->cellCount * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(sim.solid.data(), b->d_solid, (std::size_t)b->cellCount * sizeof(uint8_t), cudaMemcpyDeviceToHost));
+}
+
+void downloadDerivedStateToHost(MACWater3DCudaBackend* b, MACWater3D& sim) {
+    CUDA_CHECK(cudaMemcpy(sim.divergence.data(), b->d_divergence, (std::size_t)b->cellCount * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(sim.speed.data(), b->d_speed, (std::size_t)b->cellCount * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(sim.solid.data(), b->d_solid, (std::size_t)b->cellCount * sizeof(uint8_t), cudaMemcpyDeviceToHost));
+}
+
+void downloadParticlesToHost(MACWater3DCudaBackend* b, MACWater3D& sim) {
+    int particleCount = 0;
+    CUDA_CHECK(cudaMemcpy(&particleCount, b->d_particleCount, sizeof(int), cudaMemcpyDeviceToHost));
+    sim.particles.resize((std::size_t)particleCount);
+    if (particleCount > 0) {
+        CUDA_CHECK(cudaMemcpy(sim.particles.data(), b->d_particles,
+                              (std::size_t)particleCount * sizeof(MACWater3D::Particle),
+                              cudaMemcpyDeviceToHost));
+    }
+
+    sim.targetMass = (float)particleCount;
+    if (sim.desiredMass < 0.0f && sim.targetMass > 0.0f) {
+        sim.desiredMass = sim.targetMass;
+    }
+}
+
 // Temporary narrow host bridge for pressure projection parity.
 // Keep the CPU multigrid path intact for now, but only move the state that the
 // CPU projection actually consumes and produces instead of round-tripping the
@@ -1854,6 +1963,50 @@ void uploadRelaxBridgeOutputsToDevice(MACWater3DCudaBackend* b, const MACWater3D
                               (std::size_t)particleCount * sizeof(MACWater3D::Particle),
                               cudaMemcpyHostToDevice));
     }
+}
+
+void runCudaPressureJacobi(MACWater3DCudaBackend* b, MACWater3D& sim) {
+    const auto solveStart = std::chrono::high_resolution_clock::now();
+
+    const int pressureIters = std::max(1, b->params.pressureIters);
+    const float dxSafe = std::max(1.0e-6f, b->dx);
+    const float dtSafe = std::max(1.0e-6f, b->dt);
+    const float invDx = 1.0f / dxSafe;
+    const float invDt = 1.0f / dtSafe;
+    const float dx2 = dxSafe * dxSafe;
+    const float omega = clampf3D(b->params.pressureOmega, 0.0f, 1.0f);
+
+    fillKernel<float><<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(b->d_rhs, b->cellCount, 0.0f);
+    buildPressureRhsKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
+        b->d_u, b->d_v, b->d_w,
+        b->d_solid, b->d_liquid,
+        b->d_rhs, b->nx, b->ny, b->nz, invDx, invDt);
+
+    for (int it = 0; it < pressureIters; ++it) {
+        pressureJacobiKernel<<<(b->cellCount + kThreads - 1) / kThreads, kThreads>>>(
+            b->d_pressure, b->d_pressureTmp, b->d_rhs,
+            b->d_solid, b->d_liquid,
+            b->nx, b->ny, b->nz, dx2, omega, b->params.openTop);
+        std::swap(b->d_pressure, b->d_pressureTmp);
+    }
+
+    const float scale = dtSafe / dxSafe;
+    applyPressureUKernel<<<(b->uCount + kThreads - 1) / kThreads, kThreads>>>(
+        b->d_u, b->d_pressure, b->d_solid, b->d_liquid,
+        b->nx, b->ny, b->nz, scale);
+    applyPressureVKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(
+        b->d_v, b->d_pressure, b->d_solid, b->d_liquid,
+        b->nx, b->ny, b->nz, scale, b->params.openTop);
+    applyPressureWKernel<<<(b->wCount + kThreads - 1) / kThreads, kThreads>>>(
+        b->d_w, b->d_pressure, b->d_solid, b->d_liquid,
+        b->nx, b->ny, b->nz, scale);
+    launchApplyBoundary(b);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    const auto solveEnd = std::chrono::high_resolution_clock::now();
+    sim.lastPressureSolveMs = std::chrono::duration<float, std::milli>(solveEnd - solveStart).count();
+    sim.lastPressureIterations = pressureIters;
+    b->lastUsedDeviceJacobi = true;
 }
 
 void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
@@ -1946,10 +2099,16 @@ void runCudaStepInternal(MACWater3DCudaBackend* b, MACWater3D& sim) {
     copyKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(b->d_v, b->d_vPrev, b->vCount);
     copyKernel<<<(b->wCount + kThreads - 1) / kThreads, kThreads>>>(b->d_w, b->d_wPrev, b->wCount);
 
-    CUDA_CHECK(cudaDeviceSynchronize());
-    downloadPressureBridgeInputsToHost(b, sim);
-    sim.projectLiquidForCudaBridge();
-    uploadPressureBridgeOutputsToDevice(b, sim);
+    if (static_cast<MACWater3D::PressureSolverMode>(b->params.pressureSolverMode) ==
+        MACWater3D::PressureSolverMode::Jacobi) {
+        runCudaPressureJacobi(b, sim);
+    } else {
+        CUDA_CHECK(cudaDeviceSynchronize());
+        downloadPressureBridgeInputsToHost(b, sim);
+        sim.projectLiquidForCudaBridge();
+        uploadPressureBridgeOutputsToDevice(b, sim);
+        b->lastUsedDeviceJacobi = false;
+    }
 
     computeDeltaKernel<<<(b->uCount + kThreads - 1) / kThreads, kThreads>>>(b->d_u, b->d_uPrev, b->d_uDelta, b->uCount);
     computeDeltaKernel<<<(b->vCount + kThreads - 1) / kThreads, kThreads>>>(b->d_v, b->d_vPrev, b->d_vDelta, b->vCount);
@@ -2058,14 +2217,15 @@ void water3dCudaReset(MACWater3DCudaBackend* backend, MACWater3D& sim) {
     ensureAllocatedForSim(backend, sim);
     uploadHostStateToDevice(backend, sim);
     CUDA_CHECK(cudaDeviceSynchronize());
-    downloadDeviceStateToHost(backend, sim);
     resetPressureStats(sim);
     applyCudaStats(backend, sim, 0.0f);
 }
 
 void water3dCudaSetParams(MACWater3DCudaBackend* backend, MACWater3D& sim) {
+    ensureAllocatedForSim(backend, sim);
+    backend->dx = sim.dx;
+    backend->dt = sim.dt;
     backend->params = sim.params;
-    uploadHostStateToDevice(backend, sim);
     rebuildSolidsKernel<<<(backend->cellCount + kThreads - 1) / kThreads, kThreads>>>(
         backend->d_solidUser, backend->d_solid, backend->nx, backend->ny, backend->nz,
         clampi3D(backend->params.borderThickness, 1, std::max(1, std::min({backend->nx, backend->ny, backend->nz}) / 2 - 1)),
@@ -2085,7 +2245,6 @@ void water3dCudaSetParams(MACWater3DCudaBackend* backend, MACWater3D& sim) {
     launchApplyBoundary(backend);
     launchRasterize(backend);
     CUDA_CHECK(cudaDeviceSynchronize());
-    downloadDeviceStateToHost(backend, sim);
     resetPressureStats(sim);
     applyCudaStats(backend, sim, 0.0f);
 }
@@ -2156,7 +2315,6 @@ void water3dCudaAddWaterSourceSphere(MACWater3DCudaBackend* backend, MACWater3D&
     launchBuildLiquid(backend, true);
     launchRasterize(backend);
     CUDA_CHECK(cudaDeviceSynchronize());
-    downloadDeviceStateToHost(backend, sim);
     resetPressureStats(sim);
     applyCudaStats(backend, sim, 0.0f);
 }
@@ -2166,10 +2324,37 @@ void water3dCudaStep(MACWater3DCudaBackend* backend, MACWater3D& sim) {
     ++sim.stepCounter;
     resetPressureStats(sim);
     runCudaStepInternal(backend, sim);
-    downloadDeviceStateToHost(backend, sim);
     const auto end = std::chrono::high_resolution_clock::now();
     const float stepMs = std::chrono::duration<float, std::milli>(end - start).count();
     applyCudaStats(backend, sim, stepMs);
+}
+
+void water3dCudaDownloadHostAll(MACWater3DCudaBackend* backend, MACWater3D& sim) {
+    downloadDeviceStateToHost(backend, sim);
+}
+
+void water3dCudaDownloadHostVolume(MACWater3DCudaBackend* backend, MACWater3D& sim) {
+    downloadVolumeStateToHost(backend, sim);
+}
+
+void water3dCudaDownloadHostParticles(MACWater3DCudaBackend* backend, MACWater3D& sim) {
+    downloadParticlesToHost(backend, sim);
+}
+
+void water3dCudaDownloadHostDebugField(MACWater3DCudaBackend* backend, MACWater3D& sim,
+                                       MACWater3D::DebugField field) {
+    switch (field) {
+        case MACWater3D::DebugField::Water:
+            downloadVolumeStateToHost(backend, sim);
+            break;
+        case MACWater3D::DebugField::Pressure:
+            downloadPressureStateToHost(backend, sim);
+            break;
+        case MACWater3D::DebugField::Divergence:
+        case MACWater3D::DebugField::Speed:
+            downloadDerivedStateToHost(backend, sim);
+            break;
+    }
 }
 
 #endif

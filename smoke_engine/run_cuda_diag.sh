@@ -14,5 +14,14 @@ cmake -S . -B "$BUILD_DIR" \
   -DSMOKE_ENABLE_CUDA=ON \
   -DSMOKE_ENABLE_VERBOSE_DIAGNOSTICS=ON \
   "$@"
-cmake --build "$BUILD_DIR" -j"$JOBS"
-"./$BUILD_DIR/SmokeEngine"
+cmake --build "$BUILD_DIR" --config Release -j"$JOBS"
+if [ -f "./$BUILD_DIR/Release/SmokeEngine.exe" ]; then
+  "./$BUILD_DIR/Release/SmokeEngine.exe"
+elif [ -f "./$BUILD_DIR/SmokeEngine.exe" ]; then
+  "./$BUILD_DIR/SmokeEngine.exe"
+elif [ -f "./$BUILD_DIR/Debug/SmokeEngine.exe" ]; then
+  echo "run_cuda_diag.sh: warning: Release executable not found; running Debug build." >&2
+  "./$BUILD_DIR/Debug/SmokeEngine.exe"
+else
+  "./$BUILD_DIR/SmokeEngine"
+fi
