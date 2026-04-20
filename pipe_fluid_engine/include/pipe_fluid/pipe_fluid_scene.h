@@ -51,6 +51,7 @@ struct MACWater3D;            // smoke_engine/Sim/mac_water3d.h
 namespace pipe_fluid {
 
 struct PipeBoundaryField;      // pipe_fluid/pipe_boundary_field.h
+struct PipeSolverBoundaryData; // pipe_fluid/pipe_solver_boundary_data.h
 
 class PipeFluidScene {
 public:
@@ -170,6 +171,7 @@ public:
     // the per-voxel density quantisation artefacts that make the voxel path
     // look blocky at pipe scale.  Rebuilt once at the end of every step().
     const PipeBoundaryField& boundaryField() const;
+    const PipeSolverBoundaryData& solverBoundary() const;
     const std::vector<float>& waterSDF() const;
     float waterSdfBand() const;
     const std::vector<float>& pipeWallSDF() const;

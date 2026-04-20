@@ -1,6 +1,7 @@
 #include "pipe_fluid/pipe_fluid_scene.h"
 #include "pipe_fluid/pipe_boundary_field.h"
 #include "pipe_fluid/pipe_solid_adapter.h"
+#include "pipe_fluid/pipe_solver_boundary_data.h"
 #include "pipe_fluid/blueprint_loader.h"
 
 #include "vec3.h"               // pipe_engine/Geometry
@@ -45,27 +46,41 @@ inline void buildOrthoBasis(const Vec3& dir, Vec3& u, Vec3& v) {
         return;
     }
     d.x /= len; d.y /= len; d.z /= len;
+
+    // Pick any reference axis not parallel to d.
     Vec3 ref = (std::fabs(d.y) < 0.9f) ? Vec3{0.f,1.f,0.f} : Vec3{1.f,0.f,0.f};
-    // u = normalize(cross(d, ref))
-    u = Vec3{ d.y*ref.z - d.z*ref.y,
-             d.z*ref.x - d.x*ref.z,
-             d.x*ref.y - d.y*ref.x };
+
+    // u = normalize(d x ref)
+    u = Vec3{
+        d.y*ref.z - d.z*ref.y,
+        d.z*ref.x - d.x*ref.z,
+        d.x*ref.y - d.y*ref.x
+    };
     float ul = std::sqrt(u.x*u.x + u.y*u.y + u.z*u.z);
-    if (ul < 1e-6f) { u = Vec3{1.f,0.f,0.f}; } else { u.x/=ul; u.y/=ul; u.z/=ul; }
-    // v = cross(d, u)
-    v = Vec3{ d.y*u.z - d.z*u.y,
-             d.z*u.x - d.x*u.z,
-             d.x*u.y - d.y*u.x };
+    if (ul < 1e-6f) {
+        u = Vec3{1.f, 0.f, 0.f};
+    } else {
+        u.x /= ul; u.y /= ul; u.z /= ul;
+    }
+
+    // v = d x u
+    v = Vec3{
+        d.y*u.z - d.z*u.y,
+        d.z*u.x - d.x*u.z,
+        d.x*u.y - d.y*u.x
+    };
 }
 }
 
 struct PipeFluidScene::Impl {
     Config cfg;
 
-    PipeNetwork network;
-    VoxelGrid   voxels;
-    TriMesh     mesh;
+    PipeNetwork   network;
+    VoxelGrid     voxels;
+    TriMesh       mesh;
     PipeBoundaryField boundary;
+    PipeSolverBoundaryData solverBoundary;
+
     // Both fluids use a "wall-only" mask: only the pipe MATERIAL (Solid)
     // blocks the sim.  Fluid, Opening and Air are all passable.  The open
     // Air pad around the pipe acts as an open sink for smoke and a free-
@@ -157,10 +172,12 @@ void PipeFluidScene::rebuild() {
     voxer.gravityPadding = p_->cfg.grid.gravityPadding;
     p_->voxels = voxer.voxelize(p_->network);
 
-    // 2. Build the canonical boundary field, then derive simulator masks from it.
+    // 2. Build the canonical boundary field, then derive solver-facing
+    //    boundary data and legacy simulator masks from it.
     p_->boundary = buildPipeBoundaryField(p_->network, p_->voxels);
-    pipeBoundaryFieldToSolidMask(p_->boundary, p_->smokeMask);
-    pipeBoundaryFieldToWaterSolidMask(p_->boundary, p_->waterMask);
+    p_->solverBoundary = buildSolverBoundaryData(p_->boundary);
+    p_->smokeMask = p_->solverBoundary.solidMask;
+    p_->waterMask = p_->solverBoundary.waterSolidMask;
 
     // 3. Regenerate the render mesh.
     MeshGenerator mg;
@@ -527,6 +544,10 @@ const MACWater3D* PipeFluidScene::water() const { return p_->water.get(); }
 
 const PipeBoundaryField& PipeFluidScene::boundaryField() const {
     return p_->boundary;
+}
+
+const PipeSolverBoundaryData& PipeFluidScene::solverBoundary() const {
+    return p_->solverBoundary;
 }
 
 const std::vector<float>& PipeFluidScene::waterSDF() const {

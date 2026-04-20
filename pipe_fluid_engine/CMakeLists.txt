@@ -34,6 +34,7 @@ add_library(pipe_fluid_core STATIC
     src/pipe_fluid_scene.cpp
     src/pipe_boundary_field.cpp
     src/pipe_solid_adapter.cpp
+    src/pipe_solver_boundary_data.cpp
     src/blueprint_loader.cpp
 )
 
