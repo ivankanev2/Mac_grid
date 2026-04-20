@@ -7,14 +7,14 @@ project(PipeFluidEngine CXX)
 #
 # Layout expected at build time:
 #   <project_root>/pipe_engine        (sibling, header-only library "pipe_core")
-#   <project_root>/smoke_engine       (sibling, contains Sim/*.cpp sources)
+#   <project_root>/smoke_engine       (sibling, provides smoke_sim target)
 #   <project_root>/pipe_fluid_engine  (this folder)
 #
 # What this file builds:
 #   pipe_fluid_core      (static lib) — scene, voxel->solid adapter, loader
-#   pipe_fluid_sim_lib   (static lib) — selected smoke_engine Sim sources,
-#                                        compiled here so we can link them.
+#   pipe_fluid_render    (static lib) — GUI/OpenGL overlay rendering
 #   PipeFluidEngine      (executable) — GLFW/OpenGL/ImGui viewer
+#   PipeFluidRegression  (executable) — headless regression harness
 # ============================================================================
 
 set(CMAKE_CXX_STANDARD 17)
@@ -23,6 +23,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PIPEFLUID_BUILD_GUI "Build the PipeFluidEngine GUI viewer" ON)
+option(PIPEFLUID_BUILD_REGRESSION "Build the PipeFluidRegression headless tool" ON)
 
 # ---- Locate sibling projects -----------------------------------------------
 set(PIPE_ENGINE_ROOT  "${CMAKE_CURRENT_SOURCE_DIR}/../pipe_engine"
@@ -33,48 +34,23 @@ set(SMOKE_ENGINE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../smoke_engine"
 if(NOT EXISTS "${PIPE_ENGINE_ROOT}/Geometry/pipe_network.h")
     message(FATAL_ERROR "pipe_engine not found at ${PIPE_ENGINE_ROOT}")
 endif()
-if(NOT EXISTS "${SMOKE_ENGINE_ROOT}/Sim/mac_smoke3d.h")
+if(NOT EXISTS "${SMOKE_ENGINE_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR "smoke_engine not found at ${SMOKE_ENGINE_ROOT}")
 endif()
 
-# ---- pipe_fluid_sim_lib: minimal slice of smoke_engine we need -------------
-# We compile exactly the sim sources required for 3D smoke + water. No UI,
-# no renderer, no 2D couplings.
-set(_SMOKE_SOURCES
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_grid_core.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke_sim_advection.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke_sim_boundaries.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke_sim_core.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke_sim_forces.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke_sim_pipe.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke_sim_pressure.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke_sim_sampling.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/pressure_solver.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/pressure_solver3d.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_water_sim.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_water3d.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_smoke3d.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/mac_coupled_sim.cpp
-    ${SMOKE_ENGINE_ROOT}/Sim/text_mask.cpp
-)
+# ---- smoke_engine: build/link the real sim target --------------------------
+set(SMOKE_BUILD_GUI OFF CACHE BOOL "Build smoke_engine GUI while embedded in pipe_fluid_engine" FORCE)
+set(SMOKE_BUILD_TOOLS OFF CACHE BOOL "Build smoke_engine tools while embedded in pipe_fluid_engine" FORCE)
+add_subdirectory(${SMOKE_ENGINE_ROOT} ${CMAKE_BINARY_DIR}/smoke_engine_build EXCLUDE_FROM_ALL)
 
-add_library(pipe_fluid_sim_lib STATIC ${_SMOKE_SOURCES})
-target_include_directories(pipe_fluid_sim_lib PUBLIC
-    ${SMOKE_ENGINE_ROOT}
-    ${SMOKE_ENGINE_ROOT}/Sim
-    ${SMOKE_ENGINE_ROOT}/external/stb
-)
-target_compile_definitions(pipe_fluid_sim_lib PUBLIC
-    SMOKE_ENABLE_CUDA=0
-    SMOKE_ENABLE_VERBOSE_DIAGNOSTICS=0
-)
-if(MSVC)
-    target_compile_options(pipe_fluid_sim_lib PRIVATE /Zc:preprocessor)
+if(NOT TARGET smoke_sim)
+    message(FATAL_ERROR "smoke_engine did not provide the expected smoke_sim target")
 endif()
 
 # ---- pipe_fluid_core: the integration library (no OpenGL) ------------------
 add_library(pipe_fluid_core STATIC
     src/pipe_fluid_scene.cpp
+    src/pipe_boundary_field.cpp
     src/pipe_solid_adapter.cpp
     src/blueprint_loader.cpp
 )
@@ -85,7 +61,7 @@ target_include_directories(pipe_fluid_core PUBLIC
     ${PIPE_ENGINE_ROOT}/Blueprint
     ${PIPE_ENGINE_ROOT}/Voxelizer
 )
-target_link_libraries(pipe_fluid_core PUBLIC pipe_fluid_sim_lib)
+target_link_libraries(pipe_fluid_core PUBLIC smoke_sim)
 
 if(APPLE)
     target_compile_definitions(pipe_fluid_core PRIVATE GL_SILENCE_DEPRECATION)
@@ -111,6 +87,19 @@ if(PIPEFLUID_BUILD_GUI)
     if(APPLE)
         target_compile_definitions(pipe_fluid_render PRIVATE GL_SILENCE_DEPRECATION)
     endif()
+endif()
+
+# ============================================================================
+# Regression harness
+# ============================================================================
+set(PIPEFLUID_REGRESSION_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/tools/pipe_fluid_regression.cpp)
+if(PIPEFLUID_BUILD_REGRESSION AND EXISTS ${PIPEFLUID_REGRESSION_SOURCE})
+    add_executable(PipeFluidRegression
+        ${PIPEFLUID_REGRESSION_SOURCE}
+    )
+    target_link_libraries(PipeFluidRegression PRIVATE pipe_fluid_core)
+elseif(PIPEFLUID_BUILD_REGRESSION)
+    message(STATUS "[PipeFluidEngine] PIPEFLUID_BUILD_REGRESSION is ON but tools/pipe_fluid_regression.cpp is not present; skipping PipeFluidRegression target")
 endif()
 
 # ============================================================================

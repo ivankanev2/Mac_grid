@@ -1,5 +1,6 @@
 #include "pipe_fluid/pipe_fluid_scene.h"
 #include "pipe_fluid/pipe_solid_adapter.h"
+#include "pipe_fluid/pipe_boundary_field.h"
 #include "pipe_fluid/blueprint_loader.h"
 
 #include "vec3.h"               // pipe_engine/Geometry
@@ -9,6 +10,7 @@
 
 #include "mac_smoke3d.h"        // smoke_engine/Sim
 #include "mac_water3d.h"        // smoke_engine/Sim
+#include "smoke_profiles.h"     // smoke_engine/Sim shared config helpers
 
 #include <algorithm>
 #include <cmath>
@@ -64,14 +66,16 @@ struct PipeFluidScene::Impl {
     PipeNetwork network;
     VoxelGrid   voxels;
     TriMesh     mesh;
-    // Both fluids use a "wall-only" mask: only the pipe MATERIAL (Solid)
-    // blocks the sim.  Fluid, Opening and Air are all passable.  The open
-    // Air pad around the pipe acts as an open sink for smoke and a free-
-    // fall basin for water exiting the pipe mouth.  The grid borders are
-    // re-sealed each step by MACWater3D::rebuildBorderSolids(), so the
-    // domain stays closed even though the interior Air is permeable.
-    std::vector<uint8_t> smokeMask;   // nx*ny*nz: Solid->1, Air/Fluid->0
-    std::vector<uint8_t> waterMask;   // nx*ny*nz: Solid->1, Air/Fluid/Opening->0
+    // Canonical boundary representation built during rebuild(). All solver
+    // masks and future wall queries derive from this object rather than from
+    // the VoxelGrid directly.
+    PipeBoundaryField boundary;
+
+    // Both fluids currently use a walls-only mask derived from the canonical
+    // boundary field: only pipe wall material blocks the sim. Interior,
+    // Opening and Exterior are passable.
+    std::vector<uint8_t> smokeMask;
+    std::vector<uint8_t> waterMask;
 
     std::unique_ptr<MACSmoke3D> smoke;
     std::unique_ptr<MACWater3D> water;
@@ -89,8 +93,8 @@ struct PipeFluidScene::Impl {
 
 PipeFluidScene::PipeFluidScene(const Config& cfg) : p_(std::make_unique<Impl>()) {
     p_->cfg = cfg;
-    p_->network.defaultInnerRadius = cfg.defaultInnerRadius;
-    p_->network.defaultOuterRadius = cfg.defaultOuterRadius;
+    p_->network.defaultInnerRadius = cfg.geometry.defaultInnerRadius;
+    p_->network.defaultOuterRadius = cfg.geometry.defaultOuterRadius;
 }
 
 PipeFluidScene::~PipeFluidScene() = default;
@@ -127,8 +131,8 @@ void PipeFluidScene::clearNetwork() {
     // cleanly.  Without this, the voxelizer's openEnds() method would still
     // see the previous chains' endpoints and try to carve them.
     p_->network.clear();
-    p_->network.defaultInnerRadius = p_->cfg.defaultInnerRadius;
-    p_->network.defaultOuterRadius = p_->cfg.defaultOuterRadius;
+    p_->network.defaultInnerRadius = p_->cfg.geometry.defaultInnerRadius;
+    p_->network.defaultOuterRadius = p_->cfg.geometry.defaultOuterRadius;
     p_->geometryDirty = true;
 }
 
@@ -150,19 +154,18 @@ bool PipeFluidScene::loadBlueprint(const std::string& path, std::string* errorOu
 void PipeFluidScene::rebuild() {
     // 1. Voxelize the pipe network into a VoxelGrid sized by the pipe bbox.
     PipeVoxelizer voxer;
-    voxer.cellSize       = p_->cfg.cellSize;
-    voxer.padding        = p_->cfg.padding;
-    voxer.gravityPadding = p_->cfg.gravityPadding;
+    voxer.cellSize       = p_->cfg.grid.cellSize;
+    voxer.padding        = p_->cfg.grid.padding;
+    voxer.gravityPadding = p_->cfg.grid.gravityPadding;
     p_->voxels = voxer.voxelize(p_->network);
 
-    // 2. Build both simulator-order solid masks.
-    //    - smokeMask: walls only, so smoke can vent past the open pipe ends.
-    //    - waterMask: walls only too.  Air cells are passable so water that
-    //      exits the pipe mouth falls through the gravity-side splash basin
-    //      under gravity.  The sealed grid borders (rebuildBorderSolids)
-    //      still contain the fluid within the domain.
-    voxelGridToSolidMask(p_->voxels, p_->smokeMask);
-    voxelGridToWaterSolidMask(p_->voxels, p_->waterMask);
+    // 2. Build the canonical boundary representation, then derive both
+    //    simulator-order solid masks from it. This keeps boundary semantics
+    //    in one place even though the underlying construction still starts
+    //    from the voxelizer in the current migration step.
+    p_->boundary = buildPipeBoundaryField(p_->network, p_->voxels);
+    pipeBoundaryFieldToSolidMask(p_->boundary, p_->smokeMask);
+    pipeBoundaryFieldToWaterSolidMask(p_->boundary, p_->waterMask);
 
     // 3. Regenerate the render mesh.
     MeshGenerator mg;
@@ -175,9 +178,9 @@ void PipeFluidScene::rebuild() {
     const int NY = p_->voxels.ny;
     const int NZ = p_->voxels.nz;
     const float DX = p_->voxels.dx;
-    const float DT = (p_->cfg.dt > 0.f) ? p_->cfg.dt : 1.0f / 60.0f;
+    const float DT = (p_->cfg.sim.dt > 0.f) ? p_->cfg.sim.dt : 1.0f / 60.0f;
 
-    if (p_->cfg.enableSmoke) {
+    if (p_->cfg.sim.enableSmoke) {
         if (!p_->smoke) {
             p_->smoke = std::make_unique<MACSmoke3D>(NX, NY, NZ, DX, DT);
         } else {
@@ -188,7 +191,7 @@ void PipeFluidScene::rebuild() {
         p_->smoke.reset();
     }
 
-    if (p_->cfg.enableWater) {
+    if (p_->cfg.sim.enableWater) {
         if (!p_->water) {
             p_->water = std::make_unique<MACWater3D>(NX, NY, NZ, DX, DT);
         } else {
@@ -234,27 +237,13 @@ void PipeFluidScene::rebuild() {
         // volume-preservation work that keeps particles evenly spaced
         // would otherwise run at the raw defaults, which show up as
         // clumping in a narrow pipe).
-        auto wParams = p_->water->params;
-        wParams.particlesPerCell       = std::max(wParams.particlesPerCell, 8);
-        wParams.flipBlend              = 0.95f;
-        wParams.borderThickness        = 1;
-        wParams.openTop                = false;
-        wParams.useAPIC                = true;
-        wParams.pressureSolverMode     = (int)MACWater3D::PressureSolverMode::Multigrid;
-        wParams.pressureIters          = std::max(wParams.pressureIters, 200);
-        wParams.pressureMGVCycles      = std::max(wParams.pressureMGVCycles, 50);
-        wParams.pressureMGCoarseIters  = std::max(wParams.pressureMGCoarseIters, 40);
-        wParams.reseedRelaxIters       = std::max(wParams.reseedRelaxIters, 2);
-        wParams.reseedRelaxStrength    = 0.45f;
-        wParams.volumePreserveRhsMean  = true;
-        wParams.volumePreserveStrength = 0.05f;
-        p_->water->setParams(wParams);
+        smoke::applyPipeWater3DConfig(*p_->water, p_->cfg.sim.waterConfig);
         applySolidsToWater(*p_->water, p_->waterMask);
 
         // Pre-size the SDF to the new grid dimensions, initialised to
         // "far from water" (+band) so a first-frame render before any
         // step() returns a fully-transparent water pass.
-        const float initBand = 3.0f * p_->voxels.dx;
+        const float initBand = std::max(0.0f, p_->cfg.waterSurface.bandCells) * p_->voxels.dx;
         p_->waterSdf.assign(
             (std::size_t)NX * (std::size_t)NY * (std::size_t)NZ, initBand);
         p_->waterSdfBand = initBand;
@@ -286,6 +275,8 @@ namespace {
 // bounding box in cells.  With particleR ~= 1.1*dx the per-particle footprint
 // is at most 3x3x3 cells = 27 updates — cheap even for 500k particles.
 void buildLiquidSdfFromParticles(const MACWater3D& water,
+                                 float particleRadiusScale,
+                                 float bandCells,
                                  std::vector<float>& out,
                                  float& bandOut) {
     const int nx = water.nx;
@@ -302,11 +293,11 @@ void buildLiquidSdfFromParticles(const MACWater3D& water,
     // between adjacent particles; too large -> water looks like it fills
     // the pipe whether or not it does.  1.1*dx gives ~10% overlap between
     // neighbouring cells of particles, which fuses them smoothly.
-    const float particleR = 1.1f * dx;
+    const float particleR = std::max(0.0f, particleRadiusScale) * dx;
     // Narrow band: enough to give the sphere-tracer a meaningful step size
     // several cells outside the surface without consuming memory on a
     // full-grid SDF.
-    const float band      = 3.0f * dx;
+    const float band      = std::max(0.0f, bandCells) * dx;
     bandOut = band;
 
     const std::size_t total = (std::size_t)nx * (std::size_t)ny * (std::size_t)nz;
@@ -367,7 +358,7 @@ void buildLiquidSdfFromParticles(const MACWater3D& water,
 
 void PipeFluidScene::step(float dtOverride) {
     if (p_->geometryDirty) rebuild();
-    const float dt = (dtOverride > 0.f) ? dtOverride : p_->cfg.dt;
+    const float dt = (dtOverride > 0.f) ? dtOverride : p_->cfg.sim.dt;
     if (p_->smoke) {
         if (dt > 0.f) p_->smoke->setDt(dt);
         p_->smoke->step();
@@ -380,7 +371,10 @@ void PipeFluidScene::step(float dtOverride) {
         // volume-integrating a per-cell density field.  This is the bridge
         // that eliminates the blocky-cube look: SDF gives a continuous
         // isosurface independent of the cell resolution.
-        buildLiquidSdfFromParticles(*p_->water, p_->waterSdf, p_->waterSdfBand);
+        buildLiquidSdfFromParticles(*p_->water,
+                                   p_->cfg.waterSurface.particleRadiusScale,
+                                   p_->cfg.waterSurface.bandCells,
+                                   p_->waterSdf, p_->waterSdfBand);
     }
 }
 
@@ -522,22 +516,31 @@ const MACSmoke3D* PipeFluidScene::smoke() const { return p_->smoke.get(); }
 MACWater3D* PipeFluidScene::water() { return p_->water.get(); }
 const MACWater3D* PipeFluidScene::water() const { return p_->water.get(); }
 
+const PipeBoundaryField& PipeFluidScene::boundaryField() const {
+    return p_->boundary;
+}
+
 const std::vector<float>& PipeFluidScene::waterSDF() const {
     return p_->waterSdf;
 }
 
+const std::vector<float>& PipeFluidScene::pipeWallSDF() const {
+    return p_->boundary.wallSdf;
+}
+
 const std::vector<uint8_t>& PipeFluidScene::renderSolidMask() const {
-    // Always use the walls-only mask for rendering.  The water solver seals
-    // only the outermost simulation-domain border internally; the renderer
-    // should not treat that temporary border sealing as real pipe geometry.
-    return p_->smokeMask;
+    // Always use the canonical walls-only mask for rendering. The water solver
+    // seals only the outermost simulation-domain border internally; the
+    // renderer should not treat that temporary border sealing as real pipe
+    // geometry.
+    return p_->boundary.wallMask;
 }
 
 const PipeFluidScene::Config& PipeFluidScene::config() const { return p_->cfg; }
 void PipeFluidScene::setConfig(const Config& c) {
     p_->cfg = c;
-    p_->network.defaultInnerRadius = c.defaultInnerRadius;
-    p_->network.defaultOuterRadius = c.defaultOuterRadius;
+    p_->network.defaultInnerRadius = c.geometry.defaultInnerRadius;
+    p_->network.defaultOuterRadius = c.geometry.defaultOuterRadius;
     p_->geometryDirty = true;
 }
 
@@ -545,6 +548,7 @@ int   PipeFluidScene::nx() const { return p_->voxels.nx; }
 int   PipeFluidScene::ny() const { return p_->voxels.ny; }
 int   PipeFluidScene::nz() const { return p_->voxels.nz; }
 float PipeFluidScene::cellSize() const { return p_->voxels.dx; }
+float PipeFluidScene::waterSdfBand() const { return p_->waterSdfBand; }
 
 PipeFluidScene::Stats PipeFluidScene::stats() const {
     Stats s;

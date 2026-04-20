@@ -2,41 +2,40 @@
 // ============================================================================
 // pipe_solid_adapter
 //
-// Translates a pipe_engine VoxelGrid (Air=0, Fluid=1, Solid=2) into the
-// uint8_t (0=fluid, !=0=solid) mask expected by MACSmoke3D::setVoxelSolids
-// and MACWater3D::setVoxelSolids.
+// Translates the canonical PipeBoundaryField into the uint8_t (0=fluid,
+// !=0=solid) masks expected by MACSmoke3D::setVoxelSolids and
+// MACWater3D::setVoxelSolids.
 //
 // Axis convention matches on both sides: idx = i + nx*(j + ny*k), so no
 // resampling or transposition is needed as long as the fluid grid was
-// constructed with the same (nx, ny, nz) dimensions as the VoxelGrid.
+// constructed with the same (nx, ny, nz) dimensions as the PipeBoundaryField.
 // ============================================================================
 
 #include <cstdint>
 #include <vector>
 
-struct VoxelGrid;        // Voxelizer/voxelizer.h
-struct MACSmoke3D;       // Sim/mac_smoke3d.h
-struct MACWater3D;       // Sim/mac_water3d.h
+struct MACSmoke3D;
+struct MACWater3D;
 
 namespace pipe_fluid {
 
-// Convert a pipe VoxelGrid into a simulator-ready uint8_t solid mask.
-// `out` is resized to nx*ny*nz. VoxelType::Solid -> 1, everything else -> 0.
-//
-// This "wall-only" mask is appropriate for SMOKE, where the open Air cells
-// outside the pipe act as a sink so smoke can vent past the pipe ends
-// without piling up at the grid boundary.
-void voxelGridToSolidMask(const VoxelGrid& vg, std::vector<uint8_t>& out);
+struct PipeBoundaryField;
 
-// Water-oriented mask used by the current pipe-fluid integration.
+// Convert the canonical pipe boundary field into a simulator-ready uint8_t
+// solid mask. Only wall cells become solid; interior, opening, and exterior
+// cells remain passable.
+void pipeBoundaryFieldToSolidMask(const PipeBoundaryField& field,
+                                  std::vector<uint8_t>& out);
+
+// Water-oriented mask derived from the canonical boundary field.
 //
-// Passable (0): VoxelType::Fluid, VoxelType::Opening, VoxelType::Air
-// Blocked  (1): VoxelType::Solid
+// Passable (0): Interior, Opening, Exterior
+// Blocked  (1): Wall
 //
-// In other words, this is also a walls-only mask.  Water is allowed to exit
-// into Opening/Air cells, while MACWater3D later seals the outermost domain
+// This is still a walls-only mask. MACWater3D later seals the outermost domain
 // border internally via rebuildBorderSolids().
-void voxelGridToWaterSolidMask(const VoxelGrid& vg, std::vector<uint8_t>& out);
+void pipeBoundaryFieldToWaterSolidMask(const PipeBoundaryField& field,
+                                       std::vector<uint8_t>& out);
 
 // Push the mask into each fluid simulator.
 // The caller is responsible for ensuring each sim has matching (nx,ny,nz).

@@ -98,12 +98,21 @@ function(smoke_configure_sim_target target_name)
   endif()
 endfunction()
 
+# -----------------------------------------------------------------------------
+# Core simulation library used both by SmokeEngine itself and by sibling
+# projects such as pipe_fluid_engine.
+# -----------------------------------------------------------------------------
+add_library(smoke_sim STATIC
+  ${SMOKE_SIM_SOURCES}
+)
+smoke_configure_sim_target(smoke_sim)
+target_include_directories(smoke_sim PUBLIC ${SMOKE_COMMON_INCLUDE_DIRS})
+
 if(SMOKE_BUILD_TOOLS)
   add_executable(Water3DBackendCompare
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/water3d_backend_compare.cpp
-    ${SMOKE_SIM_SOURCES}
   )
-  smoke_configure_sim_target(Water3DBackendCompare)
+  target_link_libraries(Water3DBackendCompare PRIVATE smoke_sim)
 endif()
 
 if(SMOKE_BUILD_GUI)
@@ -189,11 +198,9 @@ if(SMOKE_BUILD_GUI)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Renderer/smoke_renderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/UI/panels.cpp
-    ${SMOKE_SIM_SOURCES}
   )
 
-  smoke_configure_sim_target(SmokeEngine)
-  target_link_libraries(SmokeEngine PRIVATE imgui_lib glfw OpenGL::GL)
+  target_link_libraries(SmokeEngine PRIVATE smoke_sim imgui_lib glfw OpenGL::GL)
 
   if(APPLE)
     target_compile_definitions(SmokeEngine PRIVATE GL_SILENCE_DEPRECATION)

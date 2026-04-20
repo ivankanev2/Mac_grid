@@ -398,31 +398,43 @@ static void buildDemoManifold(pipe_fluid::PipeFluidScene& scene) {
 static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
     ImGui::Begin("Scene");
 
-    auto cfg = scene.config();
+    const auto& cfg = scene.config();
     pipe_fluid::PipeFluidScene::Config nextCfg = cfg;
 
     ImGui::SeparatorText("Voxel grid");
-    ImGui::SliderFloat("cell size (m)", &nextCfg.cellSize, 0.002f, 0.05f, "%.3f");
-    ImGui::SliderFloat("padding (m)",   &nextCfg.padding,  0.01f, 0.5f, "%.2f");
+    ImGui::SliderFloat("cell size (m)", &nextCfg.grid.cellSize, 0.002f, 0.05f, "%.3f");
+    ImGui::SliderFloat("padding (m)",   &nextCfg.grid.padding,  0.01f, 0.5f, "%.2f");
+    ImGui::SliderFloat("gravity pad (m)", &nextCfg.grid.gravityPadding, 0.0f, 1.0f, "%.2f");
 
     ImGui::SeparatorText("Default pipe radii");
-    ImGui::SliderFloat("inner R (m)", &nextCfg.defaultInnerRadius, 0.01f, 0.2f, "%.3f");
-    ImGui::SliderFloat("outer R (m)", &nextCfg.defaultOuterRadius, 0.01f, 0.25f, "%.3f");
-    if (nextCfg.defaultOuterRadius < nextCfg.defaultInnerRadius + 0.001f)
-        nextCfg.defaultOuterRadius = nextCfg.defaultInnerRadius + 0.001f;
+    ImGui::SliderFloat("inner R (m)", &nextCfg.geometry.defaultInnerRadius, 0.01f, 0.2f, "%.3f");
+    ImGui::SliderFloat("outer R (m)", &nextCfg.geometry.defaultOuterRadius, 0.01f, 0.25f, "%.3f");
+    if (nextCfg.geometry.defaultOuterRadius < nextCfg.geometry.defaultInnerRadius + 0.001f)
+        nextCfg.geometry.defaultOuterRadius = nextCfg.geometry.defaultInnerRadius + 0.001f;
 
     ImGui::SeparatorText("Active sims");
-    ImGui::Checkbox("3D Smoke (MACSmoke3D)", &nextCfg.enableSmoke);
-    ImGui::Checkbox("3D Water (MACWater3D)", &nextCfg.enableWater);
+    ImGui::Checkbox("3D Smoke (MACSmoke3D)", &nextCfg.sim.enableSmoke);
+    ImGui::Checkbox("3D Water (MACWater3D)", &nextCfg.sim.enableWater);
+
+    ImGui::SeparatorText("Simulation");
+    ImGui::SliderFloat("base dt (s)", &nextCfg.sim.dt, 1.0f / 240.0f, 1.0f / 24.0f, "%.4f", ImGuiSliderFlags_Logarithmic);
+
+    ImGui::SeparatorText("Water surface");
+    ImGui::SliderFloat("particle radius scale", &nextCfg.waterSurface.particleRadiusScale, 0.5f, 2.5f, "%.2f");
+    ImGui::SliderFloat("SDF band (cells)", &nextCfg.waterSurface.bandCells, 0.0f, 8.0f, "%.1f");
 
     // Field-wise comparison (memcmp is unreliable due to bool padding).
     const bool configChanged =
-        nextCfg.cellSize            != cfg.cellSize            ||
-        nextCfg.padding             != cfg.padding             ||
-        nextCfg.defaultInnerRadius  != cfg.defaultInnerRadius  ||
-        nextCfg.defaultOuterRadius  != cfg.defaultOuterRadius  ||
-        nextCfg.enableSmoke         != cfg.enableSmoke         ||
-        nextCfg.enableWater         != cfg.enableWater;
+        nextCfg.grid.cellSize                  != cfg.grid.cellSize                  ||
+        nextCfg.grid.padding                   != cfg.grid.padding                   ||
+        nextCfg.grid.gravityPadding            != cfg.grid.gravityPadding            ||
+        nextCfg.geometry.defaultInnerRadius    != cfg.geometry.defaultInnerRadius    ||
+        nextCfg.geometry.defaultOuterRadius    != cfg.geometry.defaultOuterRadius    ||
+        nextCfg.sim.enableSmoke                != cfg.sim.enableSmoke                ||
+        nextCfg.sim.enableWater                != cfg.sim.enableWater                ||
+        nextCfg.sim.dt                         != cfg.sim.dt                         ||
+        nextCfg.waterSurface.particleRadiusScale != cfg.waterSurface.particleRadiusScale ||
+        nextCfg.waterSurface.bandCells         != cfg.waterSurface.bandCells;
     if (configChanged) scene.setConfig(nextCfg);
 
     ImGui::SeparatorText("Demo scenes");
@@ -672,11 +684,11 @@ int main(int argc, char* argv[]) {
     }
 
     pipe_fluid::PipeFluidScene::Config cfg;
-    cfg.cellSize    = 0.015f;   // 1.5 cm
-    cfg.padding     = 0.10f;
-    cfg.enableSmoke = true;
-    cfg.enableWater = false;
-    cfg.dt          = 1.0f / 60.0f;
+    cfg.grid.cellSize    = 0.015f;   // 1.5 cm
+    cfg.grid.padding     = 0.10f;
+    cfg.sim.enableSmoke = true;
+    cfg.sim.enableWater = false;
+    cfg.sim.dt          = 1.0f / 60.0f;
     pipe_fluid::PipeFluidScene scene(cfg);
     g_scene = &scene;
 
@@ -736,11 +748,12 @@ int main(int argc, char* argv[]) {
             // Hard single-step: just take one dt-capped step regardless of
             // the accumulator.
             if (g_ui.singleStep) {
-                simAccumulator = std::max(simAccumulator, (double)cfg.dt);
+                simAccumulator = std::max(simAccumulator, (double)scene.config().sim.dt);
             }
 
             int substeps = 0;
-            const float cflDx = scene.cellSize() > 0.f ? scene.cellSize() : cfg.cellSize;
+            const auto simCfg = scene.config();
+            const float cflDx = scene.cellSize() > 0.f ? scene.cellSize() : simCfg.grid.cellSize;
             const int maxSubsteps = std::max(1, g_ui.stepsPerFrame);
 
             while (simAccumulator > 0.0 && substeps < maxSubsteps) {
@@ -756,7 +769,7 @@ int main(int argc, char* argv[]) {
                 }
 
                 const float dtCFL = kCFL * cflDx / (maxSpeed + 1e-6f);
-                float dt = std::min(cfg.dt, dtCFL);
+                float dt = std::min(simCfg.sim.dt, dtCFL);
                 dt = std::max(dt, kDtMin);
                 if (dt > (float)simAccumulator) dt = (float)simAccumulator;
 
@@ -856,7 +869,7 @@ int main(int argc, char* argv[]) {
                 // (3 * dx).  Passing an empty SDF is a no-op inside the
                 // renderer and lets the density path run as a fallback.
                 const auto& sdf = scene.waterSDF();
-                const float sdfBand = 3.0f * scene.cellSize();
+                const float sdfBand = scene.waterSdfBand();
                 volRenderer->setWaterSdf(sdf, scene.nx(), scene.ny(),
                                          scene.nz(), sdfBand);
 
