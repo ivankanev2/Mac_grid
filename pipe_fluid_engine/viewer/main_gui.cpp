@@ -17,19 +17,14 @@
 //   PipeFluidEngine <blueprint.pipe>     -> load blueprint on startup
 // ============================================================================
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-
 #ifdef __APPLE__
 #  define GL_SILENCE_DEPRECATION
 #  include <OpenGL/gl3.h>
 #else
-#  ifndef GL_GLEXT_PROTOTYPES
-#    define GL_GLEXT_PROTOTYPES
-#  endif
 #  include <GL/gl.h>
-#  include <GL/glext.h>
 #endif
+
+#include <GLFW/glfw3.h>
 
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
@@ -843,16 +838,11 @@ int main(int argc, char* argv[]) {
                 auto* w = scene.water();
                 // Water has no temperature field; pass an empty temp.
                 static const std::vector<float> kEmptyTemp;
-                // IMPORTANT: pass the WALLS-ONLY mask (not w->solid, which is
-                // the sim's sealed mask where Air cells are marked solid to
-                // keep FLIP particles trapped inside the pipe).  The volume
-                // renderer uses a nearest-neighbour solid lookup to decide
-                // where to terminate rays, so handing it the sealed mask
-                // produces one hard cutoff per Air cell the ray crosses and
-                // the continuous water volume looks chopped into cell-sized
-                // blocks.  The walls-only mask lets rays integrate smoothly
-                // through the density field and only terminate on actual
-                // pipe walls, matching how the smoke renderer works.
+                // IMPORTANT: pass the walls-only pipe mask here, not the
+                // simulator's internal domain-border sealing.  The renderer
+                // uses a nearest-neighbour solid lookup to decide where to
+                // terminate rays, so only true pipe walls should be marked
+                // solid for this pass.
                 volRenderer->setVolume(w->water, kEmptyTemp,
                                        scene.renderSolidMask(),
                                        w->nx, w->ny, w->nz);

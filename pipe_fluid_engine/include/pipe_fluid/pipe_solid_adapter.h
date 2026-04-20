@@ -28,12 +28,14 @@ namespace pipe_fluid {
 // without piling up at the grid boundary.
 void voxelGridToSolidMask(const VoxelGrid& vg, std::vector<uint8_t>& out);
 
-// Water-oriented mask: VoxelType::Fluid (pipe interior) -> 0,
-// VoxelType::Solid AND VoxelType::Air both -> 1.
+// Water-oriented mask used by the current pipe-fluid integration.
 //
-// This SEALS the Air pad outside the pipe so water particles cannot leak
-// through voxelizer gaps at bends and free-fall onto the grid floor under
-// gravity. The pipe interior is the only region where particles are allowed.
+// Passable (0): VoxelType::Fluid, VoxelType::Opening, VoxelType::Air
+// Blocked  (1): VoxelType::Solid
+//
+// In other words, this is also a walls-only mask.  Water is allowed to exit
+// into Opening/Air cells, while MACWater3D later seals the outermost domain
+// border internally via rebuildBorderSolids().
 void voxelGridToWaterSolidMask(const VoxelGrid& vg, std::vector<uint8_t>& out);
 
 // Push the mask into each fluid simulator.

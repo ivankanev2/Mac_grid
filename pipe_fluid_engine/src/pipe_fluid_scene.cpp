@@ -393,6 +393,7 @@ void PipeFluidScene::resetFluids() {
     if (p_->water) {
         p_->water->reset();
         applySolidsToWater(*p_->water, p_->waterMask);
+        p_->waterSdf.assign(p_->waterSdf.size(), p_->waterSdfBand > 0.0f ? p_->waterSdfBand : 0.0f);
     }
 }
 
@@ -517,18 +518,18 @@ const VoxelGrid&   PipeFluidScene::voxels()  const { return p_->voxels; }
 const TriMesh&     PipeFluidScene::pipeMesh() const { return p_->mesh; }
 
 MACSmoke3D* PipeFluidScene::smoke() { return p_->smoke.get(); }
+const MACSmoke3D* PipeFluidScene::smoke() const { return p_->smoke.get(); }
 MACWater3D* PipeFluidScene::water() { return p_->water.get(); }
+const MACWater3D* PipeFluidScene::water() const { return p_->water.get(); }
 
 const std::vector<float>& PipeFluidScene::waterSDF() const {
     return p_->waterSdf;
 }
 
 const std::vector<uint8_t>& PipeFluidScene::renderSolidMask() const {
-    // Always use the walls-only mask for rendering.  The water sim's sealed
-    // mask marks Air cells as solid (to keep FLIP particles trapped inside
-    // the pipe), but that same mask makes the renderer's nearest-neighbour
-    // solid lookup terminate at every Air cell a ray crosses, producing the
-    // blocky cell-grid cutoffs we see on the water volume.
+    // Always use the walls-only mask for rendering.  The water solver seals
+    // only the outermost simulation-domain border internally; the renderer
+    // should not treat that temporary border sealing as real pipe geometry.
     return p_->smokeMask;
 }
 

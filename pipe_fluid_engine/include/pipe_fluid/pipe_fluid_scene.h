@@ -133,15 +133,19 @@ public:
     const TriMesh&     pipeMesh() const;
 
     MACSmoke3D*        smoke();              // nullptr if not enabled
+    const MACSmoke3D*  smoke() const;        // nullptr if not enabled
     MACWater3D*        water();              // nullptr if not enabled
+    const MACWater3D*  water() const;        // nullptr if not enabled
 
     // The "walls-only" solid mask (Solid->1, everything else ->0).  This is
-    // the mask to pass to the volume RENDERER so raymarch hard-cutoffs only
-    // trigger on actual pipe walls.  The water sim internally uses a sealed
-    // mask that additionally blocks Air cells to keep FLIP particles inside
-    // the pipe; that sealed mask is NOT suitable for rendering because the
-    // per-cell step function produces blocky cutoffs at every Air cell a ray
-    // crosses, even when the water volume is continuous.
+    // the mask to pass to the volume renderer so raymarch hard-cutoffs only
+    // trigger on actual pipe walls.
+    //
+    // Both smoke and water currently derive their simulator solids from the
+    // same walls-only pipe mask; the water solver then re-seals the outermost
+    // domain border internally via MACWater3D::rebuildBorderSolids().  The
+    // renderer should still use the walls-only mask here so rays terminate on
+    // true pipe walls rather than on temporary domain-border sealing.
     const std::vector<uint8_t>& renderSolidMask() const;
 
     // Narrow-band signed distance field built from the FLIP particles, sized
