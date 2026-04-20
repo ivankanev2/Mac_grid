@@ -111,7 +111,6 @@ inline void applySolverBoundaryToWater(MACWater3D& water,
     if ((int)boundary.vOpen.size() != water.nx * (water.ny + 1) * water.nz) return;
     if ((int)boundary.wOpen.size() != water.nx * water.ny * (water.nz + 1)) return;
 
-    water.setFaceOpenFractions(boundary.uOpen, boundary.vOpen, boundary.wOpen);
     applyFaceFractions(water.u, boundary.uOpen);
     applyFaceFractions(water.v, boundary.vOpen);
     applyFaceFractions(water.w, boundary.wOpen);
@@ -403,6 +402,9 @@ void PipeFluidScene::rebuild() {
             p_->smoke->reset(NX, NY, NZ, DX, DT);
         }
         applySolidsToSmoke(*p_->smoke, p_->smokeMask);
+        p_->smoke->setFaceOpenFractions(p_->solverBoundary.uOpen,
+                                        p_->solverBoundary.vOpen,
+                                        p_->solverBoundary.wOpen);
         applySolverBoundaryToSmoke(*p_->smoke, p_->solverBoundary);
     } else {
         p_->smoke.reset();
@@ -618,6 +620,9 @@ void PipeFluidScene::resetFluids() {
     if (p_->smoke) {
         p_->smoke->reset();
         applySolidsToSmoke(*p_->smoke, p_->smokeMask);
+        p_->smoke->setFaceOpenFractions(p_->solverBoundary.uOpen,
+                                        p_->solverBoundary.vOpen,
+                                        p_->solverBoundary.wOpen);
         applySolverBoundaryToSmoke(*p_->smoke, p_->solverBoundary);
     }
     if (p_->water) {

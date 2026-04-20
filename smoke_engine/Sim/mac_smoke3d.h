@@ -126,6 +126,9 @@ struct MACSmoke3D {
 
     std::vector<uint8_t> solid;
     std::vector<uint8_t> solidUser;
+    std::vector<float> uFaceOpen;
+    std::vector<float> vFaceOpen;
+    std::vector<float> wFaceOpen;
     std::vector<uint8_t> fluidMask;
     int fluidCellCount = 0;
     bool topologyDirty = true;
@@ -213,6 +216,9 @@ struct MACSmoke3D {
     void addSmokeSourceSphere(const Vec3& center, float radius, float amount, const Vec3& velocity);
     void addHeatSourceSphere(const Vec3& center, float radius, float amount);
     void setVoxelSolids(const std::vector<uint8_t>& mask);
+    void setFaceOpenFractions(const std::vector<float>& uOpen,
+                              const std::vector<float>& vOpen,
+                              const std::vector<float>& wOpen);
 
     SliceData copyDebugSlice(SliceAxis axis, int index, DebugField field);
     const Stats& stats() const { return lastStats; }

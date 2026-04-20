@@ -26,6 +26,11 @@ inline float clamp01(float v) {
     return clampf(v, 0.0f, 1.0f);
 }
 
+inline float faceOpenAt(const std::vector<float>& faceOpen, int idx) {
+    if (idx < 0 || (std::size_t)idx >= faceOpen.size()) return 1.0f;
+    return clamp01(faceOpen[(std::size_t)idx]);
+}
+
 inline float dissipationStep(float base, float dt) {
     const float b = clamp01(base);
     if (b >= 0.999999f) return 1.0f;
@@ -345,6 +350,9 @@ void MACSmoke3D::reset() {
 
     solid.assign((std::size_t)cellCount, (uint8_t)0);
     solidUser.assign((std::size_t)cellCount, (uint8_t)0);
+    uFaceOpen.assign((std::size_t)uCount, 1.0f);
+    vFaceOpen.assign((std::size_t)vCount, 1.0f);
+    wFaceOpen.assign((std::size_t)wCount, 1.0f);
     fluidMask.assign((std::size_t)cellCount, (uint8_t)0);
     fluidCellCount = 0;
     topologyDirty = true;
@@ -679,8 +687,12 @@ void MACSmoke3D::applyBoundary() {
             for (int i = 0; i <= nx; ++i) {
                 const bool leftSolid = (i - 1 >= 0) ? isSolidCell(i - 1, j, k) : true;
                 const bool rightSolid = (i < nx) ? isSolidCell(i, j, k) : true;
-                if (leftSolid || rightSolid) {
-                    u[(std::size_t)idxU(i, j, k)] = 0.0f;
+                const int face = idxU(i, j, k);
+                const float open = faceOpenAt(uFaceOpen, face);
+                if (leftSolid || rightSolid || open <= 1.0e-4f) {
+                    u[(std::size_t)face] = 0.0f;
+                } else if (open < 1.0f) {
+                    u[(std::size_t)face] *= open;
                 }
             }
         }
@@ -699,8 +711,12 @@ void MACSmoke3D::applyBoundary() {
 
                 const bool botSolid = isSolidCell(i, j - 1, k);
                 const bool topSolid = isSolidCell(i, j, k);
-                if (botSolid || topSolid) {
-                    v[(std::size_t)idxV(i, j, k)] = 0.0f;
+                const int face = idxV(i, j, k);
+                const float open = faceOpenAt(vFaceOpen, face);
+                if (botSolid || topSolid || open <= 1.0e-4f) {
+                    v[(std::size_t)face] = 0.0f;
+                } else if (open < 1.0f) {
+                    v[(std::size_t)face] *= open;
                 }
             }
         }
@@ -711,8 +727,12 @@ void MACSmoke3D::applyBoundary() {
             for (int i = 0; i < nx; ++i) {
                 const bool backSolid = (k - 1 >= 0) ? isSolidCell(i, j, k - 1) : true;
                 const bool frontSolid = (k < nz) ? isSolidCell(i, j, k) : true;
-                if (backSolid || frontSolid) {
-                    w[(std::size_t)idxW(i, j, k)] = 0.0f;
+                const int face = idxW(i, j, k);
+                const float open = faceOpenAt(wFaceOpen, face);
+                if (backSolid || frontSolid || open <= 1.0e-4f) {
+                    w[(std::size_t)face] = 0.0f;
+                } else if (open < 1.0f) {
+                    w[(std::size_t)face] *= open;
                 }
             }
         }
@@ -1423,10 +1443,16 @@ void MACSmoke3D::project() {
                     pressure[(std::size_t)id] = 0.0f;
                 }
 
+                const int uR = idxU(i + 1, j, k);
+                const int uL = idxU(i, j, k);
+                const int vT = idxV(i, j + 1, k);
+                const int vB = idxV(i, j, k);
+                const int wF = idxW(i, j, k + 1);
+                const int wB = idxW(i, j, k);
                 const float divCell =
-                    (u[(std::size_t)idxU(i + 1, j, k)] - u[(std::size_t)idxU(i, j, k)] +
-                     v[(std::size_t)idxV(i, j + 1, k)] - v[(std::size_t)idxV(i, j, k)] +
-                     w[(std::size_t)idxW(i, j, k + 1)] - w[(std::size_t)idxW(i, j, k)]) * invDx;
+                    (faceOpenAt(uFaceOpen, uR) * u[(std::size_t)uR] - faceOpenAt(uFaceOpen, uL) * u[(std::size_t)uL] +
+                     faceOpenAt(vFaceOpen, vT) * v[(std::size_t)vT] - faceOpenAt(vFaceOpen, vB) * v[(std::size_t)vB] +
+                     faceOpenAt(wFaceOpen, wF) * w[(std::size_t)wF] - faceOpenAt(wFaceOpen, wB) * w[(std::size_t)wB]) * invDx;
                 rhs[(std::size_t)id] = -divCell * invDt;
             }
         }
@@ -1594,9 +1620,11 @@ void MACSmoke3D::project() {
                 const int i = entry.i;
                 const int j = entry.j;
                 const int face = idxU(i, j, k);
+                const float open = faceOpenAt(uFaceOpen, face);
                 const float pL = pressure[(std::size_t)idxCell(i - 1, j, k)];
                 const float pR = pressure[(std::size_t)idxCell(i, j, k)];
-                u[(std::size_t)face] -= scale * (pR - pL);
+                u[(std::size_t)face] -= open * scale * (pR - pL);
+                if (open <= 1.0e-4f) u[(std::size_t)face] = 0.0f;
             }
 
             for (int entryIndex = activeVFacesByK.offsets[(std::size_t)k];
@@ -1606,14 +1634,16 @@ void MACSmoke3D::project() {
                 const int i = entry.i;
                 const int j = entry.j;
                 const int face = idxV(i, j, k);
+                const float open = faceOpenAt(vFaceOpen, face);
                 if (j == ny) {
                     const float pB = pressure[(std::size_t)idxCell(i, ny - 1, k)];
-                    v[(std::size_t)face] += scale * pB;
+                    v[(std::size_t)face] += open * scale * pB;
                 } else {
                     const float pB = pressure[(std::size_t)idxCell(i, j - 1, k)];
                     const float pT = pressure[(std::size_t)idxCell(i, j, k)];
-                    v[(std::size_t)face] -= scale * (pT - pB);
+                    v[(std::size_t)face] -= open * scale * (pT - pB);
                 }
+                if (open <= 1.0e-4f) v[(std::size_t)face] = 0.0f;
             }
         }
     });
@@ -1627,9 +1657,11 @@ void MACSmoke3D::project() {
                 const int i = entry.i;
                 const int j = entry.j;
                 const int face = idxW(i, j, k);
+                const float open = faceOpenAt(wFaceOpen, face);
                 const float pBk = pressure[(std::size_t)idxCell(i, j, k - 1)];
                 const float pFr = pressure[(std::size_t)idxCell(i, j, k)];
-                w[(std::size_t)face] -= scale * (pFr - pBk);
+                w[(std::size_t)face] -= open * scale * (pFr - pBk);
+                if (open <= 1.0e-4f) w[(std::size_t)face] = 0.0f;
             }
         }
     });
@@ -2102,6 +2134,31 @@ void MACSmoke3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
     applyBoundary();
     derivedFieldsDirty = true;
     updateStats(0.0f);
+}
+
+void MACSmoke3D::setFaceOpenFractions(const std::vector<float>& uOpen,
+                                      const std::vector<float>& vOpen,
+                                      const std::vector<float>& wOpen) {
+    const std::size_t uCount = (std::size_t)std::max(1, (nx + 1) * ny * nz);
+    const std::size_t vCount = (std::size_t)std::max(1, nx * (ny + 1) * nz);
+    const std::size_t wCount = (std::size_t)std::max(1, nx * ny * (nz + 1));
+
+    uFaceOpen.assign(uCount, 1.0f);
+    vFaceOpen.assign(vCount, 1.0f);
+    wFaceOpen.assign(wCount, 1.0f);
+
+    if (uOpen.size() == uCount) {
+        for (std::size_t i = 0; i < uCount; ++i) uFaceOpen[i] = clamp01(uOpen[i]);
+    }
+    if (vOpen.size() == vCount) {
+        for (std::size_t i = 0; i < vCount; ++i) vFaceOpen[i] = clamp01(vOpen[i]);
+    }
+    if (wOpen.size() == wCount) {
+        for (std::size_t i = 0; i < wCount; ++i) wFaceOpen[i] = clamp01(wOpen[i]);
+    }
+
+    applyBoundary();
+    derivedFieldsDirty = true;
 }
 
 MACSmoke3D::SliceData MACSmoke3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) {
