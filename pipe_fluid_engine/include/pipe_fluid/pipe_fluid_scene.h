@@ -40,9 +40,6 @@
 #include <string>
 #include <vector>
 
-#include "smoke_profiles.h"
-#include "pipe_fluid/pipe_boundary_field.h"
-
 // Forward-declare to keep includes light for consumers.
 struct PipeNetwork;           // pipe_engine/Geometry/pipe_network.h
 struct VoxelGrid;             // pipe_engine/Voxelizer/voxelizer.h
@@ -52,6 +49,8 @@ struct MACSmoke3D;            // smoke_engine/Sim/mac_smoke3d.h
 struct MACWater3D;            // smoke_engine/Sim/mac_water3d.h
 
 namespace pipe_fluid {
+
+struct PipeBoundaryField;      // pipe_fluid/pipe_boundary_field.h
 
 class PipeFluidScene {
 public:
@@ -64,42 +63,30 @@ public:
             float padding  = 0.10f;   // metres around the pipe bbox (all 6 sides)
             // Extra padding added only on the -gravity side of the bbox so
             // water exiting the pipe has an open basin to fall into before
-            // hitting the sealed grid floor.  0.4 m ≈ 27 cells at the default
-            // cellSize, enough for a visible waterfall without bloating the
-            // horizontal dimensions of the grid.
+            // hitting the sealed grid floor.
             float gravityPadding = 0.40f;
-        };
+        } grid;
 
-        struct SimulationConfig {
+        struct SimConfig {
             bool enableSmoke = true;
             bool enableWater = false;
-
             // Simulation timestep. If <= 0, each sim uses its own default.
             float dt = 1.0f / 60.0f;
-
-            // Shared smoke_engine-owned water tuning profile. This keeps the
-            // preferred pipe-flow water solver settings in one place instead of
-            // duplicating them in pipe_fluid_engine.
-            smoke::PipeWater3DConfig waterConfig = smoke::defaultPipeWater3DConfig();
-        };
+        } sim;
 
         struct WaterSurfaceConfig {
-            // Liquid surface reconstruction settings for the narrow-band particle
-            // SDF used by the renderer. Values are expressed relative to cellSize.
+            // Particle radius used for liquid SDF reconstruction, expressed in
+            // multiples of the simulation cell size.
             float particleRadiusScale = 1.1f;
+            // Positive SDF clamp band in multiples of cell size.
             float bandCells = 3.0f;
-        };
+        } waterSurface;
 
         struct GeometryConfig {
             // Default pipe radii applied to the network builder.
             float defaultInnerRadius = 0.05f;
             float defaultOuterRadius = 0.06f;
-        };
-
-        GridConfig grid;
-        SimulationConfig sim;
-        WaterSurfaceConfig waterSurface;
-        GeometryConfig geometry;
+        } geometry;
     };
 
     // Construct with a config. Use `PipeFluidScene(PipeFluidScene::Config{})`
@@ -132,9 +119,8 @@ public:
     bool loadBlueprint(const std::string& path, std::string* errorOut = nullptr);
 
     // ---- Core pipeline -----------------------------------------------------
-    // Re-voxelizes the network, rebuilds the canonical pipe boundary field,
-    // derives the simulator masks from it, regenerates the render mesh, and
-    // recreates the fluid simulators at the resulting
+    // Re-voxelizes the network, rebuilds the solid mask, regenerates the
+    // render mesh, and recreates the fluid simulators at the resulting
     // (nx,ny,nz,dx). Call after any geometry change.
     void rebuild();
 
@@ -164,9 +150,7 @@ public:
     MACWater3D*        water();              // nullptr if not enabled
     const MACWater3D*  water() const;        // nullptr if not enabled
 
-    const PipeBoundaryField& boundaryField() const;
-
-    // The "walls-only" solid mask (Wall->1, everything else ->0).  This is
+    // The "walls-only" solid mask (Solid->1, everything else ->0).  This is
     // the mask to pass to the volume renderer so raymarch hard-cutoffs only
     // trigger on actual pipe walls.
     //
@@ -185,12 +169,9 @@ public:
     // Use this for SDF sphere-tracing in the volume renderer; it eliminates
     // the per-voxel density quantisation artefacts that make the voxel path
     // look blocky at pipe scale.  Rebuilt once at the end of every step().
+    const PipeBoundaryField& boundaryField() const;
     const std::vector<float>& waterSDF() const;
-
-    // Signed distance to the pipe wall in metres, sized nx*ny*nz. Negative in
-    // wall cells, positive elsewhere. This comes from the canonical boundary
-    // field and is intended as the debugging / migration path toward future
-    // subcell boundary handling.
+    float waterSdfBand() const;
     const std::vector<float>& pipeWallSDF() const;
 
     const Config&      config() const;
@@ -198,7 +179,6 @@ public:
 
     int nx() const; int ny() const; int nz() const;
     float cellSize() const;
-    float waterSdfBand() const;
 
     // Diagnostics
     struct Stats {

@@ -1,29 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(PipeFluidEngine CXX)
 
-# ============================================================================
-# pipe_fluid_engine — couples pipe_engine (geometry + voxelizer) with
-# smoke_engine (3D MAC smoke + water sims).
-#
-# Layout expected at build time:
-#   <project_root>/pipe_engine        (sibling, header-only library "pipe_core")
-#   <project_root>/smoke_engine       (sibling, provides smoke_sim target)
-#   <project_root>/pipe_fluid_engine  (this folder)
-#
-# What this file builds:
-#   pipe_fluid_core      (static lib) — scene, voxel->solid adapter, loader
-#   pipe_fluid_render    (static lib) — GUI/OpenGL overlay rendering
-#   PipeFluidEngine      (executable) — GLFW/OpenGL/ImGui viewer
-#   PipeFluidRegression  (executable) — headless regression harness
-# ============================================================================
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PIPEFLUID_BUILD_GUI "Build the PipeFluidEngine GUI viewer" ON)
-option(PIPEFLUID_BUILD_REGRESSION "Build the PipeFluidRegression headless tool" ON)
 
 # ---- Locate sibling projects -----------------------------------------------
 set(PIPE_ENGINE_ROOT  "${CMAKE_CURRENT_SOURCE_DIR}/../pipe_engine"
@@ -34,17 +17,16 @@ set(SMOKE_ENGINE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../smoke_engine"
 if(NOT EXISTS "${PIPE_ENGINE_ROOT}/Geometry/pipe_network.h")
     message(FATAL_ERROR "pipe_engine not found at ${PIPE_ENGINE_ROOT}")
 endif()
-if(NOT EXISTS "${SMOKE_ENGINE_ROOT}/CMakeLists.txt")
+if(NOT EXISTS "${SMOKE_ENGINE_ROOT}/Sim/mac_smoke3d.h")
     message(FATAL_ERROR "smoke_engine not found at ${SMOKE_ENGINE_ROOT}")
 endif()
 
-# ---- smoke_engine: build/link the real sim target --------------------------
-set(SMOKE_BUILD_GUI OFF CACHE BOOL "Build smoke_engine GUI while embedded in pipe_fluid_engine" FORCE)
-set(SMOKE_BUILD_TOOLS OFF CACHE BOOL "Build smoke_engine tools while embedded in pipe_fluid_engine" FORCE)
-add_subdirectory(${SMOKE_ENGINE_ROOT} ${CMAKE_BINARY_DIR}/smoke_engine_build EXCLUDE_FROM_ALL)
-
+# ---- smoke_engine as a real dependency -------------------------------------
+# Keep smoke_engine's own platform/CUDA logic authoritative.
 if(NOT TARGET smoke_sim)
-    message(FATAL_ERROR "smoke_engine did not provide the expected smoke_sim target")
+    set(SMOKE_BUILD_GUI OFF CACHE BOOL "" FORCE)
+    set(SMOKE_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${SMOKE_ENGINE_ROOT} ${CMAKE_BINARY_DIR}/smoke_engine_build EXCLUDE_FROM_ALL)
 endif()
 
 # ---- pipe_fluid_core: the integration library (no OpenGL) ------------------
@@ -54,6 +36,7 @@ add_library(pipe_fluid_core STATIC
     src/pipe_solid_adapter.cpp
     src/blueprint_loader.cpp
 )
+
 target_include_directories(pipe_fluid_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PIPE_ENGINE_ROOT}
@@ -61,6 +44,7 @@ target_include_directories(pipe_fluid_core PUBLIC
     ${PIPE_ENGINE_ROOT}/Blueprint
     ${PIPE_ENGINE_ROOT}/Voxelizer
 )
+
 target_link_libraries(pipe_fluid_core PUBLIC smoke_sim)
 
 if(APPLE)
@@ -68,38 +52,27 @@ if(APPLE)
 endif()
 
 # ---- pipe_fluid_render: backend-independent volume overlay renderer --------
-# Depends on OpenGL. Kept separate from pipe_fluid_core so headless tools
-# can use the sim + voxelizer without pulling GL.
 if(PIPEFLUID_BUILD_GUI)
     find_package(OpenGL REQUIRED)
+
     add_library(pipe_fluid_render STATIC
         src/volume_renderer.cpp
         src/cpu_volume_renderer.cpp
         src/gpu_volume_renderer.cpp
     )
+
     target_include_directories(pipe_fluid_render PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
+
     target_link_libraries(pipe_fluid_render
         PUBLIC  pipe_fluid_core
         PRIVATE OpenGL::GL
     )
+
     if(APPLE)
         target_compile_definitions(pipe_fluid_render PRIVATE GL_SILENCE_DEPRECATION)
     endif()
-endif()
-
-# ============================================================================
-# Regression harness
-# ============================================================================
-set(PIPEFLUID_REGRESSION_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/tools/pipe_fluid_regression.cpp)
-if(PIPEFLUID_BUILD_REGRESSION AND EXISTS ${PIPEFLUID_REGRESSION_SOURCE})
-    add_executable(PipeFluidRegression
-        ${PIPEFLUID_REGRESSION_SOURCE}
-    )
-    target_link_libraries(PipeFluidRegression PRIVATE pipe_fluid_core)
-elseif(PIPEFLUID_BUILD_REGRESSION)
-    message(STATUS "[PipeFluidEngine] PIPEFLUID_BUILD_REGRESSION is ON but tools/pipe_fluid_regression.cpp is not present; skipping PipeFluidRegression target")
 endif()
 
 # ============================================================================
@@ -113,10 +86,12 @@ if(PIPEFLUID_BUILD_GUI)
     if(NOT TARGET glfw)
         find_package(glfw3 QUIET)
     endif()
+
     if(NOT TARGET glfw)
         set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+
         set(_GLFW_LOCAL "")
         foreach(_candidate
             ${SMOKE_ENGINE_ROOT}/build/_deps/glfw-src
@@ -128,6 +103,7 @@ if(PIPEFLUID_BUILD_GUI)
                 break()
             endif()
         endforeach()
+
         if(_GLFW_LOCAL)
             message(STATUS "[PipeFluidEngine] Using local GLFW: ${_GLFW_LOCAL}")
             add_subdirectory(${_GLFW_LOCAL} ${CMAKE_BINARY_DIR}/glfw_local EXCLUDE_FROM_ALL)
@@ -153,6 +129,7 @@ if(PIPEFLUID_BUILD_GUI)
             break()
         endif()
     endforeach()
+
     if(NOT IMGUI_DIR)
         message(STATUS "[PipeFluidEngine] Fetching ImGui docking branch")
         FetchContent_Declare(imgui_ext
@@ -173,15 +150,18 @@ if(PIPEFLUID_BUILD_GUI)
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     )
+
     target_include_directories(pipe_fluid_imgui PUBLIC
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
     )
+
     target_link_libraries(pipe_fluid_imgui PUBLIC glfw OpenGL::GL)
 
     add_executable(PipeFluidEngine
         viewer/main_gui.cpp
     )
+
     target_include_directories(PipeFluidEngine PRIVATE
         ${PIPE_ENGINE_ROOT}/Geometry
         ${PIPE_ENGINE_ROOT}/Renderer
@@ -189,6 +169,7 @@ if(PIPEFLUID_BUILD_GUI)
         ${PIPE_ENGINE_ROOT}/Blueprint
         ${PIPE_ENGINE_ROOT}/UI
     )
+
     target_link_libraries(PipeFluidEngine PRIVATE
         pipe_fluid_core
         pipe_fluid_render
@@ -196,6 +177,7 @@ if(PIPEFLUID_BUILD_GUI)
         glfw
         OpenGL::GL
     )
+
     if(APPLE)
         target_compile_definitions(PipeFluidEngine PRIVATE GL_SILENCE_DEPRECATION)
         target_link_libraries(PipeFluidEngine PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreVideo")

@@ -24,19 +24,6 @@ struct PipeBoundaryTerminal {
     float outerRadius = 0.0f;
 };
 
-// Canonical grid-aligned pipe boundary representation.
-//
-// This is the single boundary object that pipe_fluid_engine uses to derive:
-//   - simulator solid masks
-//   - renderer wall masks
-//   - pipe-wall signed distance values for debugging / future cut-cell work
-//   - open-end terminal metadata
-//
-// For now the field is built from the voxelizer output, but the rest of the
-// integration layer no longer consumes the VoxelGrid directly when deciding
-// what is solid or passable. That keeps the "source of truth" localized to one
-// object and makes it straightforward to replace the construction step later
-// with an analytic SDF or face-fraction pipeline.
 struct PipeBoundaryField {
     int nx = 0;
     int ny = 0;
@@ -44,32 +31,40 @@ struct PipeBoundaryField {
     float dx = 0.01f;
     Vec3 origin{0.f, 0.f, 0.f};
 
-    std::vector<PipeBoundaryCell> cells;   // authoritative semantic labels
-    std::vector<float> wallSdf;            // metres; negative in wall cells
-    std::vector<uint8_t> wallMask;         // 1 = wall, 0 = passable
+    // Canonical per-cell classification.
+    std::vector<PipeBoundaryCell> cells;
+    // Signed distance to the pipe wall region, in world metres.
+    // Negative inside wall material, positive elsewhere.
+    std::vector<float> wallSdf;
+    // Binary wall occupancy kept for current renderer / legacy solver paths.
+    std::vector<uint8_t> wallMask;
+
+    // Face-open fractions derived from wallSdf. These are the first
+    // subcell / face-aware boundary quantities we can hand to future
+    // embedded-boundary or cut-cell solvers.
+    //   1.0 = fully open face
+    //   0.0 = fully blocked by wall
+    std::vector<float> uOpen; // (nx+1) * ny * nz, x-faces
+    std::vector<float> vOpen; // nx * (ny+1) * nz, y-faces
+    std::vector<float> wOpen; // nx * ny * (nz+1), z-faces
+
     std::vector<PipeBoundaryTerminal> terminals;
 
     int idx(int i, int j, int k) const { return i + nx * (j + ny * k); }
-
+    int uIdx(int i, int j, int k) const { return i + (nx + 1) * (j + ny * k); }
+    int vIdx(int i, int j, int k) const { return i + nx * (j + (ny + 1) * k); }
+    int wIdx(int i, int j, int k) const { return i + nx * (j + ny * k); }
     bool valid() const {
-        const std::size_t n =
-            static_cast<std::size_t>(nx) *
-            static_cast<std::size_t>(ny) *
-            static_cast<std::size_t>(nz);
+        const std::size_t n = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz);
+        const std::size_t nu = static_cast<std::size_t>(nx + 1) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz);
+        const std::size_t nv = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny + 1) * static_cast<std::size_t>(nz);
+        const std::size_t nw = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz + 1);
         return nx > 0 && ny > 0 && nz > 0 &&
-               cells.size() == n && wallSdf.size() == n && wallMask.size() == n;
+               cells.size() == n && wallSdf.size() == n && wallMask.size() == n &&
+               uOpen.size() == nu && vOpen.size() == nv && wOpen.size() == nw;
     }
-
     Vec3 cellCenter(int i, int j, int k) const {
         return origin + Vec3{(i + 0.5f) * dx, (j + 0.5f) * dx, (k + 0.5f) * dx};
-    }
-
-    float wallSdfAt(int i, int j, int k) const {
-        return wallSdf[idx(i, j, k)];
-    }
-
-    PipeBoundaryCell cellAt(int i, int j, int k) const {
-        return cells[idx(i, j, k)];
     }
 };
 
