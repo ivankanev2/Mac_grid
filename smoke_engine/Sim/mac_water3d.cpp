@@ -294,6 +294,10 @@ void MACWater3D::reset() {
     vWeight.assign((std::size_t)vCount, 0.0f);
     wWeight.assign((std::size_t)wCount, 0.0f);
 
+    uFaceOpen.assign((std::size_t)uCount, 1.0f);
+    vFaceOpen.assign((std::size_t)vCount, 1.0f);
+    wFaceOpen.assign((std::size_t)wCount, 1.0f);
+
     uPrev.assign((std::size_t)uCount, 0.0f);
     vPrev.assign((std::size_t)vCount, 0.0f);
     wPrev.assign((std::size_t)wCount, 0.0f);
@@ -710,6 +714,26 @@ void MACWater3D::setVoxelSolidsCpu(const std::vector<uint8_t>& mask) {
     clearCudaHostStateDirtyAll();
     updateStats(0.0f);
     clearTransientStats(*this, 0.0f);
+}
+
+void MACWater3D::setFaceOpenFractions(const std::vector<float>& uOpen,
+                                      const std::vector<float>& vOpen,
+                                      const std::vector<float>& wOpen) {
+    const std::size_t uCount = (std::size_t)std::max(1, (nx + 1) * ny * nz);
+    const std::size_t vCount = (std::size_t)std::max(1, nx * (ny + 1) * nz);
+    const std::size_t wCount = (std::size_t)std::max(1, nx * ny * (nz + 1));
+
+    uFaceOpen.assign(uCount, 1.0f);
+    vFaceOpen.assign(vCount, 1.0f);
+    wFaceOpen.assign(wCount, 1.0f);
+
+    if (uOpen.size() == uCount) uFaceOpen = uOpen;
+    if (vOpen.size() == vCount) vFaceOpen = vOpen;
+    if (wOpen.size() == wCount) wFaceOpen = wOpen;
+
+    applyBoundary();
+    derivedFieldsDirty = true;
+    clearCudaHostStateDirtyAll();
 }
 
 MACWater3D::SliceData MACWater3D::copyDebugSlice(SliceAxis axis, int index, DebugField field) {

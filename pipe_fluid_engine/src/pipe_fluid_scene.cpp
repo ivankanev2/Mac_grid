@@ -111,9 +111,167 @@ inline void applySolverBoundaryToWater(MACWater3D& water,
     if ((int)boundary.vOpen.size() != water.nx * (water.ny + 1) * water.nz) return;
     if ((int)boundary.wOpen.size() != water.nx * water.ny * (water.nz + 1)) return;
 
+    water.setFaceOpenFractions(boundary.uOpen, boundary.vOpen, boundary.wOpen);
     applyFaceFractions(water.u, boundary.uOpen);
     applyFaceFractions(water.v, boundary.vOpen);
     applyFaceFractions(water.w, boundary.wOpen);
+    water.derivedFieldsDirty = true;
+}
+
+inline float sampleCellCenteredFieldTrilinear(const std::vector<float>& field,
+                                              int nx, int ny, int nz,
+                                              float dx,
+                                              float x, float y, float z) {
+    if (field.empty() || nx <= 0 || ny <= 0 || nz <= 0 || dx <= 0.0f) {
+        return 0.0f;
+    }
+
+    const auto clampf = [](float v, float lo, float hi) {
+        return std::max(lo, std::min(hi, v));
+    };
+    const auto idx = [nx, ny](int i, int j, int k) {
+        return static_cast<std::size_t>(i + nx * (j + ny * k));
+    };
+
+    const float gx = clampf(x / dx - 0.5f, 0.0f, std::max(0.0f, float(nx - 1)));
+    const float gy = clampf(y / dx - 0.5f, 0.0f, std::max(0.0f, float(ny - 1)));
+    const float gz = clampf(z / dx - 0.5f, 0.0f, std::max(0.0f, float(nz - 1)));
+
+    const int i0 = std::max(0, std::min(nx - 1, int(std::floor(gx))));
+    const int j0 = std::max(0, std::min(ny - 1, int(std::floor(gy))));
+    const int k0 = std::max(0, std::min(nz - 1, int(std::floor(gz))));
+    const int i1 = std::min(nx - 1, i0 + 1);
+    const int j1 = std::min(ny - 1, j0 + 1);
+    const int k1 = std::min(nz - 1, k0 + 1);
+
+    const float tx = gx - float(i0);
+    const float ty = gy - float(j0);
+    const float tz = gz - float(k0);
+
+    const float c000 = field[idx(i0, j0, k0)];
+    const float c100 = field[idx(i1, j0, k0)];
+    const float c010 = field[idx(i0, j1, k0)];
+    const float c110 = field[idx(i1, j1, k0)];
+    const float c001 = field[idx(i0, j0, k1)];
+    const float c101 = field[idx(i1, j0, k1)];
+    const float c011 = field[idx(i0, j1, k1)];
+    const float c111 = field[idx(i1, j1, k1)];
+
+    const float c00 = c000 + tx * (c100 - c000);
+    const float c10 = c010 + tx * (c110 - c010);
+    const float c01 = c001 + tx * (c101 - c001);
+    const float c11 = c011 + tx * (c111 - c011);
+    const float c0 = c00 + ty * (c10 - c00);
+    const float c1 = c01 + ty * (c11 - c01);
+    return c0 + tz * (c1 - c0);
+}
+
+inline void sampleWallSdfAndNormal(const PipeBoundaryField& boundary,
+                                   float x, float y, float z,
+                                   float& phi,
+                                   float& nx, float& ny, float& nz) {
+    phi = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+                                           boundary.nx, boundary.ny, boundary.nz,
+                                           boundary.dx,
+                                           x, y, z);
+
+    const float eps = std::max(0.25f * boundary.dx, 1.0e-5f);
+    const float px0 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+                                                       boundary.nx, boundary.ny, boundary.nz,
+                                                       boundary.dx,
+                                                       x - eps, y, z);
+    const float px1 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+                                                       boundary.nx, boundary.ny, boundary.nz,
+                                                       boundary.dx,
+                                                       x + eps, y, z);
+    const float py0 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+                                                       boundary.nx, boundary.ny, boundary.nz,
+                                                       boundary.dx,
+                                                       x, y - eps, z);
+    const float py1 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+                                                       boundary.nx, boundary.ny, boundary.nz,
+                                                       boundary.dx,
+                                                       x, y + eps, z);
+    const float pz0 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+                                                       boundary.nx, boundary.ny, boundary.nz,
+                                                       boundary.dx,
+                                                       x, y, z - eps);
+    const float pz1 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+                                                       boundary.nx, boundary.ny, boundary.nz,
+                                                       boundary.dx,
+                                                       x, y, z + eps);
+
+    nx = (px1 - px0) / (2.0f * eps);
+    ny = (py1 - py0) / (2.0f * eps);
+    nz = (pz1 - pz0) / (2.0f * eps);
+    const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+    if (len > 1.0e-8f) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+    } else {
+        nx = ny = nz = 0.0f;
+    }
+}
+
+inline void confineWaterParticlesToPipe(MACWater3D& water,
+                                        const PipeBoundaryField& boundary) {
+    if (water.isCudaEnabled()) {
+        // Without a dedicated host->device particle upload path, keep the CUDA
+        // backend unchanged. This confinement pass currently targets the CPU path.
+        return;
+    }
+    if (!boundary.valid() || water.particles.empty()) return;
+    if (boundary.nx != water.nx || boundary.ny != water.ny || boundary.nz != water.nz) return;
+    if (std::fabs(boundary.dx - water.dx) > 1.0e-6f) return;
+
+    const float dx = water.dx;
+    const float clearance = 0.35f * dx;
+    const float maxPush = 1.5f * dx;
+    const float velDampTangent = 0.98f;
+
+    const float xMax = std::max(0.0f, water.nx * dx - 1.0e-4f * dx);
+    const float yMax = std::max(0.0f, water.ny * dx - 1.0e-4f * dx);
+    const float zMax = std::max(0.0f, water.nz * dx - 1.0e-4f * dx);
+
+    for (auto& p : water.particles) {
+        float phi = 0.0f;
+        float nx = 0.0f, ny = 0.0f, nz = 0.0f;
+        sampleWallSdfAndNormal(boundary, p.x, p.y, p.z, phi, nx, ny, nz);
+        if (phi >= clearance) continue;
+
+        const float nLen2 = nx * nx + ny * ny + nz * nz;
+        if (nLen2 < 1.0e-10f) continue;
+
+        const float push = std::min(clearance - phi + 1.0e-4f * dx, maxPush);
+        p.x += nx * push;
+        p.y += ny * push;
+        p.z += nz * push;
+
+        p.x = std::max(0.0f, std::min(xMax, p.x));
+        p.y = std::max(0.0f, std::min(yMax, p.y));
+        p.z = std::max(0.0f, std::min(zMax, p.z));
+
+        const float vn = p.u * nx + p.v * ny + p.w * nz;
+        if (vn < 0.0f) {
+            p.u -= vn * nx;
+            p.v -= vn * ny;
+            p.w -= vn * nz;
+        }
+
+        const float vtX = p.u - (p.u * nx + p.v * ny + p.w * nz) * nx;
+        const float vtY = p.v - (p.u * nx + p.v * ny + p.w * nz) * ny;
+        const float vtZ = p.w - (p.u * nx + p.v * ny + p.w * nz) * nz;
+        const float vn2 = p.u * nx + p.v * ny + p.w * nz;
+        p.u = vn2 * nx + velDampTangent * vtX;
+        p.v = vn2 * ny + velDampTangent * vtY;
+        p.w = vn2 * nz + velDampTangent * vtZ;
+
+        p.c00 = p.c01 = p.c02 = 0.0f;
+        p.c10 = p.c11 = p.c12 = 0.0f;
+        p.c20 = p.c21 = p.c22 = 0.0f;
+    }
+
     water.derivedFieldsDirty = true;
 }
 }
@@ -442,6 +600,7 @@ void PipeFluidScene::step(float dtOverride) {
         if (dt > 0.f) p_->water->setDt(dt);
         p_->water->step();
         applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
+        confineWaterParticlesToPipe(*p_->water, p_->boundary);
         // Rebuild the narrow-band SDF from the FLIP particles so the volume
         // renderer can sphere-trace a smooth liquid surface instead of
         // volume-integrating a per-cell density field.  This is the bridge
@@ -582,6 +741,7 @@ void PipeFluidScene::addWaterSourceSphere(const Vec3& centre, float radius,
             toSimVec3<MACWater3D::Vec3>(vel));
     }
     applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
+    confineWaterParticlesToPipe(*p_->water, p_->boundary);
 }
 
 // ---- Accessors --------------------------------------------------------------

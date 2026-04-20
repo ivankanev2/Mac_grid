@@ -169,6 +169,9 @@ struct MACWater3D {
 
     void addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity);
     void setVoxelSolids(const std::vector<uint8_t>& mask);
+    void setFaceOpenFractions(const std::vector<float>& uOpen,
+                              const std::vector<float>& vOpen,
+                              const std::vector<float>& wOpen);
 
     SliceData copyDebugSlice(SliceAxis axis, int index, DebugField field);
     const Stats& stats() const { return lastStats; }
@@ -193,6 +196,10 @@ protected:
     std::vector<float> uWeight;
     std::vector<float> vWeight;
     std::vector<float> wWeight;
+
+    std::vector<float> uFaceOpen;
+    std::vector<float> vFaceOpen;
+    std::vector<float> wFaceOpen;
 
     std::vector<float> uPrev;
     std::vector<float> vPrev;

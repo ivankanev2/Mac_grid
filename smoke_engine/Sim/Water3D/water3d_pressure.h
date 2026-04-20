@@ -41,13 +41,30 @@ inline void MACWater3D::projectLiquid() {
         return !solid[(std::size_t)id] && liquid[(std::size_t)id];
     };
 
+    constexpr float kClosedFace = 1.0e-4f;
+    auto uFaceOpen = [&](int i, int j, int k) -> float {
+        const int id = idxU(i, j, k);
+        if ((std::size_t)id >= this->uFaceOpen.size()) return 1.0f;
+        return std::max(0.0f, std::min(1.0f, this->uFaceOpen[(std::size_t)id]));
+    };
+    auto vFaceOpen = [&](int i, int j, int k) -> float {
+        const int id = idxV(i, j, k);
+        if ((std::size_t)id >= this->vFaceOpen.size()) return 1.0f;
+        return std::max(0.0f, std::min(1.0f, this->vFaceOpen[(std::size_t)id]));
+    };
+    auto wFaceOpen = [&](int i, int j, int k) -> float {
+        const int id = idxW(i, j, k);
+        if ((std::size_t)id >= this->wFaceOpen.size()) return 1.0f;
+        return std::max(0.0f, std::min(1.0f, this->wFaceOpen[(std::size_t)id]));
+    };
+
     auto cellDivergence = [&](int i, int j, int k) -> float {
-        float uL = u[(std::size_t)idxU(i, j, k)];
-        float uR = u[(std::size_t)idxU(i + 1, j, k)];
-        float vB = v[(std::size_t)idxV(i, j, k)];
-        float vT = v[(std::size_t)idxV(i, j + 1, k)];
-        float wBk = w[(std::size_t)idxW(i, j, k)];
-        float wFr = w[(std::size_t)idxW(i, j, k + 1)];
+        float uL = u[(std::size_t)idxU(i, j, k)] * uFaceOpen(i, j, k);
+        float uR = u[(std::size_t)idxU(i + 1, j, k)] * uFaceOpen(i + 1, j, k);
+        float vB = v[(std::size_t)idxV(i, j, k)] * vFaceOpen(i, j, k);
+        float vT = v[(std::size_t)idxV(i, j + 1, k)] * vFaceOpen(i, j + 1, k);
+        float wBk = w[(std::size_t)idxW(i, j, k)] * wFaceOpen(i, j, k);
+        float wFr = w[(std::size_t)idxW(i, j, k + 1)] * wFaceOpen(i, j, k + 1);
 
         if (i - 1 >= 0 && solid[(std::size_t)idxCell(i - 1, j, k)]) uL = 0.0f;
         if (i + 1 < nx && solid[(std::size_t)idxCell(i + 1, j, k)]) uR = 0.0f;
@@ -55,6 +72,13 @@ inline void MACWater3D::projectLiquid() {
         if (j + 1 < ny && solid[(std::size_t)idxCell(i, j + 1, k)]) vT = 0.0f;
         if (k - 1 >= 0 && solid[(std::size_t)idxCell(i, j, k - 1)]) wBk = 0.0f;
         if (k + 1 < nz && solid[(std::size_t)idxCell(i, j, k + 1)]) wFr = 0.0f;
+
+        if (uFaceOpen(i, j, k) <= kClosedFace) uL = 0.0f;
+        if (uFaceOpen(i + 1, j, k) <= kClosedFace) uR = 0.0f;
+        if (vFaceOpen(i, j, k) <= kClosedFace) vB = 0.0f;
+        if (vFaceOpen(i, j + 1, k) <= kClosedFace) vT = 0.0f;
+        if (wFaceOpen(i, j, k) <= kClosedFace) wBk = 0.0f;
+        if (wFaceOpen(i, j, k + 1) <= kClosedFace) wFr = 0.0f;
 
         return (uR - uL + vT - vB + wFr - wBk) * invDx;
     };
@@ -123,7 +147,8 @@ inline void MACWater3D::projectLiquid() {
             minK = std::min(minK, k);
             maxK = std::max(maxK, k);
 
-            auto tryPush = [&](int ni, int nj, int nk) {
+            auto tryPush = [&](int ni, int nj, int nk, float faceOpen) {
+                if (faceOpen <= kClosedFace) return;
                 if (ni < 0 || nj < 0 || nk < 0 || ni >= nx || nj >= ny || nk >= nz) return;
                 const int nid = idxCell(ni, nj, nk);
                 if (solid[(std::size_t)nid] || !liquid[(std::size_t)nid]) return;
@@ -132,12 +157,12 @@ inline void MACWater3D::projectLiquid() {
                 pressureComponentQueue.push_back(nid);
             };
 
-            tryPush(i - 1, j, k);
-            tryPush(i + 1, j, k);
-            tryPush(i, j - 1, k);
-            tryPush(i, j + 1, k);
-            tryPush(i, j, k - 1);
-            tryPush(i, j, k + 1);
+            tryPush(i - 1, j, k, uFaceOpen(i, j, k));
+            tryPush(i + 1, j, k, uFaceOpen(i + 1, j, k));
+            tryPush(i, j - 1, k, vFaceOpen(i, j, k));
+            tryPush(i, j + 1, k, vFaceOpen(i, j + 1, k));
+            tryPush(i, j, k - 1, wFaceOpen(i, j, k));
+            tryPush(i, j, k + 1, wFaceOpen(i, j, k + 1));
         }
     };
 
@@ -191,7 +216,8 @@ inline void MACWater3D::projectLiquid() {
             return !solid[(std::size_t)id] && pressureComponentLabel[(std::size_t)id] == componentId;
         };
 
-        auto isAirNeighborComponent = [&](int ni, int nj, int nk) -> bool {
+        auto isAirNeighborComponent = [&](int ni, int nj, int nk, float faceOpen) -> bool {
+            if (faceOpen <= kClosedFace) return false;
             if (ni < 0 || nk < 0 || ni >= nx || nk >= nz) return false;
             if (nj < 0) return false;
             if (nj >= ny) return params.openTop;
@@ -230,9 +256,12 @@ inline void MACWater3D::projectLiquid() {
 
                     if (!hasDirichletReference) {
                         hasDirichletReference =
-                            isAirNeighborComponent(gi - 1, gj, gk) || isAirNeighborComponent(gi + 1, gj, gk) ||
-                            isAirNeighborComponent(gi, gj - 1, gk) || isAirNeighborComponent(gi, gj + 1, gk) ||
-                            isAirNeighborComponent(gi, gj, gk - 1) || isAirNeighborComponent(gi, gj, gk + 1);
+                            isAirNeighborComponent(gi - 1, gj, gk, uFaceOpen(gi, gj, gk)) ||
+                            isAirNeighborComponent(gi + 1, gj, gk, uFaceOpen(gi + 1, gj, gk)) ||
+                            isAirNeighborComponent(gi, gj - 1, gk, vFaceOpen(gi, gj, gk)) ||
+                            isAirNeighborComponent(gi, gj + 1, gk, vFaceOpen(gi, gj + 1, gk)) ||
+                            isAirNeighborComponent(gi, gj, gk - 1, wFaceOpen(gi, gj, gk)) ||
+                            isAirNeighborComponent(gi, gj, gk + 1, wFaceOpen(gi, gj, gk + 1));
                     }
                 }
             }
@@ -249,12 +278,12 @@ inline void MACWater3D::projectLiquid() {
                         if (!pressureRegion.fluid[(std::size_t)sid]) continue;
 
                         int exposedFaces = 0;
-                        exposedFaces += isAirNeighborComponent(gi - 1, gj, gk) ? 1 : 0;
-                        exposedFaces += isAirNeighborComponent(gi + 1, gj, gk) ? 1 : 0;
-                        exposedFaces += isAirNeighborComponent(gi, gj - 1, gk) ? 1 : 0;
-                        exposedFaces += isAirNeighborComponent(gi, gj + 1, gk) ? 1 : 0;
-                        exposedFaces += isAirNeighborComponent(gi, gj, gk - 1) ? 1 : 0;
-                        exposedFaces += isAirNeighborComponent(gi, gj, gk + 1) ? 1 : 0;
+                        exposedFaces += isAirNeighborComponent(gi - 1, gj, gk, uFaceOpen(gi, gj, gk)) ? 1 : 0;
+                        exposedFaces += isAirNeighborComponent(gi + 1, gj, gk, uFaceOpen(gi + 1, gj, gk)) ? 1 : 0;
+                        exposedFaces += isAirNeighborComponent(gi, gj - 1, gk, vFaceOpen(gi, gj, gk)) ? 1 : 0;
+                        exposedFaces += isAirNeighborComponent(gi, gj + 1, gk, vFaceOpen(gi, gj + 1, gk)) ? 1 : 0;
+                        exposedFaces += isAirNeighborComponent(gi, gj, gk - 1, wFaceOpen(gi, gj, gk)) ? 1 : 0;
+                        exposedFaces += isAirNeighborComponent(gi, gj, gk + 1, wFaceOpen(gi, gj, gk + 1)) ? 1 : 0;
 
                         if (exposedFaces > 0) {
                             pressureRegion.rhs[(std::size_t)sid] += rhsAddFace * (float)exposedFaces;
@@ -461,9 +490,10 @@ inline void MACWater3D::projectLiquid() {
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i <= nx; ++i) {
                 const int id = idxU(i, j, k);
+                const float open = uFaceOpen(i, j, k);
                 const bool leftSolid = (i - 1 >= 0) ? isSolidCell(i - 1, j, k) : true;
                 const bool rightSolid = (i < nx) ? isSolidCell(i, j, k) : true;
-                if (leftSolid || rightSolid) {
+                if (leftSolid || rightSolid || open <= kClosedFace) {
                     u[(std::size_t)id] = 0.0f;
                     continue;
                 }
@@ -474,7 +504,7 @@ inline void MACWater3D::projectLiquid() {
 
                 const float pL = leftFluid ? pressure[(std::size_t)idxCell(i - 1, j, k)] : 0.0f;
                 const float pR = rightFluid ? pressure[(std::size_t)idxCell(i, j, k)] : 0.0f;
-                u[(std::size_t)id] -= scale * (pR - pL);
+                u[(std::size_t)id] -= scale * open * (pR - pL);
             }
         }
     }
@@ -483,9 +513,10 @@ inline void MACWater3D::projectLiquid() {
         for (int j = 0; j <= ny; ++j) {
             for (int i = 0; i < nx; ++i) {
                 const int id = idxV(i, j, k);
+                const float open = vFaceOpen(i, j, k);
                 const bool botSolid = (j - 1 >= 0) ? isSolidCell(i, j - 1, k) : true;
                 const bool topSolid = (j < ny) ? isSolidCell(i, j, k) : !params.openTop;
-                if (botSolid || topSolid) {
+                if (botSolid || topSolid || open <= kClosedFace) {
                     v[(std::size_t)id] = 0.0f;
                     continue;
                 }
@@ -496,7 +527,7 @@ inline void MACWater3D::projectLiquid() {
 
                 const float pB = botFluid ? pressure[(std::size_t)idxCell(i, j - 1, k)] : 0.0f;
                 const float pT = topFluid ? pressure[(std::size_t)idxCell(i, j, k)] : 0.0f;
-                v[(std::size_t)id] -= scale * (pT - pB);
+                v[(std::size_t)id] -= scale * open * (pT - pB);
             }
         }
     }
@@ -505,9 +536,10 @@ inline void MACWater3D::projectLiquid() {
         for (int j = 0; j < ny; ++j) {
             for (int i = 0; i < nx; ++i) {
                 const int id = idxW(i, j, k);
+                const float open = wFaceOpen(i, j, k);
                 const bool backSolid = (k - 1 >= 0) ? isSolidCell(i, j, k - 1) : true;
                 const bool frontSolid = (k < nz) ? isSolidCell(i, j, k) : true;
-                if (backSolid || frontSolid) {
+                if (backSolid || frontSolid || open <= kClosedFace) {
                     w[(std::size_t)id] = 0.0f;
                     continue;
                 }
@@ -518,7 +550,7 @@ inline void MACWater3D::projectLiquid() {
 
                 const float pBk = backFluid ? pressure[(std::size_t)idxCell(i, j, k - 1)] : 0.0f;
                 const float pFr = frontFluid ? pressure[(std::size_t)idxCell(i, j, k)] : 0.0f;
-                w[(std::size_t)id] -= scale * (pFr - pBk);
+                w[(std::size_t)id] -= scale * open * (pFr - pBk);
             }
         }
     }
