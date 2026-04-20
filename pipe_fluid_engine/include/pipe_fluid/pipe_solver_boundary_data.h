@@ -27,6 +27,11 @@ struct PipeSolverBoundaryData {
 
     std::vector<PipeBoundaryTerminal> terminals;
 
+    float minFaceOpen = 1.0f;
+    int faceOpenCountLt099 = 0;
+    int faceOpenCountLt050 = 0;
+    int faceOpenCountClosed = 0;
+
     [[nodiscard]] bool valid() const noexcept {
         const std::size_t n = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz);
         const std::size_t nu = static_cast<std::size_t>(nx + 1) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz);

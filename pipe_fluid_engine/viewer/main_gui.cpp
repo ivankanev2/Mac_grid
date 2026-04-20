@@ -45,6 +45,7 @@
 // pipe_fluid_engine
 #include "pipe_fluid/pipe_fluid_scene.h"
 #include "pipe_fluid/volume_renderer.h"
+#include "pipe_fluid/pipe_solver_boundary_data.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -598,6 +599,37 @@ static void drawStatsPanel(pipe_fluid::PipeFluidScene& scene) {
         auto& ws = scene.water()->stats();
         ImGui::Text("Water particles:    %d", ws.particleCount);
         ImGui::Text("Water liquid cells: %d", ws.liquidCells);
+        ImGui::Text("Water max speed:    %.3f", ws.maxSpeed);
+        ImGui::Text("Water max div:      %.6f", ws.maxDivergence);
+        ImGui::Text("Pre-proj max div:   %.6f", ws.preProjectionMaxDivergence);
+        ImGui::Text("Post-proj max div:  %.6f", ws.postProjectionMaxDivergence);
+        ImGui::Text("Water pressure iters: %d", ws.pressureIters);
+        ImGui::Text("Water pressure ms:    %.3f", ws.pressureMs);
+        ImGui::Text("Water step ms:        %.3f", ws.lastStepMs);
+        ImGui::Text("Water backend:      %s", ws.backendName ? ws.backendName : "?");
+        ImGui::Separator();
+        ImGui::Text("Pressure active cells:      %d", ws.pressureActiveCellCount);
+        ImGui::Text("Pressure components:        %d", ws.pressureComponentCount);
+        ImGui::Text("Pressure neighbor links:    %d", ws.pressureNeighborLinkCount);
+        ImGui::Text("Pressure Dirichlet faces:   %d", ws.pressureDirichletFaceCount);
+        ImGui::Text("Pressure open faces:        %d", ws.pressureOpenFaceCount);
+        ImGui::Text("Pressure blocked faces:     %d", ws.pressureBlockedFaceCount);
+        ImGui::Text("Pressure weighted faces:    %d", ws.pressureWeightedFaceCount);
+        ImGui::Separator();
+        const auto& sb = scene.solverBoundary();
+        ImGui::Text("Pipe face-open min:         %.6f", sb.minFaceOpen);
+        ImGui::Text("Pipe faces < 0.99:          %d", sb.faceOpenCountLt099);
+        ImGui::Text("Pipe faces < 0.50:          %d", sb.faceOpenCountLt050);
+        ImGui::Text("Pipe faces closed:          %d", sb.faceOpenCountClosed);
+        ImGui::Text("Water face-open min:        %.6f", ws.minFaceOpen);
+        ImGui::Text("Water faces < 0.99:         %d", ws.faceOpenCountLt099);
+        ImGui::Text("Water faces < 0.50:         %d", ws.faceOpenCountLt050);
+        ImGui::Text("Water faces closed:         %d", ws.faceOpenCountClosed);
+        ImGui::Separator();
+        ImGui::Text("Near-closed face flux count: %d", ws.nearClosedFaceFluxCount);
+        ImGui::Text("Max near-closed face flux:   %.6f", ws.maxNearClosedFaceFlux);
+        ImGui::Text("Particles near wall:         %d", ws.particlesNearWallCount);
+        ImGui::Text("Particles inside wall:       %d", ws.particlesInsideWallCount);
     }
     if (!g_ui.status.empty() && ImGui::GetTime() < g_ui.statusExpires) {
         ImGui::Separator();

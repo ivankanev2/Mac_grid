@@ -108,6 +108,8 @@ struct MACWater3D {
         int liquidCells = 0;
         float maxSpeed = 0.0f;
         float maxDivergence = 0.0f;
+        float preProjectionMaxDivergence = 0.0f;
+        float postProjectionMaxDivergence = 0.0f;
         float dt = 0.0f;
         float lastStepMs = 0.0f;
         float pressureMs = 0.0f;
@@ -117,6 +119,21 @@ struct MACWater3D {
         std::size_t bytesAllocated = 0;
         const char* backendName = "CPU MAC 3D";
         SimStageTimings timings;
+        int nearClosedFaceFluxCount = 0;
+        float maxNearClosedFaceFlux = 0.0f;
+        int particlesNearWallCount = 0;
+        int particlesInsideWallCount = 0;
+        int pressureOpenFaceCount = 0;
+        int pressureBlockedFaceCount = 0;
+        int pressureWeightedFaceCount = 0;
+        int pressureActiveCellCount = 0;
+        int pressureComponentCount = 0;
+        int pressureNeighborLinkCount = 0;
+        int pressureDirichletFaceCount = 0;
+        float minFaceOpen = 1.0f;
+        int faceOpenCountLt099 = 0;
+        int faceOpenCountLt050 = 0;
+        int faceOpenCountClosed = 0;
     };
 
     int nx = 0;
@@ -200,6 +217,20 @@ protected:
     std::vector<float> uFaceOpen;
     std::vector<float> vFaceOpen;
     std::vector<float> wFaceOpen;
+
+    int nearClosedFaceFluxCount = 0;
+    float maxNearClosedFaceFlux = 0.0f;
+    int particlesNearWallCount = 0;
+    int particlesInsideWallCount = 0;
+    float preProjectionMaxDivergence = 0.0f;
+    float postProjectionMaxDivergence = 0.0f;
+    int pressureOpenFaceCount = 0;
+    int pressureBlockedFaceCount = 0;
+    int pressureWeightedFaceCount = 0;
+    int pressureActiveCellCount = 0;
+    int pressureComponentCount = 0;
+    int pressureNeighborLinkCount = 0;
+    int pressureDirichletFaceCount = 0;
 
     std::vector<float> uPrev;
     std::vector<float> vPrev;

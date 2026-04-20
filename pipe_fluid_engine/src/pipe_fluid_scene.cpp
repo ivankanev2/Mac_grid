@@ -100,16 +100,19 @@ inline void applySolverBoundaryToSmoke(MACSmoke3D& smoke,
 
 inline void applySolverBoundaryToWater(MACWater3D& water,
                                        const PipeSolverBoundaryData& boundary) {
-    if (water.isCudaEnabled()) {
-        // The CUDA backend owns its own device-side velocity state, so host-side
-        // face edits here would not propagate back without a dedicated upload path.
-        // Keep the CPU path correct first and leave CUDA behavior unchanged.
-        return;
-    }
     if (!boundary.valid()) return;
     if ((int)boundary.uOpen.size() != (water.nx + 1) * water.ny * water.nz) return;
     if ((int)boundary.vOpen.size() != water.nx * (water.ny + 1) * water.nz) return;
     if ((int)boundary.wOpen.size() != water.nx * water.ny * (water.nz + 1)) return;
+
+    // Always push the face-openness data into the solver.
+    water.setFaceOpenFractions(boundary.uOpen, boundary.vOpen, boundary.wOpen);
+
+    if (water.isCudaEnabled()) {
+        // CUDA keeps its own device-side velocity state, so skip host-side
+        // velocity edits here, but DO keep the solver's face-openness arrays updated.
+        return;
+    }
 
     applyFaceFractions(water.u, boundary.uOpen);
     applyFaceFractions(water.v, boundary.vOpen);

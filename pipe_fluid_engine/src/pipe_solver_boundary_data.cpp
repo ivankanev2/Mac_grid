@@ -45,6 +45,20 @@ inline void computeWallNormal(const PipeBoundaryField& field,
     }
 }
 
+inline void accumulateFaceOpenDiagnostics(const std::vector<float>& faces,
+                                        float& minOpen,
+                                        int& lt099,
+                                        int& lt050,
+                                        int& closed) {
+    for (float f : faces) {
+        const float clamped = std::max(0.0f, std::min(1.0f, f));
+        minOpen = std::min(minOpen, clamped);
+        if (clamped < 0.99f) ++lt099;
+        if (clamped < 0.50f) ++lt050;
+        if (clamped <= 1.0e-4f) ++closed;
+    }
+}
+
 } // namespace
 
 PipeSolverBoundaryData buildSolverBoundaryData(const PipeBoundaryField& field) {
@@ -70,6 +84,10 @@ PipeSolverBoundaryData buildSolverBoundaryData(const PipeBoundaryField& field) {
     out.uOpen = field.uOpen;
     out.vOpen = field.vOpen;
     out.wOpen = field.wOpen;
+
+    accumulateFaceOpenDiagnostics(out.uOpen, out.minFaceOpen, out.faceOpenCountLt099, out.faceOpenCountLt050, out.faceOpenCountClosed);
+    accumulateFaceOpenDiagnostics(out.vOpen, out.minFaceOpen, out.faceOpenCountLt099, out.faceOpenCountLt050, out.faceOpenCountClosed);
+    accumulateFaceOpenDiagnostics(out.wOpen, out.minFaceOpen, out.faceOpenCountLt099, out.faceOpenCountLt050, out.faceOpenCountClosed);
 
     for (int k = 0; k < field.nz; ++k) {
         for (int j = 0; j < field.ny; ++j) {

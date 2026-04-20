@@ -22,6 +22,20 @@ inline float clamp01(float v) {
     return clampf(v, 0.0f, 1.0f);
 }
 
+
+inline constexpr float kFaceClosedThreshold = 5.0e-2f;
+
+inline float faceOpenRaw(float v) {
+    return clamp01(v);
+}
+
+inline float faceOpenCoeff(float v) {
+    const float open = faceOpenRaw(v);
+    if (open <= kFaceClosedThreshold) return 0.0f;
+    const float t = (open - kFaceClosedThreshold) / (1.0f - kFaceClosedThreshold);
+    return t * t;
+}
+
 inline uint32_t hash_u32(uint32_t x) {
     x ^= x >> 16;
     x *= 0x7feb352dU;

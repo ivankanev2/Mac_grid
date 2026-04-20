@@ -6,6 +6,11 @@
 #include <algorithm>
 #include <cmath>
 
+inline float water3dGridFaceOpenSample(const std::vector<float>& faceOpen, int idx) {
+    if (idx < 0 || (std::size_t)idx >= faceOpen.size()) return 1.0f;
+    return water3d_internal::faceOpenCoeff(faceOpen[(std::size_t)idx]);
+}
+
 inline ChunkWorkerPool& water3dWorkerPool() { return sharedChunkWorkerPool(); }
 
 inline float MACWater3D::sampleCellCentered(
@@ -75,7 +80,9 @@ inline float MACWater3D::sampleU(
             for (int di = 0; di < 2; ++di) {
                 const int ii = (di == 0) ? i0 : i1;
                 const float wx = (di == 0) ? (1.0f - tx) : tx;
-                value += wx * wy * wz * field[(std::size_t)idxU(ii, jj, kk)];
+                const int faceId = idxU(ii, jj, kk);
+                const float open = water3dGridFaceOpenSample(uFaceOpen, faceId);
+                value += wx * wy * wz * (field[(std::size_t)faceId] * open);
             }
         }
     }
@@ -112,7 +119,9 @@ inline float MACWater3D::sampleV(
             for (int di = 0; di < 2; ++di) {
                 const int ii = (di == 0) ? i0 : i1;
                 const float wx = (di == 0) ? (1.0f - tx) : tx;
-                value += wx * wy * wz * field[(std::size_t)idxV(ii, jj, kk)];
+                const int faceId = idxV(ii, jj, kk);
+                const float open = water3dGridFaceOpenSample(vFaceOpen, faceId);
+                value += wx * wy * wz * (field[(std::size_t)faceId] * open);
             }
         }
     }
@@ -149,7 +158,9 @@ inline float MACWater3D::sampleW(
             for (int di = 0; di < 2; ++di) {
                 const int ii = (di == 0) ? i0 : i1;
                 const float wx = (di == 0) ? (1.0f - tx) : tx;
-                value += wx * wy * wz * field[(std::size_t)idxW(ii, jj, kk)];
+                const int faceId = idxW(ii, jj, kk);
+                const float open = water3dGridFaceOpenSample(wFaceOpen, faceId);
+                value += wx * wy * wz * (field[(std::size_t)faceId] * open);
             }
         }
     }
@@ -174,6 +185,7 @@ inline void MACWater3D::particleToGrid() {
                            float ox, float oy, float oz,
                            int sx, int sy, int sz,
                            auto idxFn,
+                           const std::vector<float>& faceOpen,
                            std::vector<float>& dst,
                            std::vector<float>& weight,
                            float base,
@@ -210,14 +222,17 @@ inline void MACWater3D::particleToGrid() {
                     const float pxFace = (ii + ox) * dx;
                     const float wght = wx * wy * wz;
                     const int id = idxFn(ii, jj, kk);
+                    const float open = water3dGridFaceOpenSample(faceOpen, id);
+                    if (open <= 0.0f) continue;
 
                     float value = base;
                     if (apic) {
                         value += c0 * (pxFace - p.x) + c1 * (pyFace - p.y) + c2 * (pzFace - p.z);
                     }
 
-                    dst[(std::size_t)id] += wght * value;
-                    weight[(std::size_t)id] += wght;
+                    const float effW = wght * open;
+                    dst[(std::size_t)id] += effW * value;
+                    weight[(std::size_t)id] += effW;
                 }
             }
         }
@@ -229,7 +244,7 @@ inline void MACWater3D::particleToGrid() {
         for (const Particle& p : particles) {
             scatterFace(p, 0.0f, 0.5f, 0.5f, nx + 1, ny, nz,
                         [&](int i, int j, int k) { return idxU(i, j, k); },
-                        u, uWeight, p.u, p.c00, p.c01, p.c02);
+                        uFaceOpen, u, uWeight, p.u, p.c00, p.c01, p.c02);
         }
         for (std::size_t i = 0; i < u.size(); ++i) {
             u[i] = (uWeight[i] > 1e-6f) ? (u[i] / uWeight[i]) : 0.0f;
@@ -242,7 +257,7 @@ inline void MACWater3D::particleToGrid() {
         for (const Particle& p : particles) {
             scatterFace(p, 0.5f, 0.0f, 0.5f, nx, ny + 1, nz,
                         [&](int i, int j, int k) { return idxV(i, j, k); },
-                        v, vWeight, p.v, p.c10, p.c11, p.c12);
+                        vFaceOpen, v, vWeight, p.v, p.c10, p.c11, p.c12);
         }
         for (std::size_t i = 0; i < v.size(); ++i) {
             v[i] = (vWeight[i] > 1e-6f) ? (v[i] / vWeight[i]) : 0.0f;
@@ -255,7 +270,7 @@ inline void MACWater3D::particleToGrid() {
         for (const Particle& p : particles) {
             scatterFace(p, 0.5f, 0.5f, 0.0f, nx, ny, nz + 1,
                         [&](int i, int j, int k) { return idxW(i, j, k); },
-                        w, wWeight, p.w, p.c20, p.c21, p.c22);
+                        wFaceOpen, w, wWeight, p.w, p.c20, p.c21, p.c22);
         }
         for (std::size_t i = 0; i < w.size(); ++i) {
             w[i] = (wWeight[i] > 1e-6f) ? (w[i] / wWeight[i]) : 0.0f;

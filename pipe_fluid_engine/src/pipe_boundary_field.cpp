@@ -143,37 +143,52 @@ void applyTerminalSemantics(const PipeNetwork& network, const VoxelGrid& voxels,
     const float halfDx = 0.5f * dx;
     for (const auto& end : network.openEnds()) {
         if (terminalConnectsIntoPipe(network, end, dx)) continue;
+
         const Vec3 E = end.position;
         const Vec3 T = end.outwardTangent.normalized();
         const float innerR = end.innerRadius;
-        const float outerR = end.outerRadius;
-        const float channelLen = std::max(3.0f * dx, 2.0f * innerR);
-        const float capR = outerR + halfDx;
-        const float reach = std::max(capR, channelLen) + dx;
+
+        // Keep the opening region tightly localized to the actual terminal mouth.
+        // The previous logic carved a long cylindrical channel plus a spherical
+        // cap using the outer radius, which could erode wall cells around the
+        // pipe lip and create side-adjacent "open" regions near bends/outlets.
+        const float mouthLen = std::max(1.5f * dx, std::min(2.5f * dx, innerR + 0.5f * dx));
+        const float capHalfThickness = 0.75f * dx;
+        const float openingR = std::max(0.0f, innerR - 0.25f * dx);
+        const float capOpenR = innerR + 0.5f * dx;
+        const float reach = std::max(capOpenR, mouthLen) + dx;
+
         const int i0 = std::max(0, (int)std::floor((E.x - reach - voxels.origin.x) / dx));
         const int j0 = std::max(0, (int)std::floor((E.y - reach - voxels.origin.y) / dx));
         const int k0 = std::max(0, (int)std::floor((E.z - reach - voxels.origin.z) / dx));
         const int i1 = std::min(voxels.nx - 1, (int)std::ceil((E.x + reach - voxels.origin.x) / dx));
         const int j1 = std::min(voxels.ny - 1, (int)std::ceil((E.y + reach - voxels.origin.y) / dx));
         const int k1 = std::min(voxels.nz - 1, (int)std::ceil((E.z + reach - voxels.origin.z) / dx));
+
         for (int k = k0; k <= k1; ++k) for (int j = j0; j <= j1; ++j) for (int i = i0; i <= i1; ++i) {
             const int idx = field.idx(i, j, k);
             const Vec3 p = field.cellCenter(i, j, k);
             const Vec3 v = p - E;
             const float a = v.dot(T);
-            if (a <= 0.0f) continue;
             const float radial = (v - T * a).length();
-            if (a <= channelLen && radial <= innerR + halfDx) {
-                field.cells[idx] = PipeBoundaryCell::Opening;
-                field.wallMask[idx] = 0u;
-                continue;
+
+            // Only clear the terminal cap itself, and only within the bore.
+            // This prevents removing wall cells around the outside lip.
+            if (std::fabs(a) <= capHalfThickness && radial <= capOpenR) {
+                if (field.cells[idx] == PipeBoundaryCell::Wall) {
+                    field.cells[idx] = PipeBoundaryCell::Exterior;
+                    field.wallMask[idx] = 0u;
+                }
             }
-            const float sph = std::sqrt(a * a + radial * radial);
-            if (sph <= capR && field.cells[idx] == PipeBoundaryCell::Wall) {
-                field.cells[idx] = PipeBoundaryCell::Exterior;
+
+            // Mark a short region just outside the true mouth as Opening, but do
+            // not let the opening radius extend into the wall shell.
+            if (a > 0.0f && a <= mouthLen && radial <= openingR) {
+                field.cells[idx] = PipeBoundaryCell::Opening;
                 field.wallMask[idx] = 0u;
             }
         }
+
         field.terminals.push_back({end.position, end.outwardTangent, end.innerRadius, end.outerRadius});
     }
 }

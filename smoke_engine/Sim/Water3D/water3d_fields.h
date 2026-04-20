@@ -223,11 +223,40 @@ inline void MACWater3D::updateStats(float stepMs) {
     lastStats.liquidCells = 0;
     lastStats.maxSpeed = 0.0f;
     lastStats.maxDivergence = 0.0f;
+    lastStats.preProjectionMaxDivergence = preProjectionMaxDivergence;
+    lastStats.postProjectionMaxDivergence = postProjectionMaxDivergence;
+    lastStats.pressureOpenFaceCount = pressureOpenFaceCount;
+    lastStats.pressureBlockedFaceCount = pressureBlockedFaceCount;
+    lastStats.pressureWeightedFaceCount = pressureWeightedFaceCount;
+    lastStats.pressureActiveCellCount = pressureActiveCellCount;
+    lastStats.pressureComponentCount = pressureComponentCount;
+    lastStats.pressureNeighborLinkCount = pressureNeighborLinkCount;
+    lastStats.pressureDirichletFaceCount = pressureDirichletFaceCount;
+    lastStats.minFaceOpen = 1.0f;
+    lastStats.faceOpenCountLt099 = 0;
+    lastStats.faceOpenCountLt050 = 0;
+    lastStats.faceOpenCountClosed = 0;
+    auto accumulateFaceOpenDiagnostics = [&](const std::vector<float>& faces) {
+        for (float f : faces) {
+            const float clamped = std::max(0.0f, std::min(1.0f, f));
+            lastStats.minFaceOpen = std::min(lastStats.minFaceOpen, clamped);
+            if (clamped < 0.99f) ++lastStats.faceOpenCountLt099;
+            if (clamped < 0.50f) ++lastStats.faceOpenCountLt050;
+            if (clamped <= 1.0e-4f) ++lastStats.faceOpenCountClosed;
+        }
+    };
+    accumulateFaceOpenDiagnostics(uFaceOpen);
+    accumulateFaceOpenDiagnostics(vFaceOpen);
+    accumulateFaceOpenDiagnostics(wFaceOpen);
     lastStats.dt = dt;
     lastStats.lastStepMs = stepMs;
     lastStats.targetMass = targetMass;
     lastStats.desiredMass = desiredMass;
     lastStats.backendName = "CPU MAC 3D";
+    lastStats.nearClosedFaceFluxCount = nearClosedFaceFluxCount;
+    lastStats.maxNearClosedFaceFlux = maxNearClosedFaceFlux;
+    lastStats.particlesNearWallCount = particlesNearWallCount;
+    lastStats.particlesInsideWallCount = particlesInsideWallCount;
     lastStats.bytesAllocated =
         u.size() * sizeof(float) +
         v.size() * sizeof(float) +
@@ -299,12 +328,22 @@ inline void MACWater3D::updateStats(float stepMs) {
                 if (liquid[(std::size_t)id] && !solid[(std::size_t)id]) lastStats.liquidCells++;
                 if (solid[(std::size_t)id]) continue;
 
-                float uL = u[(std::size_t)idxU(i, j, k)];
-                float uR = u[(std::size_t)idxU(i + 1, j, k)];
-                float vB = v[(std::size_t)idxV(i, j, k)];
-                float vT = v[(std::size_t)idxV(i, j + 1, k)];
-                float wBk = w[(std::size_t)idxW(i, j, k)];
-                float wFr = w[(std::size_t)idxW(i, j, k + 1)];
+                const int uLid = idxU(i, j, k);
+                const int uRid = idxU(i + 1, j, k);
+                const int vBid = idxV(i, j, k);
+                const int vTid = idxV(i, j + 1, k);
+                const int wBid = idxW(i, j, k);
+                const int wFid = idxW(i, j, k + 1);
+                auto faceCoeff = [](float open) {
+                    constexpr float kClosedFace = 1.0e-4f;
+                    return (open <= kClosedFace) ? 0.0f : water3d_internal::clampf(open, 0.0f, 1.0f);
+                };
+                float uL = u[(std::size_t)uLid] * faceCoeff(uFaceOpen[(std::size_t)uLid]);
+                float uR = u[(std::size_t)uRid] * faceCoeff(uFaceOpen[(std::size_t)uRid]);
+                float vB = v[(std::size_t)vBid] * faceCoeff(vFaceOpen[(std::size_t)vBid]);
+                float vT = v[(std::size_t)vTid] * faceCoeff(vFaceOpen[(std::size_t)vTid]);
+                float wBk = w[(std::size_t)wBid] * faceCoeff(wFaceOpen[(std::size_t)wBid]);
+                float wFr = w[(std::size_t)wFid] * faceCoeff(wFaceOpen[(std::size_t)wFid]);
 
                 if (i - 1 >= 0 && solid[(std::size_t)idxCell(i - 1, j, k)]) uL = 0.0f;
                 if (i + 1 < nx && solid[(std::size_t)idxCell(i + 1, j, k)]) uR = 0.0f;
@@ -315,6 +354,20 @@ inline void MACWater3D::updateStats(float stepMs) {
 
                 const float divCell = (uR - uL + vT - vB + wFr - wBk) / dx;
                 lastStats.maxDivergence = std::max(lastStats.maxDivergence, std::fabs(divCell));
+
+                const float openThresh = 0.25f;
+                auto trackFace = [&](float open, float vel) {
+                    if (open < openThresh && std::fabs(vel) > 1.0e-4f) {
+                        ++nearClosedFaceFluxCount;
+                        maxNearClosedFaceFlux = std::max(maxNearClosedFaceFlux, std::fabs(vel));
+                    }
+                };
+                trackFace(water3d_internal::clampf(uFaceOpen[(std::size_t)uLid], 0.0f, 1.0f), u[(std::size_t)uLid]);
+                trackFace(water3d_internal::clampf(uFaceOpen[(std::size_t)uRid], 0.0f, 1.0f), u[(std::size_t)uRid]);
+                trackFace(water3d_internal::clampf(vFaceOpen[(std::size_t)vBid], 0.0f, 1.0f), v[(std::size_t)vBid]);
+                trackFace(water3d_internal::clampf(vFaceOpen[(std::size_t)vTid], 0.0f, 1.0f), v[(std::size_t)vTid]);
+                trackFace(water3d_internal::clampf(wFaceOpen[(std::size_t)wBid], 0.0f, 1.0f), w[(std::size_t)wBid]);
+                trackFace(water3d_internal::clampf(wFaceOpen[(std::size_t)wFid], 0.0f, 1.0f), w[(std::size_t)wFid]);
             }
         }
     }

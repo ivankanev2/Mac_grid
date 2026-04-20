@@ -7,7 +7,7 @@
 
 inline float water3dFaceOpenClamped(const std::vector<float>& faceOpen, int idx) {
     if (idx < 0 || (std::size_t)idx >= faceOpen.size()) return 1.0f;
-    return std::max(0.0f, std::min(1.0f, faceOpen[(std::size_t)idx]));
+    return water3d_internal::faceOpenCoeff(faceOpen[(std::size_t)idx]);
 }
 
 inline void MACWater3D::rebuildBorderSolids() {
@@ -64,7 +64,6 @@ inline void MACWater3D::rebuildBorderSolids() {
 }
 
 inline void MACWater3D::applyBoundary() {
-    constexpr float kClosed = 1.0e-4f;
 
     for (int k = 0; k < nz; ++k) {
         for (int j = 0; j < ny; ++j) {
@@ -96,7 +95,7 @@ inline void MACWater3D::applyBoundary() {
                 const float open = water3dFaceOpenClamped(uFaceOpen, faceId);
                 const bool leftSolid = (i - 1 >= 0) ? isSolidCell(i - 1, j, k) : true;
                 const bool rightSolid = (i < nx) ? isSolidCell(i, j, k) : true;
-                if (leftSolid || rightSolid || open <= kClosed) {
+                if (leftSolid || rightSolid || open <= 0.0f) {
                     u[(std::size_t)faceId] = 0.0f;
                 } else {
                     u[(std::size_t)faceId] *= open;
@@ -120,7 +119,7 @@ inline void MACWater3D::applyBoundary() {
 
                 const bool botSolid = isSolidCell(i, j - 1, k);
                 const bool topSolid = isSolidCell(i, j, k);
-                if (botSolid || topSolid || open <= kClosed) {
+                if (botSolid || topSolid || open <= 0.0f) {
                     v[(std::size_t)faceId] = 0.0f;
                 } else {
                     v[(std::size_t)faceId] *= open;
@@ -136,7 +135,7 @@ inline void MACWater3D::applyBoundary() {
                 const float open = water3dFaceOpenClamped(wFaceOpen, faceId);
                 const bool backSolid = (k - 1 >= 0) ? isSolidCell(i, j, k - 1) : true;
                 const bool frontSolid = (k < nz) ? isSolidCell(i, j, k) : true;
-                if (backSolid || frontSolid || open <= kClosed) {
+                if (backSolid || frontSolid || open <= 0.0f) {
                     w[(std::size_t)faceId] = 0.0f;
                 } else {
                     w[(std::size_t)faceId] *= open;

@@ -138,11 +138,33 @@ inline void MACWater3D::applyExternalForces() {
 }
 
 inline void MACWater3D::advectParticles() {
+    particlesNearWallCount = 0;
+    particlesInsideWallCount = 0;
     if (particles.empty()) return;
 
     const float domainX = nx * dx;
     const float domainY = ny * dx;
     const float domainZ = nz * dx;
+
+    auto faceOpenAt = [&](const std::vector<float>& faceOpen, int idx) {
+        if (idx < 0 || (std::size_t)idx >= faceOpen.size()) return 1.0f;
+        return water3d_internal::faceOpenCoeff(faceOpen[(std::size_t)idx]);
+    };
+
+    auto minFaceOpenAt = [&](float x, float y, float z) {
+        if (nx <= 0 || ny <= 0 || nz <= 0 || dx <= 0.0f) return 1.0f;
+        const int i = water3d_internal::clampi((int)std::floor(x / dx), 0, nx - 1);
+        const int j = water3d_internal::clampi((int)std::floor(y / dx), 0, ny - 1);
+        const int k = water3d_internal::clampi((int)std::floor(z / dx), 0, nz - 1);
+        float minOpen = 1.0f;
+        minOpen = std::min(minOpen, faceOpenAt(uFaceOpen, idxU(i, j, k)));
+        minOpen = std::min(minOpen, faceOpenAt(uFaceOpen, idxU(i + 1, j, k)));
+        minOpen = std::min(minOpen, faceOpenAt(vFaceOpen, idxV(i, j, k)));
+        minOpen = std::min(minOpen, faceOpenAt(vFaceOpen, idxV(i, j + 1, k)));
+        minOpen = std::min(minOpen, faceOpenAt(wFaceOpen, idxW(i, j, k)));
+        minOpen = std::min(minOpen, faceOpenAt(wFaceOpen, idxW(i, j, k + 1)));
+        return minOpen;
+    };
 
     auto advectRange = [&](int begin, int end) {
         for (int pi = begin; pi < end; ++pi) {
@@ -160,9 +182,32 @@ inline void MACWater3D::advectParticles() {
             p.x += dt * u2;
             p.y += dt * v2;
             p.z += dt * w2;
+
+            const float minOpen = minFaceOpenAt(p.x, p.y, p.z);
+            if (minOpen < 0.35f) {
+                ++particlesNearWallCount;
+                const float scale = water3d_internal::clampf(minOpen / 0.35f, 0.0f, 1.0f);
+                p.u *= scale;
+                p.v *= scale;
+                p.w *= scale;
+            }
+
+            const int ci = water3d_internal::clampi((int)std::floor(p.x / dx), 0, nx - 1);
+            const int cj = water3d_internal::clampi((int)std::floor(p.y / dx), 0, ny - 1);
+            const int ck = water3d_internal::clampi((int)std::floor(p.z / dx), 0, nz - 1);
+            if (solid[(std::size_t)idxCell(ci, cj, ck)]) {
+                ++particlesInsideWallCount;
+            }
+
             p.u = u2;
             p.v = v2;
             p.w = w2;
+            if (minOpen < 0.35f) {
+                const float scale = water3d_internal::clampf(minOpen / 0.35f, 0.0f, 1.0f);
+                p.u *= scale;
+                p.v *= scale;
+                p.w *= scale;
+            }
             p.age += dt;
         }
     };
