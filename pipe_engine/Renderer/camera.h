@@ -2,6 +2,7 @@
 #include "../Geometry/vec3.h"
 #include <cmath>
 #include <algorithm>
+#include "../Geometry/math_constants.h"
 
 // ============================================================================
 // OrbitCamera: arcball-style camera that orbits a target point.
@@ -30,8 +31,8 @@ struct OrbitCamera {
     // ---- Derived quantities ------------------------------------------------
 
     Vec3 position() const {
-        float yaw   = yawDeg   * float(M_PI) / 180.f;
-        float pitch = pitchDeg * float(M_PI) / 180.f;
+        float yaw   = yawDeg * pipe_math::kPiF / 180.f;
+        float pitch = pitchDeg * pipe_math::kPiF / 180.f;
         float r = distance;
         return {
             target.x + r * std::cos(pitch) * std::sin(yaw),
@@ -71,7 +72,7 @@ struct OrbitCamera {
 
     // Build 4x4 projection matrix (col-major)
     void buildProjMatrix(float* m, float aspect) const {
-        float f = 1.f / std::tan(fovYDeg * float(M_PI) / 360.f);
+        float f = 1.f / std::tan(fovYDeg * pipe_math::kPiF / 360.f);
         float nf = 1.f / (nearZ - farZ);
 
         m[0]  = f / aspect; m[4]  = 0; m[8]  = 0;                     m[12] = 0;

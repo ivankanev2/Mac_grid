@@ -2,6 +2,8 @@
 #include "pipe_network.h"
 #include <vector>
 #include <cmath>
+#include <algorithm>
+#include "math_constants.h"
 
 // ============================================================================
 // TriMesh: simple indexed triangle mesh suitable for OBJ/STL export and
@@ -71,7 +73,7 @@ public:
 
             float vCoord = t;
             for (int si = 0; si < ringSlices; ++si) {
-                float theta = 2.f * float(M_PI) * (float)si / (float)ringSlices;
+                float theta = 2.f * pipe_math::kPiF * (float)si / (float)ringSlices;
                 float cosT = std::cos(theta), sinT = std::sin(theta);
 
                 Vec3 offset = normal * (cosT * radius) + binormal * (sinT * radius);
@@ -119,7 +121,7 @@ public:
         for (int ring = 0; ring < 2; ++ring) {
             float r = (ring == 0) ? innerR : outerR;
             for (int si = 0; si < ringSlices; ++si) {
-                float theta = 2.f * float(M_PI) * (float)si / (float)ringSlices;
+                float theta = 2.f * pipe_math::kPiF * (float)si / (float)ringSlices;
                 float cosT = std::cos(theta), sinT = std::sin(theta);
                 Vec3 offset = normal * (cosT * r) + binormal * (sinT * r);
                 Vec3 n = facingForward ? tang : tang * -1.f;

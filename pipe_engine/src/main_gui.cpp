@@ -12,14 +12,19 @@
 //   Ctrl+Z      → undo last segment
 // ============================================================================
 
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 #ifdef __APPLE__
 #  define GL_SILENCE_DEPRECATION
 #  include <OpenGL/gl3.h>
 #else
+#  ifndef GL_GLEXT_PROTOTYPES
+#    define GL_GLEXT_PROTOTYPES
+#  endif
 #  include <GL/gl.h>
+#  include <GL/glext.h>
 #endif
-
-#include <GLFW/glfw3.h>
 
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"

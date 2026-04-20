@@ -2,11 +2,7 @@
 #include "../Geometry/mesh_generator.h"
 #include "camera.h"
 
-#ifdef __APPLE__
-#  include <OpenGL/gl3.h>
-#else
-#  include <GL/gl.h>
-#endif
+#include "gl_loader.h"
 
 #include <string>
 #include <vector>
@@ -120,6 +116,12 @@ public:
     OrbitCamera camera;
 
     bool init() {
+        if (!pipe_gl::ensureLoaded()) {
+            std::cerr << "[MeshRenderer] Failed to load OpenGL entry point";
+            if (const char* name = pipe_gl::missingProcName()) std::cerr << ": " << name;
+            std::cerr << "\n";
+            return false;
+        }
         if (!compilePipeShader()) return false;
         if (!compileGridShader()) return false;
         buildGrid();

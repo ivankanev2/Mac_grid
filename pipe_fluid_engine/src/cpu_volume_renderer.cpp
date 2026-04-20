@@ -14,12 +14,7 @@
 
 #include "pipe_fluid/volume_renderer.h"
 
-#ifdef __APPLE__
-#  define GL_SILENCE_DEPRECATION
-#  include <OpenGL/gl3.h>
-#else
-#  include <GL/gl.h>
-#endif
+#include "Renderer/gl_loader.h"
 
 #include <algorithm>
 #include <atomic>
@@ -263,6 +258,7 @@ static GLuint compileProgram(const char* vs, const char* fs) {
 class CpuVolumeRenderer : public VolumeOverlayRenderer {
 public:
     bool init() override {
+        if (!pipe_gl::ensureLoaded()) return false;
         m_prog = compileProgram(QUAD_VERT, QUAD_FRAG);
         if (!m_prog) return false;
 

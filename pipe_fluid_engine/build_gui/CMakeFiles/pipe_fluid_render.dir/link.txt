@@ -1,2 +1,0 @@
-/usr/bin/ar qc libpipe_fluid_render.a CMakeFiles/pipe_fluid_render.dir/src/volume_renderer.cpp.o CMakeFiles/pipe_fluid_render.dir/src/cpu_volume_renderer.cpp.o CMakeFiles/pipe_fluid_render.dir/src/gpu_volume_renderer.cpp.o
-/usr/bin/ranlib libpipe_fluid_render.a

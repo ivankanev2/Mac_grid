@@ -17,16 +17,7 @@
 
 #include "pipe_fluid/volume_renderer.h"
 
-#ifdef __APPLE__
-#  define GL_SILENCE_DEPRECATION
-#  include <OpenGL/gl3.h>
-#else
-#  include <GL/gl.h>
-#  ifndef GL_GLEXT_PROTOTYPES
-#    define GL_GLEXT_PROTOTYPES
-#  endif
-#  include <GL/glext.h>
-#endif
+#include "Renderer/gl_loader.h"
 
 #include <algorithm>
 #include <cctype>
@@ -445,6 +436,7 @@ static bool gpuBackendSupported() {
 class GpuVolumeRenderer : public VolumeOverlayRenderer {
 public:
     bool init() override {
+        if (!pipe_gl::ensureLoaded()) return false;
         if (!gpuBackendSupported()) return false;
 
         m_prog = compileProgram(VOL_VERT, VOL_FRAG);

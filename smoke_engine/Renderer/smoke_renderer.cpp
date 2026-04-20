@@ -44,8 +44,10 @@ struct WaterViewBox {
     float hx = 0.5f;
     float hy = 0.5f;
     float hz = 0.5f;
-    float camDist = 1.85f;
-    float fovScale = 0.95f;
+    // Must match the 3D panel projection in UI/panels.cpp so the volume
+    // overlay, particle markers, and wireframe box all share the same camera.
+    float camDist = 2.10f;
+    float fovScale = 0.82f;
     float imageAspect = 1.0f;
 };
 

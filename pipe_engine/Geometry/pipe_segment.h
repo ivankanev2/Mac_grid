@@ -3,6 +3,8 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <algorithm>
+#include "math_constants.h"
 
 // ============================================================================
 // PipeSegment: base abstraction for a pipe primitive.
@@ -82,7 +84,7 @@ struct BendSegment : PipeSegment {
     BendSegment() {
         type = SegmentType::Bend;
         bendRadius = 0.2f;
-        angleRad   = float(M_PI) * 0.5f;
+        angleRad   = pipe_math::kPiF * 0.5f;
     }
 
     // Construct a 90-degree elbow that smoothly connects two directions.
@@ -114,10 +116,10 @@ struct BendSegment : PipeSegment {
         // The arc sweeps by the supplement of the angle between the directions.
         float cosA = std::clamp(inDir.dot(outDir), -1.f, 1.f);
         float angleBetween = std::acos(cosA);
-        b.angleRad = float(M_PI) - angleBetween;
+        b.angleRad = pipe_math::kPiF - angleBetween;
         // Special case: anti-parallel directions → full 180° U-bend
-        if (angleBetween > float(M_PI) - 1e-4f) {
-            b.angleRad = float(M_PI);
+        if (angleBetween > pipe_math::kPiF - 1e-4f) {
+            b.angleRad = pipe_math::kPiF;
         }
 
         // Centre of curvature: offset from startPt perpendicular to inDir
