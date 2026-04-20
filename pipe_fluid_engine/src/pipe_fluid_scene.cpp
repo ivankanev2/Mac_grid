@@ -70,6 +70,52 @@ inline void buildOrthoBasis(const Vec3& dir, Vec3& u, Vec3& v) {
         d.x*u.y - d.y*u.x
     };
 }
+
+
+inline void applyFaceFractions(std::vector<float>& faceVel,
+                               const std::vector<float>& faceOpen,
+                               float closedThreshold = 1.0e-4f) {
+    if (faceVel.size() != faceOpen.size()) return;
+    for (std::size_t idx = 0; idx < faceVel.size(); ++idx) {
+        const float open = std::clamp(faceOpen[idx], 0.0f, 1.0f);
+        faceVel[idx] *= open;
+        if (open <= closedThreshold) {
+            faceVel[idx] = 0.0f;
+        }
+    }
+}
+
+inline void applySolverBoundaryToSmoke(MACSmoke3D& smoke,
+                                       const PipeSolverBoundaryData& boundary) {
+    if (!boundary.valid()) return;
+    if ((int)boundary.uOpen.size() != (smoke.nx + 1) * smoke.ny * smoke.nz) return;
+    if ((int)boundary.vOpen.size() != smoke.nx * (smoke.ny + 1) * smoke.nz) return;
+    if ((int)boundary.wOpen.size() != smoke.nx * smoke.ny * (smoke.nz + 1)) return;
+
+    applyFaceFractions(smoke.u, boundary.uOpen);
+    applyFaceFractions(smoke.v, boundary.vOpen);
+    applyFaceFractions(smoke.w, boundary.wOpen);
+    smoke.derivedFieldsDirty = true;
+}
+
+inline void applySolverBoundaryToWater(MACWater3D& water,
+                                       const PipeSolverBoundaryData& boundary) {
+    if (water.isCudaEnabled()) {
+        // The CUDA backend owns its own device-side velocity state, so host-side
+        // face edits here would not propagate back without a dedicated upload path.
+        // Keep the CPU path correct first and leave CUDA behavior unchanged.
+        return;
+    }
+    if (!boundary.valid()) return;
+    if ((int)boundary.uOpen.size() != (water.nx + 1) * water.ny * water.nz) return;
+    if ((int)boundary.vOpen.size() != water.nx * (water.ny + 1) * water.nz) return;
+    if ((int)boundary.wOpen.size() != water.nx * water.ny * (water.nz + 1)) return;
+
+    applyFaceFractions(water.u, boundary.uOpen);
+    applyFaceFractions(water.v, boundary.vOpen);
+    applyFaceFractions(water.w, boundary.wOpen);
+    water.derivedFieldsDirty = true;
+}
 }
 
 struct PipeFluidScene::Impl {
@@ -199,6 +245,7 @@ void PipeFluidScene::rebuild() {
             p_->smoke->reset(NX, NY, NZ, DX, DT);
         }
         applySolidsToSmoke(*p_->smoke, p_->smokeMask);
+        applySolverBoundaryToSmoke(*p_->smoke, p_->solverBoundary);
     } else {
         p_->smoke.reset();
     }
@@ -265,6 +312,7 @@ void PipeFluidScene::rebuild() {
         wParams.volumePreserveStrength = 0.05f;
         p_->water->setParams(wParams);
         applySolidsToWater(*p_->water, p_->waterMask);
+        applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
 
         // Pre-size the SDF to the new grid dimensions, initialised to
         // "far from water" (+band) so a first-frame render before any
@@ -388,10 +436,12 @@ void PipeFluidScene::step(float dtOverride) {
     if (p_->smoke) {
         if (dt > 0.f) p_->smoke->setDt(dt);
         p_->smoke->step();
+        applySolverBoundaryToSmoke(*p_->smoke, p_->solverBoundary);
     }
     if (p_->water) {
         if (dt > 0.f) p_->water->setDt(dt);
         p_->water->step();
+        applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
         // Rebuild the narrow-band SDF from the FLIP particles so the volume
         // renderer can sphere-trace a smooth liquid surface instead of
         // volume-integrating a per-cell density field.  This is the bridge
@@ -409,10 +459,12 @@ void PipeFluidScene::resetFluids() {
     if (p_->smoke) {
         p_->smoke->reset();
         applySolidsToSmoke(*p_->smoke, p_->smokeMask);
+        applySolverBoundaryToSmoke(*p_->smoke, p_->solverBoundary);
     }
     if (p_->water) {
         p_->water->reset();
         applySolidsToWater(*p_->water, p_->waterMask);
+        applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
         p_->waterSdf.assign(p_->waterSdf.size(), p_->waterSdfBand > 0.0f ? p_->waterSdfBand : 0.0f);
     }
 }
@@ -477,6 +529,7 @@ void PipeFluidScene::addSmokeSourceSphere(const Vec3& centre, float radius,
             subR, subA,
             toSimVec3<MACSmoke3D::Vec3>(vel));
     }
+    applySolverBoundaryToSmoke(*p_->smoke, p_->solverBoundary);
 }
 
 void PipeFluidScene::addWaterSourceSphere(const Vec3& centre, float radius,
@@ -528,6 +581,7 @@ void PipeFluidScene::addWaterSourceSphere(const Vec3& centre, float radius,
             subR,
             toSimVec3<MACWater3D::Vec3>(vel));
     }
+    applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
 }
 
 // ---- Accessors --------------------------------------------------------------
