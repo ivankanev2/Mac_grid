@@ -4,6 +4,7 @@
 #include <string>
 #include <iostream>
 #include <iomanip>
+#include <cstdint>
 
 // ============================================================================
 // OBJ / STL exporter for TriMesh.

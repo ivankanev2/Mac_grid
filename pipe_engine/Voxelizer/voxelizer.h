@@ -5,6 +5,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <cstdint>
 
 // ============================================================================
 // PipeVoxelizer: converts a PipeNetwork into a 3D voxel grid where each cell

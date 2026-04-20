@@ -3,6 +3,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
 #include "math_constants.h"
 
 // ============================================================================
