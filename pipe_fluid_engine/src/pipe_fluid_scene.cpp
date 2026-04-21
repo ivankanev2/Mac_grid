@@ -240,6 +240,31 @@ inline void confineWaterParticlesToPipe(MACWater3D& water,
         float phi = 0.0f;
         float nx = 0.0f, ny = 0.0f, nz = 0.0f;
         sampleWallSdfAndNormal(boundary, p.x, p.y, p.z, phi, nx, ny, nz);
+
+        // Patch E: skip confinement when the particle is already outside the
+        // pipe.  With the signed-SDF from Patch D, grad(phi) at an Exterior
+        // cell points *toward* the pipe interior, so the along-+grad push
+        // below would yank outside-spawned particles onto (and, when the
+        // per-step push exceeds the 1-cell wall shell, *through*) the pipe
+        // walls.  Outside-pipe motion is handled correctly by gravity plus
+        // the face-blocked MAC pressure solve — no confinement needed.
+        {
+            const int ci = (int)std::floor(p.x / dx);
+            const int cj = (int)std::floor(p.y / dx);
+            const int ck = (int)std::floor(p.z / dx);
+            if (ci >= 0 && ci < boundary.nx &&
+                cj >= 0 && cj < boundary.ny &&
+                ck >= 0 && ck < boundary.nz) {
+                if (boundary.cells[boundary.idx(ci, cj, ck)] ==
+                    PipeBoundaryCell::Exterior) {
+                    continue;
+                }
+            } else {
+                // Outside the boundary grid entirely — nothing to confine to.
+                continue;
+            }
+        }
+
         if (phi >= clearance) continue;
 
         const float nLen2 = nx * nx + ny * ny + nz * nz;

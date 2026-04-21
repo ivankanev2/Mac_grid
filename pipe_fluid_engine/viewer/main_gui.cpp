@@ -48,6 +48,7 @@
 #include "pipe_fluid/pipe_solver_boundary_data.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -124,6 +125,130 @@ struct ViewerState {
     }
 };
 static ViewerState g_ui;
+
+// ============================================================================
+// Spawn-position wireframe marker
+//
+// The fluid source lives at absolute world coords (g_ui.sourceX/Y/Z) with
+// radius g_ui.sourceR.  Without a visual anchor, positioning the source via
+// the "Fluid source (world coords)" sliders is blind — the user only finds
+// out they missed when water appears in the wrong place on play.  This helper
+// draws a small wireframe sphere at the spawn point every frame so the user
+// can see where water will emit before pressing Play.
+//
+// Self-contained: its own shader + VBO, lazy-initialized on first draw.
+// Depth test is disabled so the marker is visible even when the spawn lies
+// behind the pipe shell, and the draw happens after the volume overlay so
+// nothing else writes over it.
+// ============================================================================
+struct SpawnMarkerDraw {
+    GLuint  vao = 0, vbo = 0, prog = 0;
+    GLint   locMVP = -1, locColor = -1;
+    GLsizei vertexCount = 0;
+    bool    ready = false;
+
+    void initOnce() {
+        if (ready) return;
+        // Three orthogonal great circles of a unit sphere, as GL_LINES.
+        const int   kSegs  = 48;
+        const float kTwoPi = 6.2831853071795864769f;
+        std::vector<float> verts;
+        verts.reserve(static_cast<std::size_t>(3 * kSegs * 2 * 3));
+        for (int axis = 0; axis < 3; ++axis) {
+            for (int i = 0; i < kSegs; ++i) {
+                const float a0 = kTwoPi *  i      / kSegs;
+                const float a1 = kTwoPi * (i + 1) / kSegs;
+                const float c0 = std::cos(a0), s0 = std::sin(a0);
+                const float c1 = std::cos(a1), s1 = std::sin(a1);
+                float p0[3] = {0,0,0}, p1[3] = {0,0,0};
+                if      (axis == 0) { p0[0]=c0; p0[1]=s0; p1[0]=c1; p1[1]=s1; }
+                else if (axis == 1) { p0[1]=c0; p0[2]=s0; p1[1]=c1; p1[2]=s1; }
+                else                { p0[0]=c0; p0[2]=s0; p1[0]=c1; p1[2]=s1; }
+                verts.insert(verts.end(), p0, p0 + 3);
+                verts.insert(verts.end(), p1, p1 + 3);
+            }
+        }
+        vertexCount = static_cast<GLsizei>(verts.size() / 3);
+
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                     verts.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glBindVertexArray(0);
+
+        const char* vsSrc =
+            "#version 150\n"
+            "in vec3 aPos;\n"
+            "uniform mat4 uMVP;\n"
+            "void main() { gl_Position = uMVP * vec4(aPos, 1.0); }\n";
+        const char* fsSrc =
+            "#version 150\n"
+            "uniform vec3 uColor;\n"
+            "out vec4 fragColor;\n"
+            "void main() { fragColor = vec4(uColor, 1.0); }\n";
+        GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vs, 1, &vsSrc, nullptr);
+        glCompileShader(vs);
+        GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fs, 1, &fsSrc, nullptr);
+        glCompileShader(fs);
+        prog = glCreateProgram();
+        glAttachShader(prog, vs);
+        glAttachShader(prog, fs);
+        glBindAttribLocation(prog, 0, "aPos");
+        glLinkProgram(prog);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        locMVP   = glGetUniformLocation(prog, "uMVP");
+        locColor = glGetUniformLocation(prog, "uColor");
+        ready = true;
+    }
+
+    // Column-major 4x4 multiply: out = a * b (standard OpenGL convention).
+    static void mul4(const float* a, const float* b, float* out) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) {
+                float s = 0.0f;
+                for (int k = 0; k < 4; ++k) s += a[k * 4 + r] * b[c * 4 + k];
+                out[c * 4 + r] = s;
+            }
+    }
+
+    void draw(const float* view, const float* proj,
+              float cx, float cy, float cz, float radius,
+              float rCol, float gCol, float bCol) {
+        initOnce();
+        const float R = std::max(radius, 1.0e-4f);
+        const float model[16] = {
+            R, 0, 0, 0,
+            0, R, 0, 0,
+            0, 0, R, 0,
+            cx, cy, cz, 1
+        };
+        float vm[16], mvp[16];
+        mul4(view, model, vm);
+        mul4(proj, vm,    mvp);
+
+        const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glUseProgram(prog);
+        glUniformMatrix4fv(locMVP, 1, GL_FALSE, mvp);
+        glUniform3f(locColor, rCol, gCol, bCol);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_LINES, 0, vertexCount);
+        glBindVertexArray(0);
+        glUseProgram(0);
+        glDepthMask(GL_TRUE);
+        if (depthWasOn) glEnable(GL_DEPTH_TEST);
+    }
+};
+static SpawnMarkerDraw g_spawnMarker;
 
 // ============================================================================
 // GLFW callbacks
@@ -914,6 +1039,22 @@ int main(int argc, char* argv[]) {
                 wsv.useSdf    = g_ui.waterUseSdf;
                 volRenderer->render(vv, wsv);
             }
+        }
+
+        // --- Spawn-position marker ------------------------------------------
+        // Drawn last in 3D (after the volume overlay) with depth test off so
+        // it is visible even if the spawn lies behind the pipe shell.  Use
+        // this to position the fluid source inside the pipe before pressing
+        // Play; water only actually spawns on Play.
+        {
+            const float aspect = (float)fbW / std::max(1.f, (float)fbH);
+            float proj[16], view[16];
+            renderer.camera.buildProjMatrix(proj, aspect);
+            renderer.camera.buildViewMatrix(view);
+            g_spawnMarker.draw(view, proj,
+                               g_ui.sourceX, g_ui.sourceY, g_ui.sourceZ,
+                               g_ui.sourceR,
+                               0.20f, 1.00f, 0.80f);  // bright cyan/teal
         }
         // ----------------------------------------------------------------------
 
