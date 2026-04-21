@@ -628,6 +628,9 @@ static void drawStatsPanel(pipe_fluid::PipeFluidScene& scene) {
         ImGui::Separator();
         ImGui::Text("Near-closed face flux count: %d", ws.nearClosedFaceFluxCount);
         ImGui::Text("Max near-closed face flux:   %.6f", ws.maxNearClosedFaceFlux);
+        // Patch A (diagnostic): mid-open face flux [0.25, 0.75), per step.
+        ImGui::Text("Mid-open face flux count:    %d", ws.midOpenFaceFluxCount);
+        ImGui::Text("Max mid-open face flux:      %.6f", ws.maxMidOpenFaceFlux);
         ImGui::Text("Particles near wall:         %d", ws.particlesNearWallCount);
         ImGui::Text("Particles inside wall:       %d", ws.particlesInsideWallCount);
     }

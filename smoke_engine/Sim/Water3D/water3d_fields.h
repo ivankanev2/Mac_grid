@@ -214,6 +214,12 @@ inline void MACWater3D::rasterizeDebugFields() {
 }
 
 inline void MACWater3D::updateStats(float stepMs) {
+    // Patch A (diagnostic): per-step reset of the mid-open face flux counter.
+    // The existing nearClosed* counters are intentionally NOT reset here to
+    // preserve their historical semantics.
+    midOpenFaceFluxCount = 0;
+    maxMidOpenFaceFlux = 0.0f;
+
     lastStats.cudaEnabled = false;
     lastStats.backendReady = true;
     lastStats.nx = nx;
@@ -255,6 +261,9 @@ inline void MACWater3D::updateStats(float stepMs) {
     lastStats.backendName = "CPU MAC 3D";
     lastStats.nearClosedFaceFluxCount = nearClosedFaceFluxCount;
     lastStats.maxNearClosedFaceFlux = maxNearClosedFaceFlux;
+    // Patch A (diagnostic): publish mid-open face flux to Stats.
+    lastStats.midOpenFaceFluxCount = midOpenFaceFluxCount;
+    lastStats.maxMidOpenFaceFlux = maxMidOpenFaceFlux;
     lastStats.particlesNearWallCount = particlesNearWallCount;
     lastStats.particlesInsideWallCount = particlesInsideWallCount;
     lastStats.bytesAllocated =
@@ -360,6 +369,13 @@ inline void MACWater3D::updateStats(float stepMs) {
                     if (open < openThresh && std::fabs(vel) > 1.0e-4f) {
                         ++nearClosedFaceFluxCount;
                         maxNearClosedFaceFlux = std::max(maxNearClosedFaceFlux, std::fabs(vel));
+                    }
+                    // Patch A (diagnostic): complement the near-closed tracker
+                    // with a mid-open band [0.25, 0.75). This is where the
+                    // single-cell wall shell's partial faces live.
+                    if (open >= 0.25f && open < 0.75f && std::fabs(vel) > 1.0e-4f) {
+                        ++midOpenFaceFluxCount;
+                        maxMidOpenFaceFlux = std::max(maxMidOpenFaceFlux, std::fabs(vel));
                     }
                 };
                 trackFace(water3d_internal::clampf(uFaceOpen[(std::size_t)uLid], 0.0f, 1.0f), u[(std::size_t)uLid]);

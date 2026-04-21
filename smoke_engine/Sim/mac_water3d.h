@@ -121,6 +121,11 @@ struct MACWater3D {
         SimStageTimings timings;
         int nearClosedFaceFluxCount = 0;
         float maxNearClosedFaceFlux = 0.0f;
+        // Patch A (diagnostic): per-step count of faces with raw open
+        // fraction in [0.25, 0.75) carrying |vel| > 1e-4. Complements the
+        // near-closed tracker, which only fires on raw open < 0.25.
+        int midOpenFaceFluxCount = 0;
+        float maxMidOpenFaceFlux = 0.0f;
         int particlesNearWallCount = 0;
         int particlesInsideWallCount = 0;
         int pressureOpenFaceCount = 0;
@@ -220,6 +225,10 @@ protected:
 
     int nearClosedFaceFluxCount = 0;
     float maxNearClosedFaceFlux = 0.0f;
+    // Patch A (diagnostic): see matching fields in Stats. Reset per step
+    // at the top of updateStats().
+    int midOpenFaceFluxCount = 0;
+    float maxMidOpenFaceFlux = 0.0f;
     int particlesNearWallCount = 0;
     int particlesInsideWallCount = 0;
     float preProjectionMaxDivergence = 0.0f;

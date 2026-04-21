@@ -86,9 +86,18 @@ std::vector<float> buildSignedWallDistance(const std::vector<PipeBoundaryCell>& 
     chamferSweep(outside, nx, ny, nz, dx);
     std::vector<float> sdf(total, 0.0f);
     for (std::size_t idx = 0; idx < total; ++idx) {
-        const bool isWall = cellIsWall(cells[idx]);
-        sdf[idx] = isWall ? -inside[idx] : outside[idx];
-        if (!std::isfinite(sdf[idx])) sdf[idx] = isWall ? -0.5f * dx : 0.5f * dx;
+        // Patch D: sign the SDF so both Wall and Exterior cells have phi < 0,
+        // while Interior and Opening cells keep phi > 0. This makes grad(phi)
+        // point consistently from outside-the-pipe toward inside-the-pipe on
+        // both sides of the wall, so the confinement code can pull escaped
+        // particles back through the wall instead of pushing them further out.
+        const PipeBoundaryCell c = cells[idx];
+        const bool isWall     = (c == PipeBoundaryCell::Wall);
+        const bool isExterior = (c == PipeBoundaryCell::Exterior);
+        if (isWall)          sdf[idx] = -inside[idx];
+        else if (isExterior) sdf[idx] = -outside[idx];
+        else                 sdf[idx] =  outside[idx];
+        if (!std::isfinite(sdf[idx])) sdf[idx] = (isWall || isExterior) ? -0.5f * dx : 0.5f * dx;
     }
     return sdf;
 }
