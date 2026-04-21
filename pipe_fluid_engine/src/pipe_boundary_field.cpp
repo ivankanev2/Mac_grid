@@ -86,11 +86,42 @@ std::vector<float> buildSignedWallDistance(const std::vector<PipeBoundaryCell>& 
     chamferSweep(outside, nx, ny, nz, dx);
     std::vector<float> sdf(total, 0.0f);
     for (std::size_t idx = 0; idx < total; ++idx) {
-        // Patch D: sign the SDF so both Wall and Exterior cells have phi < 0,
-        // while Interior and Opening cells keep phi > 0. This makes grad(phi)
-        // point consistently from outside-the-pipe toward inside-the-pipe on
-        // both sides of the wall, so the confinement code can pull escaped
-        // particles back through the wall instead of pushing them further out.
+        // Patch F: this field is the "wall-only" signed distance used by the
+        // face-open / cut-cell machinery.  Only Wall cells are negative; both
+        // Interior and Exterior (plus Opening) carry positive phi so the MAC
+        // solver sees exterior↔exterior faces as fully open and can run real
+        // pressure projection outside the pipe shell.  Confinement uses a
+        // separate "interior-signed" distance field (see
+        // buildInteriorSignedDistance below) that keeps the Patch D property
+        // of having grad(phi) point toward the pipe interior on both sides
+        // of the wall.
+        const bool isWall = cellIsWall(cells[idx]);
+        sdf[idx] = isWall ? -inside[idx] : outside[idx];
+        if (!std::isfinite(sdf[idx])) sdf[idx] = isWall ? -0.5f * dx : 0.5f * dx;
+    }
+    return sdf;
+}
+
+// Patch F: second SDF signed the Patch-D way — both Wall and Exterior cells
+// are negative, only Interior/Opening are positive.  Used exclusively by the
+// particle confinement pass so that grad(phi) always points from outside-the-
+// pipe toward inside-the-pipe.  Keeping this separate from wallSdf means
+// solidFractionOnEdge (which interprets negative phi as "solid") does not see
+// Exterior cells as solid and therefore does not close Exterior↔Exterior faces.
+std::vector<float> buildInteriorSignedDistance(const std::vector<PipeBoundaryCell>& cells, int nx, int ny, int nz, float dx) {
+    const std::size_t total = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz);
+    std::vector<float> inside(total, kInf), outside(total, kInf);
+    for (int k = 0; k < nz; ++k) for (int j = 0; j < ny; ++j) for (int i = 0; i < nx; ++i) {
+        const std::size_t idx = static_cast<std::size_t>(i) + static_cast<std::size_t>(nx) * (static_cast<std::size_t>(j) + static_cast<std::size_t>(ny) * static_cast<std::size_t>(k));
+        const bool isWall = cellIsWall(cells[idx]);
+        if (hasOppositeNeighbor(cells, nx, ny, nz, i, j, k, isWall)) {
+            if (isWall) inside[idx] = 0.5f * dx; else outside[idx] = 0.5f * dx;
+        }
+    }
+    chamferSweep(inside, nx, ny, nz, dx);
+    chamferSweep(outside, nx, ny, nz, dx);
+    std::vector<float> sdf(total, 0.0f);
+    for (std::size_t idx = 0; idx < total; ++idx) {
         const PipeBoundaryCell c = cells[idx];
         const bool isWall     = (c == PipeBoundaryCell::Wall);
         const bool isExterior = (c == PipeBoundaryCell::Exterior);
@@ -231,6 +262,16 @@ void buildFaceOpenFractions(PipeBoundaryField& field) {
     field.vOpen.assign(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny + 1) * static_cast<std::size_t>(nz), 1.0f);
     field.wOpen.assign(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz + 1), 1.0f);
 
+    // Patch G: gate interior face-opens by the cell classification.  The
+    // chamfer SDF (wallSdf) is built from the cell labels, not from the true
+    // pipe geometry, so its sub-voxel magnitudes carry no real geometric
+    // information — and using them via solidFractionOnEdge produces ~50 %
+    // partial-open faces between Interior and Wall cells, which is exactly
+    // the pressure-projection leak path that lets water sheet out through
+    // the pipe walls.  A face is open iff neither adjacent cell is Wall.
+    // This keeps every Interior↔Interior, Exterior↔Exterior, and
+    // Interior↔Opening face fully open (the MAC solver runs normally inside
+    // and outside the pipe), while Wall-adjacent faces are hard-closed.
     for (int k = 0; k < nz; ++k) for (int j = 0; j < ny; ++j) for (int i = 0; i <= nx; ++i) {
         float open = 1.0f;
         if (i == 0) {
@@ -238,8 +279,9 @@ void buildFaceOpenFractions(PipeBoundaryField& field) {
         } else if (i == nx) {
             open = (field.cells[field.idx(nx - 1, j, k)] == PipeBoundaryCell::Wall) ? 0.0f : 1.0f;
         } else {
-            open = boundaryFaceOpenFraction(field.wallSdf[field.idx(i - 1, j, k)],
-                                            field.wallSdf[field.idx(i,     j, k)]);
+            const bool aWall = field.cells[field.idx(i - 1, j, k)] == PipeBoundaryCell::Wall;
+            const bool bWall = field.cells[field.idx(i,     j, k)] == PipeBoundaryCell::Wall;
+            open = (aWall || bWall) ? 0.0f : 1.0f;
         }
         field.uOpen[field.uIdx(i, j, k)] = open;
     }
@@ -251,8 +293,9 @@ void buildFaceOpenFractions(PipeBoundaryField& field) {
         } else if (j == ny) {
             open = (field.cells[field.idx(i, ny - 1, k)] == PipeBoundaryCell::Wall) ? 0.0f : 1.0f;
         } else {
-            open = boundaryFaceOpenFraction(field.wallSdf[field.idx(i, j - 1, k)],
-                                            field.wallSdf[field.idx(i, j,     k)]);
+            const bool aWall = field.cells[field.idx(i, j - 1, k)] == PipeBoundaryCell::Wall;
+            const bool bWall = field.cells[field.idx(i, j,     k)] == PipeBoundaryCell::Wall;
+            open = (aWall || bWall) ? 0.0f : 1.0f;
         }
         field.vOpen[field.vIdx(i, j, k)] = open;
     }
@@ -264,8 +307,9 @@ void buildFaceOpenFractions(PipeBoundaryField& field) {
         } else if (k == nz) {
             open = (field.cells[field.idx(i, j, nz - 1)] == PipeBoundaryCell::Wall) ? 0.0f : 1.0f;
         } else {
-            open = boundaryFaceOpenFraction(field.wallSdf[field.idx(i, j, k - 1)],
-                                            field.wallSdf[field.idx(i, j, k)]);
+            const bool aWall = field.cells[field.idx(i, j, k - 1)] == PipeBoundaryCell::Wall;
+            const bool bWall = field.cells[field.idx(i, j, k    )] == PipeBoundaryCell::Wall;
+            open = (aWall || bWall) ? 0.0f : 1.0f;
         }
         field.wOpen[field.wIdx(i, j, k)] = open;
     }
@@ -296,7 +340,8 @@ PipeBoundaryField buildPipeBoundaryField(const PipeNetwork& network, const Voxel
         field.wallMask[idx] = (c == PipeBoundaryCell::Wall) ? 1u : 0u;
     }
     applyTerminalSemantics(network, voxels, field);
-    field.wallSdf = buildSignedWallDistance(field.cells, field.nx, field.ny, field.nz, field.dx);
+    field.wallSdf     = buildSignedWallDistance(field.cells, field.nx, field.ny, field.nz, field.dx);
+    field.interiorSdf = buildInteriorSignedDistance(field.cells, field.nx, field.ny, field.nz, field.dx);
     buildFaceOpenFractions(field);
     return field;
 }

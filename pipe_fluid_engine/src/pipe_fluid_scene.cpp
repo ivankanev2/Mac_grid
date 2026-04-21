@@ -168,37 +168,43 @@ inline float sampleCellCenteredFieldTrilinear(const std::vector<float>& field,
     return c0 + tz * (c1 - c0);
 }
 
+// Patch F: sampler now takes the SDF array explicitly so callers can pick
+// between boundary.wallSdf (face-open semantics — Wall only negative) and
+// boundary.interiorSdf (confinement semantics — Wall AND Exterior negative).
+// The confinement pass below uses interiorSdf so its gradient always points
+// toward the pipe interior; face-open / cut-cell paths use wallSdf.
 inline void sampleWallSdfAndNormal(const PipeBoundaryField& boundary,
+                                   const std::vector<float>& sdf,
                                    float x, float y, float z,
                                    float& phi,
                                    float& nx, float& ny, float& nz) {
-    phi = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+    phi = sampleCellCenteredFieldTrilinear(sdf,
                                            boundary.nx, boundary.ny, boundary.nz,
                                            boundary.dx,
                                            x, y, z);
 
     const float eps = std::max(0.25f * boundary.dx, 1.0e-5f);
-    const float px0 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+    const float px0 = sampleCellCenteredFieldTrilinear(sdf,
                                                        boundary.nx, boundary.ny, boundary.nz,
                                                        boundary.dx,
                                                        x - eps, y, z);
-    const float px1 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+    const float px1 = sampleCellCenteredFieldTrilinear(sdf,
                                                        boundary.nx, boundary.ny, boundary.nz,
                                                        boundary.dx,
                                                        x + eps, y, z);
-    const float py0 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+    const float py0 = sampleCellCenteredFieldTrilinear(sdf,
                                                        boundary.nx, boundary.ny, boundary.nz,
                                                        boundary.dx,
                                                        x, y - eps, z);
-    const float py1 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+    const float py1 = sampleCellCenteredFieldTrilinear(sdf,
                                                        boundary.nx, boundary.ny, boundary.nz,
                                                        boundary.dx,
                                                        x, y + eps, z);
-    const float pz0 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+    const float pz0 = sampleCellCenteredFieldTrilinear(sdf,
                                                        boundary.nx, boundary.ny, boundary.nz,
                                                        boundary.dx,
                                                        x, y, z - eps);
-    const float pz1 = sampleCellCenteredFieldTrilinear(boundary.wallSdf,
+    const float pz1 = sampleCellCenteredFieldTrilinear(sdf,
                                                        boundary.nx, boundary.ny, boundary.nz,
                                                        boundary.dx,
                                                        x, y, z + eps);
@@ -239,15 +245,32 @@ inline void confineWaterParticlesToPipe(MACWater3D& water,
     for (auto& p : water.particles) {
         float phi = 0.0f;
         float nx = 0.0f, ny = 0.0f, nz = 0.0f;
-        sampleWallSdfAndNormal(boundary, p.x, p.y, p.z, phi, nx, ny, nz);
+        // Patch F: confinement samples interiorSdf so grad(phi) always
+        // points toward the pipe interior.  wallSdf is reserved for the
+        // face-open path where only Wall cells must register as solid.
+        sampleWallSdfAndNormal(boundary, boundary.interiorSdf,
+                               p.x, p.y, p.z, phi, nx, ny, nz);
 
-        // Patch E: skip confinement when the particle is already outside the
-        // pipe.  With the signed-SDF from Patch D, grad(phi) at an Exterior
-        // cell points *toward* the pipe interior, so the along-+grad push
-        // below would yank outside-spawned particles onto (and, when the
-        // per-step push exceeds the 1-cell wall shell, *through*) the pipe
-        // walls.  Outside-pipe motion is handled correctly by gravity plus
-        // the face-blocked MAC pressure solve — no confinement needed.
+        // Patch I: narrow Patch E's bail-out so it no longer covers
+        // numerically-tunneled particles.  Patch E skipped every Exterior
+        // particle to prevent the original magnet-pull bug (grad(phi) in
+        // Exterior cells points *toward* the pipe interior, so an
+        // unconditional +grad push would teleport legit outside water
+        // through the wall).  But it also skipped particles that were born
+        // Interior and crossed the 1-cell wall shell in a single advection
+        // step — those end up in an Exterior cell within ~1 cell of the
+        // wall, are then left to gravity, and become the residual sheet
+        // under the pipe.
+        //
+        // Refined rule: only skip Exterior particles whose interiorSdf
+        // (phi, sampled at the particle above) is more negative than
+        // kTunneledBand.  Legit outside water is almost always deeper in
+        // Exterior space than one wall-shell-plus-a-cell; tunneled
+        // particles are almost always shallower.  In the rare case a legit
+        // outside particle enters this thin band (e.g. falling past the
+        // pipe very close to the outer surface), one frame of confinement
+        // push is a small perturbation compared to gravity-driven fall
+        // velocity, so it falls past without being trapped.
         {
             const int ci = (int)std::floor(p.x / dx);
             const int cj = (int)std::floor(p.y / dx);
@@ -257,7 +280,16 @@ inline void confineWaterParticlesToPipe(MACWater3D& water,
                 ck >= 0 && ck < boundary.nz) {
                 if (boundary.cells[boundary.idx(ci, cj, ck)] ==
                     PipeBoundaryCell::Exterior) {
-                    continue;
+                    const float kTunneledBand = 1.8f * dx;
+                    if (phi < -kTunneledBand) {
+                        // Deep-Exterior: legitimately-outside water.  The
+                        // face-blocked MAC pressure solve handles it
+                        // correctly; confinement would be magnet-pull.
+                        continue;
+                    }
+                    // Within-band Exterior: fall through to the push
+                    // below.  +grad(interiorSdf) carries the particle
+                    // across the wall and back into Interior.
                 }
             } else {
                 // Outside the boundary grid entirely — nothing to confine to.
@@ -753,6 +785,46 @@ void PipeFluidScene::addWaterSourceSphere(const Vec3& centre, float radius,
                                  velocity.y*velocity.y +
                                  velocity.z*velocity.z);
 
+    // Patch H: classify the source center up front so we can filter the
+    // particles that land in the wrong region after the 4 sub-bursts run.
+    // The source sphere (radius ~0.03 m ≈ 2 cells at dx=0.015 m) pokes
+    // through the 1-cell pipe wall when the user places the source near
+    // the wall, and MACWater3D::addWaterSourceSphere cheerfully emits
+    // particles wherever the RNG lands them.  With Patch F/G, any
+    // particle born in an Exterior cell is treated as real outside-pipe
+    // water and falls under gravity — which is the residual sheet the
+    // user is seeing.  Rejecting those at birth matches the user's
+    // intent: source inside ⇒ all water inside; source outside ⇒ all
+    // water outside.  The CUDA backend owns particles device-side, so
+    // we only filter on the CPU path.
+    const auto& field = p_->boundary;
+    bool filterBySource = !p_->water->isCudaEnabled() &&
+                          field.valid() &&
+                          field.nx == p_->water->nx &&
+                          field.ny == p_->water->ny &&
+                          field.nz == p_->water->nz &&
+                          std::fabs(field.dx - p_->water->dx) < 1.0e-6f;
+    bool sourceWantsInterior = false;
+    if (filterBySource) {
+        const int si = static_cast<int>(std::floor(simC.x / field.dx));
+        const int sj = static_cast<int>(std::floor(simC.y / field.dx));
+        const int sk = static_cast<int>(std::floor(simC.z / field.dx));
+        if (si >= 0 && si < field.nx &&
+            sj >= 0 && sj < field.ny &&
+            sk >= 0 && sk < field.nz) {
+            const PipeBoundaryCell sc = field.cells[field.idx(si, sj, sk)];
+            sourceWantsInterior = (sc == PipeBoundaryCell::Interior ||
+                                   sc == PipeBoundaryCell::Opening);
+        } else {
+            // Source outside the boundary domain — treat as exterior intent.
+            sourceWantsInterior = false;
+        }
+    }
+
+    const std::size_t beforeCount = filterBySource
+        ? p_->water->particles.size()
+        : 0u;
+
     for (int i = 0; i < N; ++i) {
         const float ou = off(rng) * radius;
         const float ov = off(rng) * radius;
@@ -773,6 +845,50 @@ void PipeFluidScene::addWaterSourceSphere(const Vec3& centre, float radius,
             subR,
             toSimVec3<MACWater3D::Vec3>(vel));
     }
+
+    // Patch H: compact newly-emitted particles, dropping any that landed on
+    // the wrong side of the pipe wall.  Iterating [beforeCount, size()) keeps
+    // previously-simulated particles untouched.
+    if (filterBySource) {
+        auto& pts = p_->water->particles;
+        if (pts.size() > beforeCount) {
+            const float ddx = field.dx;
+            std::size_t w = beforeCount;
+            for (std::size_t r = beforeCount; r < pts.size(); ++r) {
+                const auto& part = pts[r];
+                const int ci = static_cast<int>(std::floor(part.x / ddx));
+                const int cj = static_cast<int>(std::floor(part.y / ddx));
+                const int ck = static_cast<int>(std::floor(part.z / ddx));
+                bool keep = false;
+                if (ci < 0 || ci >= field.nx ||
+                    cj < 0 || cj >= field.ny ||
+                    ck < 0 || ck >= field.nz) {
+                    // Out of classification domain: only meaningful for
+                    // exterior-intent emission (open air above the grid).
+                    keep = !sourceWantsInterior;
+                } else {
+                    const PipeBoundaryCell c = field.cells[field.idx(ci, cj, ck)];
+                    if (sourceWantsInterior) {
+                        keep = (c == PipeBoundaryCell::Interior ||
+                                c == PipeBoundaryCell::Opening);
+                    } else {
+                        // Exterior intent: reject Wall cells (solid), accept
+                        // Exterior and (defensively) Opening; Interior only
+                        // reachable via mis-classified thin walls, drop it so
+                        // we don't inject mass inside a sealed pipe.
+                        keep = (c == PipeBoundaryCell::Exterior ||
+                                c == PipeBoundaryCell::Opening);
+                    }
+                }
+                if (keep) {
+                    if (w != r) pts[w] = pts[r];
+                    ++w;
+                }
+            }
+            pts.resize(w);
+        }
+    }
+
     applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
     confineWaterParticlesToPipe(*p_->water, p_->boundary);
 }

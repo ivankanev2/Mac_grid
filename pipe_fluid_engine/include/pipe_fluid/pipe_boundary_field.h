@@ -34,8 +34,17 @@ struct PipeBoundaryField {
     // Canonical per-cell classification.
     std::vector<PipeBoundaryCell> cells;
     // Signed distance to the pipe wall region, in world metres.
-    // Negative inside wall material, positive elsewhere.
+    // Negative inside wall material, positive elsewhere (both Interior AND
+    // Exterior).  This is the field fed to solidFractionOnEdge / face-open
+    // computation so that Exterior↔Exterior faces remain fully open and the
+    // MAC pressure solver can run normally outside the pipe shell.
     std::vector<float> wallSdf;
+    // Patch F: second signed-distance field used exclusively by the
+    // particle confinement code.  Negative inside Wall AND Exterior cells
+    // (only Interior / Opening positive), so grad(phi) points consistently
+    // from outside-pipe toward inside-pipe on both sides of the wall.
+    // Using a separate field here keeps the face-open logic unaffected.
+    std::vector<float> interiorSdf;
     // Binary wall occupancy kept for current renderer / legacy solver paths.
     std::vector<uint8_t> wallMask;
 
@@ -60,7 +69,8 @@ struct PipeBoundaryField {
         const std::size_t nv = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny + 1) * static_cast<std::size_t>(nz);
         const std::size_t nw = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz + 1);
         return nx > 0 && ny > 0 && nz > 0 &&
-               cells.size() == n && wallSdf.size() == n && wallMask.size() == n &&
+               cells.size() == n && wallSdf.size() == n && interiorSdf.size() == n &&
+               wallMask.size() == n &&
                uOpen.size() == nu && vOpen.size() == nv && wOpen.size() == nw;
     }
     Vec3 cellCenter(int i, int j, int k) const {
