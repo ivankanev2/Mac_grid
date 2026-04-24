@@ -1,9 +1,9 @@
 *.pyc
 .vscode
-output
+
 build
 data
-*.ply
+
 **/PKG-INFO
 # submodules
 **__pycache__**
