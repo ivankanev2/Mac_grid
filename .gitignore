@@ -84,6 +84,14 @@ outputs/
 **/output/
 **/outputs/
 
+# Keep gaussian_splatting output folder skeleton (empty folders only, via .gitkeep).
+# Un-ignore the folder tree, then re-ignore all files except .gitkeep markers.
+!gaussian_splatting/2d-gaussian-splatting/output/
+!gaussian_splatting/2d-gaussian-splatting/output/**
+gaussian_splatting/2d-gaussian-splatting/output/**/*.*
+gaussian_splatting/2d-gaussian-splatting/output/**/cfg_args
+!gaussian_splatting/2d-gaussian-splatting/output/**/.gitkeep
+
 # ---- Gaussian splatting (Python + CUDA) ------------------------------------
 # Python bytecode
 __pycache__/
