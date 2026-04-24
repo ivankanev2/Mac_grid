@@ -111,9 +111,7 @@ logs/
 lightning_logs/
 
 # Trained / rendered assets
-gaussian_splatting/2d-gaussian-splatting/output/
-gaussian_splatting/2d-gaussian-splatting/*/output/
-*.ply
+
 
 # COLMAP intermediate data
 gaussian_splatting/**/colmap/
