@@ -1,0 +1,17 @@
+# Pipe extraction pipeline — Python dependencies.
+#
+# Requires Python 3.9 – 3.11.  Open3D does not yet publish wheels for
+# Python 3.12 / 3.13 on all platforms, so if you see
+#   "Could not find a version that satisfies the requirement open3d"
+# the first thing to check is `python --version` — if it's 3.12+, create
+# a 3.11 env:
+#     conda create -n pipe-extract python=3.11 -y
+#     conda activate pipe-extract
+#     pip install -r requirements.txt
+#
+# (Equivalent with plain venv on a system Python 3.11: python3.11 -m venv .venv
+#  && source .venv/bin/activate && pip install -r requirements.txt)
+
+open3d>=0.17
+numpy>=1.24,<2.0
+scipy>=1.10

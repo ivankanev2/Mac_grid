@@ -151,3 +151,4 @@ tmp/
 secrets/
 *.pem
 *.key
+gaussian_splatting/extraction/input/*.ply
