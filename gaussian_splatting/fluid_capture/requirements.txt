@@ -1,0 +1,19 @@
+# Fluid capture pipeline — Python dependencies.
+#
+# Requires Python 3.9 – 3.11.  PyTorch on Apple Silicon picks up the MPS
+# backend automatically; nothing extra to install.  First run will
+# download model weights (~400 MB for Depth-Anything-V2-Base + ~25 MB for
+# RAFT) into your HuggingFace and torchvision caches.
+#
+# Easiest setup is to reuse the pipe-extract conda env from the pipe
+# extraction work and just install the additions:
+#     conda activate pipe-extract
+#     pip install -r requirements.txt
+
+torch>=2.1
+torchvision>=0.16
+transformers>=4.40
+opencv-python>=4.8
+open3d>=0.17
+numpy>=1.24,<2.0
+pillow>=10.0
