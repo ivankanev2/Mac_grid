@@ -517,16 +517,11 @@ bool PipeFluidScene::loadFluidState(const std::string& path, std::string* errorO
         wParams.reseedRelaxStrength    = 0.45f;
         wParams.volumePreserveRhsMean  = true;
         wParams.volumePreserveStrength = 0.05f;
-        // Captured-fluid scenes are tiny (typically ~15 cm tall) and the
-        // captured initial velocity field is monocular-scale-ambiguous,
-        // so under real gravity (-9.8 m/s²) the fluid free-falls and
-        // settles in ~0.18 s — too fast to watch.  Drop gravity to a
-        // syrup-like value (-1.0 m/s²) so the demo plays in 1–2 s at
-        // 1.0× sim_speed without forcing the user to touch the
-        // sim_speed slider (which has small-dt pressure-projection
-        // tolerance issues that look like instability).  Visually reads
-        // as olive oil / honey, which matches the captured material.
-        wParams.gravity = -1.0f;
+        // Gravity intentionally left at MACWater3D's default (-9.8 m/s²) so
+        // captured-state scenes run identical physics to blueprint scenes.
+        // If you want a slow-motion demo, post-process the recording or
+        // use --target-height to scale the captured fluid up; do NOT scale
+        // gravity, that's cheating.
         p_->water->setParams(wParams);
     }
     applySolidsToWater(*p_->water, p_->waterMask);
