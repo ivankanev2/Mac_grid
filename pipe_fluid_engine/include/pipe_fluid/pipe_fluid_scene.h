@@ -131,6 +131,32 @@ public:
     // human-readable message and the scene is left unchanged.
     bool loadFluidState(const std::string& path, std::string* errorOut = nullptr);
 
+    // ---- Captured fluid state TIME SERIES (4DGS replay, Phase C) ----------
+    // Loads a folder of sim_state_NNNN.bin files (with optional manifest.json)
+    // produced by gaussian_splatting/dynamic_capture/extract_fluid_state.py.
+    // The first frame's grid parameters are used to set up the simulator.
+    // After loading, each call to step() advances an internal "replay clock";
+    // when it crosses a captured-frame boundary (1 / capturedFps seconds), the
+    // water solver's particle list is overwritten with that frame's captured
+    // state.  Between boundaries, the simulator's normal physics runs (so
+    // motion is interpolated by the solver between observations).
+    //
+    // When the replay clock exceeds the total captured duration, replay
+    // disengages automatically and the simulator continues with pure physics
+    // from the last captured state.  This is the "captured moment, then
+    // simulation continues" demo flow.
+    //
+    // Returns true on success.  On failure, errorOut (if non-null) holds a
+    // human-readable message and the scene is left unchanged.
+    bool loadFluidStateSeries(const std::string& folder_path,
+                              std::string* errorOut = nullptr);
+
+    // Replay status — UI uses these to show "frame N/M" and to disable
+    // replay-related controls when no series is active.
+    [[nodiscard]] bool replayActive() const noexcept;
+    [[nodiscard]] int  replayCurrentFrame() const noexcept;
+    [[nodiscard]] int  replayTotalFrames() const noexcept;
+
     // ---- Core pipeline -----------------------------------------------------
     // Re-voxelizes the network, rebuilds the solid mask, regenerates the
     // render mesh, and recreates the fluid simulators at the resulting

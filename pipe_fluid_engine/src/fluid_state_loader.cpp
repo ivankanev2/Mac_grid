@@ -1,7 +1,11 @@
 #include "pipe_fluid/fluid_state_loader.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -118,6 +122,141 @@ LoadFluidStateResult loadFluidStateFile(const std::string& path,
         return res;
     }
 
+    res.ok = true;
+    return res;
+}
+
+// ---- Time series loader (Phase C2) -----------------------------------------
+
+namespace {
+
+// Tiny manifest.json parser — we only need ``capturedFps`` if present.  We
+// avoid pulling a full JSON dependency by scanning for a couple of specific
+// keys (``"fps"``, ``"captured_fps"``).  Any other content in the manifest is
+// ignored; absent keys fall back to the default 25 fps.
+float parseCapturedFpsFromManifest(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return -1.0f;
+    std::stringstream buf;
+    buf << in.rdbuf();
+    std::string content = buf.str();
+
+    auto findFloatAfter = [&](const std::string& key) -> float {
+        std::size_t pos = content.find(std::string("\"") + key + "\"");
+        if (pos == std::string::npos) return -1.0f;
+        pos = content.find(':', pos);
+        if (pos == std::string::npos) return -1.0f;
+        ++pos;
+        while (pos < content.size() && std::isspace(static_cast<unsigned char>(content[pos]))) ++pos;
+        std::size_t end = pos;
+        while (end < content.size() &&
+               (std::isdigit(static_cast<unsigned char>(content[end])) ||
+                content[end] == '.' || content[end] == '-' || content[end] == '+' ||
+                content[end] == 'e' || content[end] == 'E')) {
+            ++end;
+        }
+        if (end == pos) return -1.0f;
+        try {
+            return std::stof(content.substr(pos, end - pos));
+        } catch (...) {
+            return -1.0f;
+        }
+    };
+
+    // Keys we recognise, in priority order.
+    for (const auto& key : {std::string("captured_fps"),
+                            std::string("capturedFps"),
+                            std::string("fps")}) {
+        const float v = findFloatAfter(key);
+        if (v > 0.0f && std::isfinite(v)) return v;
+    }
+    return -1.0f;
+}
+
+bool isSimStateFilename(const std::string& name) {
+    // Match "sim_state_<digits>.bin"
+    constexpr const char prefix[] = "sim_state_";
+    constexpr const char suffix[] = ".bin";
+    constexpr std::size_t prefLen = sizeof(prefix) - 1;
+    constexpr std::size_t sufLen = sizeof(suffix) - 1;
+    if (name.size() <= prefLen + sufLen) return false;
+    if (name.compare(0, prefLen, prefix) != 0) return false;
+    if (name.compare(name.size() - sufLen, sufLen, suffix) != 0) return false;
+    for (std::size_t i = prefLen; i < name.size() - sufLen; ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(name[i]))) return false;
+    }
+    return true;
+}
+
+} // namespace
+
+LoadFluidStateResult loadFluidStateSeriesFolder(
+    const std::string& folder_path,
+    CapturedFluidStateSeries& out) {
+    LoadFluidStateResult res;
+    out = CapturedFluidStateSeries{};
+
+    namespace fs = std::filesystem;
+    fs::path root(folder_path);
+    if (!fs::exists(root)) {
+        res.error = "Folder not found: " + folder_path;
+        return res;
+    }
+    if (!fs::is_directory(root)) {
+        res.error = "Not a folder: " + folder_path;
+        return res;
+    }
+
+    // Enumerate matching files, sorted lexically (which matches frame order
+    // because extract_fluid_state.py pads with zeros).
+    std::vector<fs::path> simFiles;
+    for (const auto& entry : fs::directory_iterator(root)) {
+        if (!entry.is_regular_file()) continue;
+        const auto name = entry.path().filename().string();
+        if (isSimStateFilename(name)) {
+            simFiles.push_back(entry.path());
+        }
+    }
+    if (simFiles.empty()) {
+        res.error = "No sim_state_*.bin files found in " + folder_path;
+        return res;
+    }
+    std::sort(simFiles.begin(), simFiles.end(),
+              [](const fs::path& a, const fs::path& b) {
+                  return a.filename().string() < b.filename().string();
+              });
+
+    // Load every file.
+    out.frames.reserve(simFiles.size());
+    for (const auto& p : simFiles) {
+        CapturedFluidState f;
+        auto sub = loadFluidStateFile(p.string(), f);
+        if (!sub.ok) {
+            std::ostringstream s;
+            s << "While reading " << p.filename().string() << ": " << sub.error;
+            res.error = s.str();
+            out = CapturedFluidStateSeries{};
+            return res;
+        }
+        out.frames.push_back(std::move(f));
+    }
+
+    // Manifest (optional).
+    fs::path manifest = root / "manifest.json";
+    if (fs::exists(manifest) && fs::is_regular_file(manifest)) {
+        out.manifestPath = manifest.string();
+        const float fpsFromManifest = parseCapturedFpsFromManifest(manifest.string());
+        if (fpsFromManifest > 0.0f) {
+            out.capturedFps = fpsFromManifest;
+        }
+    }
+    if (out.capturedFps <= 0.0f) out.capturedFps = 25.0f;
+
+    if (!out.valid()) {
+        res.error = "Loaded series failed validity check (mismatched grid?)";
+        out = CapturedFluidStateSeries{};
+        return res;
+    }
     res.ok = true;
     return res;
 }

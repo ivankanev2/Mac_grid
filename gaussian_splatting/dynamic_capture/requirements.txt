@@ -1,0 +1,9 @@
+# Pre-processing video into Deformable 3D-GS Blender format.
+#
+# Runs on the workstation (or any Linux box with Python 3.8+).  Tiny dep
+# surface — just opencv for video reading and numpy for the transform
+# matrix.  Intentionally separate from fluid_capture's requirements.txt
+# so this can be installed without pulling torch / open3d.
+
+opencv-python>=4.8
+numpy>=1.24,<2.0

@@ -363,6 +363,16 @@ struct PipeFluidScene::Impl {
     std::vector<float> waterSdf;
     float              waterSdfBand = 0.0f;   // positive clamp value used
 
+    // Phase C2: 4DGS replay-mode state.  When `replayActive` is true, step()
+    // ticks `replayTime` by dt and overwrites water particles whenever the
+    // replay clock crosses a captured-frame boundary.  Once replayTime
+    // exceeds the total captured duration, replayActive flips back to false
+    // and the simulator runs free physics from the last captured state.
+    pipe_fluid::CapturedFluidStateSeries replaySeries;
+    bool   replayActive = false;
+    float  replayTime = 0.0f;
+    int    replayCurrentFrame = -1;
+
     bool geometryDirty = true;        // rebuild() will refresh everything
 };
 
@@ -559,8 +569,149 @@ bool PipeFluidScene::loadFluidState(const std::string& path, std::string* errorO
     //    not silently throw out the captured state on the next frame.
     p_->geometryDirty = false;
 
+    // Wipe any previous replay state — single-snapshot mode never replays.
+    p_->replaySeries = pipe_fluid::CapturedFluidStateSeries{};
+    p_->replayActive = false;
+    p_->replayTime = 0.0f;
+    p_->replayCurrentFrame = -1;
+
     if (errorOut) *errorOut = std::string{};
     return true;
+}
+
+// ---- Captured-fluid time series load (Phase C2) ----------------------------
+
+bool PipeFluidScene::loadFluidStateSeries(const std::string& folder_path,
+                                          std::string* errorOut) {
+    using pipe_fluid::CapturedFluidStateSeries;
+    using pipe_fluid::loadFluidStateSeriesFolder;
+
+    CapturedFluidStateSeries series;
+    auto r = loadFluidStateSeriesFolder(folder_path, series);
+    if (!r.ok || !series.valid()) {
+        if (errorOut) *errorOut = r.error.empty()
+            ? std::string("Invalid fluid state series")
+            : r.error;
+        return false;
+    }
+
+    // Use the first frame's grid + particles as the initial scene state.
+    // We delegate to loadFluidState() through a temp file path emulation:
+    // simpler is to inline-set up from frame 0 the same way loadFluidState
+    // does.  We avoid re-implementing the whole boundary build by writing
+    // frame 0 to a temp .bin... actually no, easier: call the existing
+    // single-snapshot path on the in-memory frame 0.
+    const pipe_fluid::CapturedFluidState& f0 = series.frames.front();
+    const int NX = f0.nx;
+    const int NY = f0.ny;
+    const int NZ = f0.nz;
+    const float DX = f0.dx;
+    const float DT = (p_->cfg.sim.dt > 0.f) ? p_->cfg.sim.dt : 1.0f / 60.0f;
+    const std::size_t N  = static_cast<std::size_t>(NX) * NY * NZ;
+    const std::size_t NU = static_cast<std::size_t>(NX + 1) * NY * NZ;
+    const std::size_t NV = static_cast<std::size_t>(NX) * (NY + 1) * NZ;
+    const std::size_t NW = static_cast<std::size_t>(NX) * NY * (NZ + 1);
+
+    // Wipe pipe-network state — captured-fluid scenes have no pipe.
+    p_->network = PipeNetwork{};
+    p_->mesh = TriMesh{};
+
+    // Same cfg sync as the single-snapshot path: water on, smoke off.
+    p_->cfg.sim.enableWater = true;
+    p_->cfg.sim.enableSmoke = false;
+
+    p_->voxels = VoxelGrid(NX, NY, NZ, DX,
+                           Vec3{f0.originX, f0.originY, f0.originZ});
+
+    // Empty-box boundary field, identical to the single-snapshot version.
+    PipeBoundaryField bf;
+    bf.nx = NX; bf.ny = NY; bf.nz = NZ; bf.dx = DX;
+    bf.origin = Vec3{f0.originX, f0.originY, f0.originZ};
+    bf.cells.assign(N, PipeBoundaryCell::Interior);
+    const float farPositive = 1.0e6f;
+    bf.wallSdf.assign(N, farPositive);
+    bf.interiorSdf.assign(N, farPositive);
+    bf.wallMask.assign(N, uint8_t(0));
+    bf.uOpen.assign(NU, 1.0f);
+    bf.vOpen.assign(NV, 1.0f);
+    bf.wOpen.assign(NW, 1.0f);
+    bf.terminals.clear();
+    p_->boundary = std::move(bf);
+    p_->solverBoundary = buildSolverBoundaryData(p_->boundary);
+    p_->smokeMask = p_->solverBoundary.solidMask;
+    p_->waterMask = p_->solverBoundary.waterSolidMask;
+
+    if (!p_->water) {
+        p_->water = std::make_unique<MACWater3D>(NX, NY, NZ, DX, DT);
+    } else {
+        p_->water->reset(NX, NY, NZ, DX, DT);
+    }
+    {
+        auto wParams = p_->water->params;
+        wParams.particlesPerCell       = std::max(wParams.particlesPerCell, 8);
+        wParams.flipBlend              = 0.95f;
+        wParams.borderThickness        = 1;
+        wParams.openTop                = false;
+        wParams.useAPIC                = true;
+        wParams.pressureSolverMode     = (int)MACWater3D::PressureSolverMode::Multigrid;
+        wParams.pressureIters          = std::max(wParams.pressureIters, 200);
+        wParams.pressureMGVCycles      = std::max(wParams.pressureMGVCycles, 50);
+        wParams.pressureMGCoarseIters  = std::max(wParams.pressureMGCoarseIters, 40);
+        wParams.reseedRelaxIters       = std::max(wParams.reseedRelaxIters, 2);
+        wParams.reseedRelaxStrength    = 0.45f;
+        wParams.volumePreserveRhsMean  = true;
+        wParams.volumePreserveStrength = 0.05f;
+        // Default gravity (-9.8 m/s²); replay mode uses real physics between
+        // captured frames.  No "cheat" gravity scaling here.
+        p_->water->setParams(wParams);
+    }
+    applySolidsToWater(*p_->water, p_->waterMask);
+    applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
+
+    // Seed frame 0's particles.
+    auto& parts = p_->water->particles;
+    parts.clear();
+    parts.reserve(static_cast<std::size_t>(f0.nParticles));
+    for (int i = 0; i < f0.nParticles; ++i) {
+        MACWater3D::Particle p{};
+        p.x = f0.positions[3 * i + 0];
+        p.y = f0.positions[3 * i + 1];
+        p.z = f0.positions[3 * i + 2];
+        p.u = f0.velocities[3 * i + 0];
+        p.v = f0.velocities[3 * i + 1];
+        p.w = f0.velocities[3 * i + 2];
+        parts.push_back(p);
+    }
+    p_->water->derivedFieldsDirty = true;
+
+    p_->smoke.reset();
+
+    const float initBand = 3.0f * DX;
+    p_->waterSdf.assign(N, initBand);
+    p_->waterSdfBand = initBand;
+
+    p_->geometryDirty = false;
+
+    // Activate replay.
+    p_->replaySeries = std::move(series);
+    p_->replayActive = true;
+    p_->replayTime = 0.0f;
+    p_->replayCurrentFrame = 0;  // we just seeded frame 0 manually
+
+    if (errorOut) *errorOut = std::string{};
+    return true;
+}
+
+// ---- Replay status accessors ------------------------------------------------
+
+bool PipeFluidScene::replayActive() const noexcept {
+    return p_->replayActive;
+}
+int PipeFluidScene::replayCurrentFrame() const noexcept {
+    return p_->replayCurrentFrame;
+}
+int PipeFluidScene::replayTotalFrames() const noexcept {
+    return p_->replaySeries.nFrames();
 }
 
 // ---- Core rebuild -----------------------------------------------------------
@@ -791,6 +942,44 @@ void buildLiquidSdfFromParticles(const MACWater3D& water,
 void PipeFluidScene::step(float dtOverride) {
     if (p_->geometryDirty) rebuild();
     const float dt = (dtOverride > 0.f) ? dtOverride : p_->cfg.sim.dt;
+
+    // Phase C2: 4DGS replay tick.  When a captured time series is loaded,
+    // advance the replay clock by dt and overwrite water particles whenever
+    // we cross a captured-frame boundary.  When the clock exceeds the total
+    // captured duration, deactivate replay and let physics run free.
+    if (p_->replayActive && p_->water && p_->replaySeries.valid()) {
+        p_->replayTime += std::max(dt, 0.0f);
+        const float capturedDt = p_->replaySeries.capturedDt();
+        const int   nFrames    = p_->replaySeries.nFrames();
+        const float totalDur   = p_->replaySeries.totalDuration();
+
+        int targetFrame = static_cast<int>(std::floor(p_->replayTime / capturedDt));
+        if (targetFrame < 0) targetFrame = 0;
+        if (targetFrame >= nFrames) targetFrame = nFrames - 1;
+
+        if (targetFrame > p_->replayCurrentFrame) {
+            const auto& cap = p_->replaySeries.frames[targetFrame];
+            auto& parts = p_->water->particles;
+            parts.clear();
+            parts.reserve(static_cast<std::size_t>(cap.nParticles));
+            for (int i = 0; i < cap.nParticles; ++i) {
+                MACWater3D::Particle p{};
+                p.x = cap.positions[3 * i + 0];
+                p.y = cap.positions[3 * i + 1];
+                p.z = cap.positions[3 * i + 2];
+                p.u = cap.velocities[3 * i + 0];
+                p.v = cap.velocities[3 * i + 1];
+                p.w = cap.velocities[3 * i + 2];
+                parts.push_back(p);
+            }
+            p_->water->derivedFieldsDirty = true;
+            p_->replayCurrentFrame = targetFrame;
+        }
+        if (p_->replayTime >= totalDur) {
+            p_->replayActive = false;   // hand off to free physics
+        }
+    }
+
     if (p_->smoke) {
         if (dt > 0.f) p_->smoke->setDt(dt);
         p_->smoke->step();

@@ -123,6 +123,10 @@ struct ViewerState {
     char fluidStatePath[512] =
         "../../gaussian_splatting/fluid_capture/outputs/sim_state.bin";
 
+    // Captured fluid state TIME SERIES folder (option-3 Phase C2).
+    char fluidSeriesPath[512] =
+        "../../gaussian_splatting/dynamic_capture/captured_states";
+
     void setStatus(const std::string& s) {
         status = s;
         statusExpires = ImGui::GetTime() + 3.0;
@@ -622,6 +626,29 @@ static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
         }
     }
 
+    ImGui::SeparatorText("Captured fluid state series (4DGS replay)");
+    ImGui::InputText("series folder", g_ui.fluidSeriesPath,
+                     sizeof(g_ui.fluidSeriesPath));
+    if (ImGui::Button("Load fluid state series")) {
+        std::string err;
+        if (scene.loadFluidStateSeries(g_ui.fluidSeriesPath, &err)) {
+            g_renderer->uploadMesh(scene.pipeMesh());
+            g_ui.setStatus(
+                std::string("Loaded fluid state series (") +
+                std::to_string(scene.replayTotalFrames()) +
+                " frames) from " + g_ui.fluidSeriesPath);
+        } else {
+            g_ui.setStatus(std::string("Fluid state series load failed: ") + err);
+        }
+    }
+    // Replay status indicator.
+    if (scene.replayTotalFrames() > 0) {
+        ImGui::Text("Replay: frame %d / %d  %s",
+                    scene.replayCurrentFrame() + 1,
+                    scene.replayTotalFrames(),
+                    scene.replayActive() ? "(playing)" : "(physics-only)");
+    }
+
     ImGui::SeparatorText("Programmatic builder");
     ImGui::InputFloat3("start",     &g_ui.builderStartX);
     ImGui::InputFloat3("direction", &g_ui.builderDirX);
@@ -799,12 +826,17 @@ int main(int argc, char* argv[]) {
     // --fluid-state wins.
     std::string blueprintPath;
     std::string fluidStatePath;
+    std::string fluidSeriesPath;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--fluid-state" && i + 1 < argc) {
             fluidStatePath = argv[++i];
         } else if (arg.rfind("--fluid-state=", 0) == 0) {
             fluidStatePath = arg.substr(std::string("--fluid-state=").size());
+        } else if (arg == "--fluid-series" && i + 1 < argc) {
+            fluidSeriesPath = argv[++i];
+        } else if (arg.rfind("--fluid-series=", 0) == 0) {
+            fluidSeriesPath = arg.substr(std::string("--fluid-series=").size());
         } else if (!arg.empty() && arg[0] != '-' && blueprintPath.empty()) {
             blueprintPath = arg;
         }
@@ -885,7 +917,21 @@ int main(int argc, char* argv[]) {
     g_scene = &scene;
 
     bool loadedSomething = false;
-    if (!fluidStatePath.empty()) {
+    if (!fluidSeriesPath.empty()) {
+        std::string err;
+        if (!scene.loadFluidStateSeries(fluidSeriesPath, &err)) {
+            std::cerr << "Fluid state series load failed: " << err << "\n";
+        } else {
+            std::strncpy(g_ui.fluidSeriesPath, fluidSeriesPath.c_str(),
+                         sizeof(g_ui.fluidSeriesPath) - 1);
+            g_ui.fluidSeriesPath[sizeof(g_ui.fluidSeriesPath) - 1] = '\0';
+            std::cout << "[PipeFluidEngine] Loaded fluid state series ("
+                      << scene.replayTotalFrames() << " frames) from "
+                      << fluidSeriesPath << "\n";
+            loadedSomething = true;
+        }
+    }
+    if (!loadedSomething && !fluidStatePath.empty()) {
         std::string err;
         if (!scene.loadFluidState(fluidStatePath, &err)) {
             std::cerr << "Fluid state load failed: " << err << "\n";
@@ -911,6 +957,7 @@ int main(int argc, char* argv[]) {
         }
     }
     if (!scene.pipeMesh().vertices.empty()) renderer.uploadMesh(scene.pipeMesh());
+    (void)loadedSomething;
 
     // ---- Main loop ---------------------------------------------------------
     double prev = glfwGetTime();

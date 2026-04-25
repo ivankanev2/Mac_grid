@@ -65,4 +65,46 @@ struct LoadFluidStateResult {
 LoadFluidStateResult loadFluidStateFile(const std::string& path,
                                         CapturedFluidState& out);
 
+// ---- Time series support (Phase C2) -----------------------------------------
+//
+// A captured-fluid time series is a folder of sim_state_NNNN.bin files (one
+// per video frame) plus a manifest.json with metadata.  Produced by
+// gaussian_splatting/dynamic_capture/extract_fluid_state.py.
+//
+// Each frame is one full CapturedFluidState.  All frames in a series share
+// the same grid parameters (nx, ny, nz, dx, origin) — only the particle
+// content varies between frames.  The simulator's replay-mode loader picks
+// up the grid from frame 0 and then advances through frames over time,
+// overwriting water particles on each frame boundary.
+struct CapturedFluidStateSeries {
+    std::vector<CapturedFluidState> frames;
+    float capturedFps = 25.0f;     // playback rate in captured frames per sim second
+    std::string manifestPath;      // resolved path to manifest.json (informational)
+
+    [[nodiscard]] bool valid() const noexcept {
+        if (frames.empty() || capturedFps <= 0.0f) return false;
+        for (const auto& f : frames) if (!f.valid()) return false;
+        return true;
+    }
+
+    [[nodiscard]] int nFrames() const noexcept {
+        return static_cast<int>(frames.size());
+    }
+
+    [[nodiscard]] float capturedDt() const noexcept {
+        return capturedFps > 0.0f ? 1.0f / capturedFps : 0.04f;
+    }
+
+    [[nodiscard]] float totalDuration() const noexcept {
+        return capturedDt() * static_cast<float>(nFrames());
+    }
+};
+
+// Load all sim_state_*.bin files from a folder into ``out``, sorted lexically
+// by filename (which matches frame order because the writer pads with zeros).
+// If a manifest.json is present in the folder it is consulted for capturedFps.
+LoadFluidStateResult loadFluidStateSeriesFolder(
+    const std::string& folder_path,
+    CapturedFluidStateSeries& out);
+
 } // namespace pipe_fluid
