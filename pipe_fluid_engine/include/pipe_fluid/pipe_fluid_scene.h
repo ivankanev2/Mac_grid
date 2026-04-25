@@ -119,6 +119,18 @@ public:
     // a human-readable message.
     bool loadBlueprint(const std::string& path, std::string* errorOut = nullptr);
 
+    // ---- Captured fluid state (from monocular video reconstruction) -------
+    // Bypasses the pipe-blueprint pipeline entirely: reads a sim_state.bin
+    // emitted by gaussian_splatting/fluid_capture/bridge_to_sim.py, sets up
+    // the simulation grid directly from the file's grid parameters, builds an
+    // empty (no-walls) PipeBoundaryField, and seeds the water solver with the
+    // captured FLIP particles.  Leaves the pipe network and render mesh
+    // empty; the viewer renders only the water in this mode.
+    //
+    // Returns true on success.  On failure, errorOut (if non-null) holds a
+    // human-readable message and the scene is left unchanged.
+    bool loadFluidState(const std::string& path, std::string* errorOut = nullptr);
+
     // ---- Core pipeline -----------------------------------------------------
     // Re-voxelizes the network, rebuilds the solid mask, regenerates the
     // render mesh, and recreates the fluid simulators at the resulting

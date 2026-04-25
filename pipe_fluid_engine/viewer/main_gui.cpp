@@ -119,6 +119,10 @@ struct ViewerState {
     // Blueprint path input buffer
     char blueprintPath[512] = "../examples/demo_L.pipe";
 
+    // Captured fluid state path input buffer (M2 Phase 2).
+    char fluidStatePath[512] =
+        "../../gaussian_splatting/fluid_capture/outputs/sim_state.bin";
+
     void setStatus(const std::string& s) {
         status = s;
         statusExpires = ImGui::GetTime() + 3.0;
@@ -604,6 +608,20 @@ static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
         }
     }
 
+    ImGui::SeparatorText("Captured fluid state");
+    ImGui::InputText("fluid path", g_ui.fluidStatePath, sizeof(g_ui.fluidStatePath));
+    if (ImGui::Button("Load fluid state")) {
+        std::string err;
+        if (scene.loadFluidState(g_ui.fluidStatePath, &err)) {
+            // Captured-state scenes have no pipe mesh — clear the renderer's
+            // mesh so we don't keep showing the previous blueprint's pipe.
+            g_renderer->uploadMesh(scene.pipeMesh());
+            g_ui.setStatus(std::string("Loaded fluid state ") + g_ui.fluidStatePath);
+        } else {
+            g_ui.setStatus(std::string("Fluid state load failed: ") + err);
+        }
+    }
+
     ImGui::SeparatorText("Programmatic builder");
     ImGui::InputFloat3("start",     &g_ui.builderStartX);
     ImGui::InputFloat3("direction", &g_ui.builderDirX);
@@ -775,8 +793,22 @@ static void drawStatsPanel(pipe_fluid::PipeFluidScene& scene) {
 int main(int argc, char* argv[]) {
     std::cout << "=== Pipe Fluid Engine v0.1 ===\n";
 
+    // CLI parsing.  The first non-flag positional is treated as a blueprint
+    // (.pipe) path for backwards compatibility.  --fluid-state <path> takes
+    // an alternative captured-fluid-state binary; if both are given,
+    // --fluid-state wins.
     std::string blueprintPath;
-    if (argc >= 2) blueprintPath = argv[1];
+    std::string fluidStatePath;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--fluid-state" && i + 1 < argc) {
+            fluidStatePath = argv[++i];
+        } else if (arg.rfind("--fluid-state=", 0) == 0) {
+            fluidStatePath = arg.substr(std::string("--fluid-state=").size());
+        } else if (!arg.empty() && arg[0] != '-' && blueprintPath.empty()) {
+            blueprintPath = arg;
+        }
+    }
 
     // ---- GLFW init ---------------------------------------------------------
     glfwSetErrorCallback(errorCallback);
@@ -852,16 +884,31 @@ int main(int argc, char* argv[]) {
     pipe_fluid::PipeFluidScene scene(cfg);
     g_scene = &scene;
 
-    if (!blueprintPath.empty()) {
+    bool loadedSomething = false;
+    if (!fluidStatePath.empty()) {
         std::string err;
-        if (!scene.loadBlueprint(blueprintPath, &err)) {
-            std::cerr << "Blueprint load failed: " << err << "\n";
-            buildDemoL(scene);
+        if (!scene.loadFluidState(fluidStatePath, &err)) {
+            std::cerr << "Fluid state load failed: " << err << "\n";
         } else {
-            scene.rebuild();
+            // Sync the UI text field so the panel reflects what got loaded.
+            std::strncpy(g_ui.fluidStatePath, fluidStatePath.c_str(),
+                         sizeof(g_ui.fluidStatePath) - 1);
+            g_ui.fluidStatePath[sizeof(g_ui.fluidStatePath) - 1] = '\0';
+            loadedSomething = true;
         }
-    } else {
-        buildDemoL(scene);
+    }
+    if (!loadedSomething) {
+        if (!blueprintPath.empty()) {
+            std::string err;
+            if (!scene.loadBlueprint(blueprintPath, &err)) {
+                std::cerr << "Blueprint load failed: " << err << "\n";
+                buildDemoL(scene);
+            } else {
+                scene.rebuild();
+            }
+        } else {
+            buildDemoL(scene);
+        }
     }
     if (!scene.pipeMesh().vertices.empty()) renderer.uploadMesh(scene.pipeMesh());
 

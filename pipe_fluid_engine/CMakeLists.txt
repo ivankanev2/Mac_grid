@@ -36,6 +36,7 @@ add_library(pipe_fluid_core STATIC
     src/pipe_solid_adapter.cpp
     src/pipe_solver_boundary_data.cpp
     src/blueprint_loader.cpp
+    src/fluid_state_loader.cpp
 )
 
 target_include_directories(pipe_fluid_core PUBLIC

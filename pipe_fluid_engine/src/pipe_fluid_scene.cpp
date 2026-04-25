@@ -3,6 +3,7 @@
 #include "pipe_fluid/pipe_solid_adapter.h"
 #include "pipe_fluid/pipe_solver_boundary_data.h"
 #include "pipe_fluid/blueprint_loader.h"
+#include "pipe_fluid/fluid_state_loader.h"
 
 #include "vec3.h"               // pipe_engine/Geometry
 #include "pipe_network.h"       // pipe_engine/Geometry
@@ -422,6 +423,148 @@ bool PipeFluidScene::loadBlueprint(const std::string& path, std::string* errorOu
     p_->network = std::move(loaded);
     // keep default radii defined by config, but BlueprintParser may overwrite
     p_->geometryDirty = true;
+    return true;
+}
+
+// ---- Captured-fluid-state load (M2 Phase 2) --------------------------------
+
+bool PipeFluidScene::loadFluidState(const std::string& path, std::string* errorOut) {
+    using pipe_fluid::CapturedFluidState;
+    using pipe_fluid::loadFluidStateFile;
+
+    CapturedFluidState captured;
+    auto r = loadFluidStateFile(path, captured);
+    if (!r.ok || !captured.valid()) {
+        if (errorOut) *errorOut = r.error.empty() ? std::string("Invalid fluid state") : r.error;
+        return false;
+    }
+
+    const int NX = captured.nx;
+    const int NY = captured.ny;
+    const int NZ = captured.nz;
+    const float DX = captured.dx;
+    const float DT = (p_->cfg.sim.dt > 0.f) ? p_->cfg.sim.dt : 1.0f / 60.0f;
+    const std::size_t N = static_cast<std::size_t>(NX) * NY * NZ;
+    const std::size_t NU = static_cast<std::size_t>(NX + 1) * NY * NZ;
+    const std::size_t NV = static_cast<std::size_t>(NX) * (NY + 1) * NZ;
+    const std::size_t NW = static_cast<std::size_t>(NX) * NY * (NZ + 1);
+
+    // 1. Wipe pipe-network state — captured-fluid scenes have no pipe.
+    p_->network = PipeNetwork{};
+    p_->mesh = TriMesh{};
+
+    // Keep the cfg consistent with what we're about to set up: water on,
+    // smoke off.  Otherwise the viewer's "Active sims" checkboxes drift
+    // out of sync, and toggling one of them would trigger a rebuild()
+    // that wipes the captured particles.
+    p_->cfg.sim.enableWater = true;
+    p_->cfg.sim.enableSmoke = false;
+
+    // 2. Set the voxel grid directly from the file.
+    p_->voxels = VoxelGrid(NX, NY, NZ, DX,
+                           Vec3{captured.originX, captured.originY, captured.originZ});
+    // VoxelGrid's ctor fills cells with VoxelType::Air, which is what we want
+    // (no pipe walls).
+
+    // 3. Build an "empty box" PipeBoundaryField — every cell is Interior, no
+    //    walls, all faces fully open.  The MAC water solver's own
+    //    rebuildBorderSolids() seals the outermost cells each step, which
+    //    gives us a closed-box domain without any pipe geometry.
+    PipeBoundaryField bf;
+    bf.nx = NX;
+    bf.ny = NY;
+    bf.nz = NZ;
+    bf.dx = DX;
+    bf.origin = Vec3{captured.originX, captured.originY, captured.originZ};
+    bf.cells.assign(N, PipeBoundaryCell::Interior);
+    const float farPositive = 1.0e6f;
+    bf.wallSdf.assign(N, farPositive);
+    bf.interiorSdf.assign(N, farPositive);
+    bf.wallMask.assign(N, uint8_t(0));
+    bf.uOpen.assign(NU, 1.0f);
+    bf.vOpen.assign(NV, 1.0f);
+    bf.wOpen.assign(NW, 1.0f);
+    // No terminals — captured fluid is a closed-volume initial condition.
+    bf.terminals.clear();
+    p_->boundary = std::move(bf);
+
+    // 4. Derive the solver-facing boundary data from that empty boundary.
+    p_->solverBoundary = buildSolverBoundaryData(p_->boundary);
+    p_->smokeMask = p_->solverBoundary.solidMask;
+    p_->waterMask = p_->solverBoundary.waterSolidMask;
+
+    // 5. Re-create the water simulator at the captured grid.  Smoke is
+    //    disabled in this mode — the captured fluid is liquid only.
+    if (!p_->water) {
+        p_->water = std::make_unique<MACWater3D>(NX, NY, NZ, DX, DT);
+    } else {
+        p_->water->reset(NX, NY, NZ, DX, DT);
+    }
+    {
+        // Match the same FLIP/APIC/multigrid params we use for blueprint
+        // pipes — keeps the solver behaviour identical between modes.
+        auto wParams = p_->water->params;
+        wParams.particlesPerCell       = std::max(wParams.particlesPerCell, 8);
+        wParams.flipBlend              = 0.95f;
+        wParams.borderThickness        = 1;
+        wParams.openTop                = false;
+        wParams.useAPIC                = true;
+        wParams.pressureSolverMode     = (int)MACWater3D::PressureSolverMode::Multigrid;
+        wParams.pressureIters          = std::max(wParams.pressureIters, 200);
+        wParams.pressureMGVCycles      = std::max(wParams.pressureMGVCycles, 50);
+        wParams.pressureMGCoarseIters  = std::max(wParams.pressureMGCoarseIters, 40);
+        wParams.reseedRelaxIters       = std::max(wParams.reseedRelaxIters, 2);
+        wParams.reseedRelaxStrength    = 0.45f;
+        wParams.volumePreserveRhsMean  = true;
+        wParams.volumePreserveStrength = 0.05f;
+        // Captured-fluid scenes are tiny (typically ~15 cm tall) and the
+        // captured initial velocity field is monocular-scale-ambiguous,
+        // so under real gravity (-9.8 m/s²) the fluid free-falls and
+        // settles in ~0.18 s — too fast to watch.  Drop gravity to a
+        // syrup-like value (-1.0 m/s²) so the demo plays in 1–2 s at
+        // 1.0× sim_speed without forcing the user to touch the
+        // sim_speed slider (which has small-dt pressure-projection
+        // tolerance issues that look like instability).  Visually reads
+        // as olive oil / honey, which matches the captured material.
+        wParams.gravity = -1.0f;
+        p_->water->setParams(wParams);
+    }
+    applySolidsToWater(*p_->water, p_->waterMask);
+    applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
+
+    // 6. Seed the captured FLIP particles directly into the solver's
+    //    particle list.  All other Particle fields (age, APIC affine
+    //    matrix) get value-initialised to zero, which is the correct
+    //    starting state.
+    auto& parts = p_->water->particles;
+    parts.clear();
+    parts.reserve(static_cast<std::size_t>(captured.nParticles));
+    for (int i = 0; i < captured.nParticles; ++i) {
+        MACWater3D::Particle p{};
+        p.x = captured.positions[3 * i + 0];
+        p.y = captured.positions[3 * i + 1];
+        p.z = captured.positions[3 * i + 2];
+        p.u = captured.velocities[3 * i + 0];
+        p.v = captured.velocities[3 * i + 1];
+        p.w = captured.velocities[3 * i + 2];
+        parts.push_back(p);
+    }
+    p_->water->derivedFieldsDirty = true;
+
+    // 7. Disable smoke in captured-state mode (no smoke source for liquid).
+    p_->smoke.reset();
+
+    // 8. Pre-size the water SDF buffer so a render before the first step()
+    //    returns a fully-transparent water pass.
+    const float initBand = 3.0f * DX;
+    p_->waterSdf.assign(N, initBand);
+    p_->waterSdfBand = initBand;
+
+    // 9. Mark geometry as up-to-date so the viewer's rebuild() guard does
+    //    not silently throw out the captured state on the next frame.
+    p_->geometryDirty = false;
+
+    if (errorOut) *errorOut = std::string{};
     return true;
 }
 
