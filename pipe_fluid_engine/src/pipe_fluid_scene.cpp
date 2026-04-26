@@ -947,7 +947,8 @@ void PipeFluidScene::step(float dtOverride) {
     // advance the replay clock by dt and overwrite water particles whenever
     // we cross a captured-frame boundary.  When the clock exceeds the total
     // captured duration, deactivate replay and let physics run free.
-    if (p_->replayActive && p_->water && p_->replaySeries.valid()) {
+    const bool inReplay = p_->replayActive && p_->water && p_->replaySeries.valid();
+    if (inReplay) {
         p_->replayTime += std::max(dt, 0.0f);
         const float capturedDt = p_->replaySeries.capturedDt();
         const int   nFrames    = p_->replaySeries.nFrames();
@@ -987,18 +988,27 @@ void PipeFluidScene::step(float dtOverride) {
     }
     if (p_->water) {
         if (dt > 0.f) p_->water->setDt(dt);
-        p_->water->step();
-        applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
-        confineWaterParticlesToPipe(*p_->water, p_->boundary);
-        // Rebuild the narrow-band SDF from the FLIP particles so the volume
-        // renderer can sphere-trace a smooth liquid surface instead of
-        // volume-integrating a per-cell density field.  This is the bridge
-        // that eliminates the blocky-cube look: SDF gives a continuous
-        // isosurface independent of the cell resolution.
+        if (!inReplay) {
+            // Physics path — only when we're NOT in replay.  Phase C2 fix:
+            // during replay, captured states should be displayed faithfully
+            // without physics smoothing them between captured frames.
+            // At 25 fps captures and ~240 Hz simulator stepping, ~10 substeps
+            // of pressure projection between each captured frame turn a
+            // sharp column-into-pool shape into a uniform blob.  Skipping
+            // water->step() during replay lets the captured shape render
+            // as-is; physics resumes naturally once replayActive flips to
+            // false at the end of the captured time window.
+            p_->water->step();
+            applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
+            confineWaterParticlesToPipe(*p_->water, p_->boundary);
+        }
+        // SDF rebuild always runs — the renderer needs an up-to-date SDF
+        // whether the particles came from physics or a captured-frame
+        // overwrite.
         buildLiquidSdfFromParticles(*p_->water,
-                                   p_->cfg.waterSurface.particleRadiusScale,
-                                   p_->cfg.waterSurface.bandCells,
-                                   p_->waterSdf, p_->waterSdfBand);
+                                    p_->cfg.waterSurface.particleRadiusScale,
+                                    p_->cfg.waterSurface.bandCells,
+                                    p_->waterSdf, p_->waterSdfBand);
     }
 }
 

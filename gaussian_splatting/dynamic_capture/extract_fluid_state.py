@@ -117,6 +117,26 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--motion-samples", type=int, default=10,
                    help="Number of evenly-spaced time stamps used to compute "
                         "per-Gaussian max velocity for the motion filter.")
+    # Volume reconstruction (Phase C1.6).
+    p.add_argument("--fill-mode",
+                   choices=["dilate", "vertical", "none"],
+                   default="dilate",
+                   help="How to recover volume from the captured surface "
+                        "Gaussians.  'dilate' (recommended): voxelise the "
+                        "captured points and expand the resulting mask by "
+                        "--dilate-iters cells in every direction, thickening "
+                        "the captured shell without filling gaps between "
+                        "disjoint fluid regions.  'vertical': for each (x,y) "
+                        "column, fill all cells between lowest and highest "
+                        "occupied k — works for puddle-like captures, "
+                        "creates brick artefacts for column-into-pool "
+                        "configurations.  'none': use the raw voxelised "
+                        "surface mask, no fill.")
+    p.add_argument("--dilate-iters", type=int, default=1,
+                   help="Number of 6-connectivity dilation passes for "
+                        "fill-mode=dilate.  1 → ~3-cell-thick shell; "
+                        "2 → ~5-cell-thick; etc.  Higher values give more "
+                        "fluid volume but smear column-vs-pool detail.")
     p.add_argument("--device", default="cuda:0",
                    help="Torch device for model queries.")
     p.add_argument("--rng-seed", type=int, default=0,
@@ -304,14 +324,45 @@ def _rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 # -----------------------------------------------------------------------------
 # Voxelisation + FLIP seeding (mirrors fluid_capture/pipeline/voxelize.py)
 # -----------------------------------------------------------------------------
+def _dilate_mask_6connect(mask: np.ndarray, iters: int) -> np.ndarray:
+    """Numpy-only 6-connectivity 3D dilation.  Each pass adds one cell of
+    thickness in each of ±x, ±y, ±z.  No scipy dependency."""
+    if iters <= 0 or not mask.any():
+        return mask
+    out = mask.copy()
+    for _ in range(int(iters)):
+        nxt = out.copy()
+        nxt[1:, :, :] |= out[:-1, :, :]
+        nxt[:-1, :, :] |= out[1:, :, :]
+        nxt[:, 1:, :] |= out[:, :-1, :]
+        nxt[:, :-1, :] |= out[:, 1:, :]
+        nxt[:, :, 1:] |= out[:, :, :-1]
+        nxt[:, :, :-1] |= out[:, :, 1:]
+        out = nxt
+    return out
+
+
 def _voxelise_and_seed(
     points: np.ndarray, velocities: np.ndarray,
     bounds_min: np.ndarray, bounds_max: np.ndarray,
     dx: float, headroom_below: float, headroom_above: float,
     headroom_lateral: float, particles_per_cell: int, rng,
+    fill_mode: str = "dilate", dilate_iters: int = 1,
 ):
-    """Build the MAC grid, occupancy + vertical-fill mask, and seed FLIP
-    particles.  Returns (grid_origin, (nx, ny, nz), pos, vel)."""
+    """Build the MAC grid, occupancy mask (with the chosen fill strategy),
+    and seed FLIP particles.  Returns (grid_origin, (nx, ny, nz), pos, vel).
+
+    ``fill_mode``:
+      - ``"dilate"`` — voxelise surface points, then morphologically dilate
+        the mask by ``dilate_iters`` 6-connectivity passes.  Adds local
+        thickness without bridging disjoint fluid regions.  Best for
+        column-into-pool scenes.
+      - ``"vertical"`` — for each (i, j) column, fill cells between min and
+        max occupied k.  Works for puddle-like single-region captures;
+        creates brick artefacts on multi-region scenes (the column-into-pool
+        bug).
+      - ``"none"`` — raw surface mask, no fill.
+    """
     domain_min = np.array([
         bounds_min[0] - headroom_lateral,
         bounds_min[1] - headroom_lateral,
@@ -343,8 +394,8 @@ def _voxelise_and_seed(
     if idx.shape[0] > 0:
         surface_mask[idx[:, 0], idx[:, 1], idx[:, 2]] = True
 
-    # Vertical fill: at each (i, j) column, fill k between min and max occupied k.
-    if surface_mask.any():
+    # Volume reconstruction.  See docstring for trade-offs between modes.
+    if fill_mode == "vertical" and surface_mask.any():
         any_occ = surface_mask.any(axis=2)
         k_idx_grid = np.broadcast_to(np.arange(nz, dtype=np.int32),
                                      (nx, ny, nz))
@@ -354,7 +405,9 @@ def _voxelise_and_seed(
         for k in range(nz):
             in_range = (k >= masked_min) & (k <= masked_max) & any_occ
             fluid_mask[..., k] = fluid_mask[..., k] | in_range
-    else:
+    elif fill_mode == "dilate":
+        fluid_mask = _dilate_mask_6connect(surface_mask, dilate_iters)
+    else:  # "none" or fall-through
         fluid_mask = surface_mask
 
     fluid_idx = np.argwhere(fluid_mask)
@@ -613,6 +666,8 @@ def main(argv=None) -> int:
             headroom_lateral=args.headroom_lateral,
             particles_per_cell=args.particles_per_cell,
             rng=rng,
+            fill_mode=args.fill_mode,
+            dilate_iters=args.dilate_iters,
         )
         out_path = args.output_dir / f"sim_state_{f_idx:04d}.bin"
         _write_sim_state_bin(

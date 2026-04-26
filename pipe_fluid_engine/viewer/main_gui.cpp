@@ -110,6 +110,23 @@ struct ViewerState {
     // pipe scale because the pipe is only 6-8 cells wide).
     bool  waterUseSdf    = true;
 
+    // Particle-direct render mode (Phase C3).  Independent of the volume
+    // overlay: when this is on, every FLIP particle is drawn as a screen-
+    // aligned coloured disc on top of whatever the volume renderer produced.
+    // Indispensable for sparse captured-fluid scenes where the metaball SDF
+    // either dissolves or balloons depending on kernel size.  Defaults off
+    // for normal pipe sims (SDF is the prettier surface there) but is auto-
+    // enabled when a fluid state series is loaded.
+    bool  drawParticles      = false;
+    // Point world-radius in metres.  At dx=1.5cm the default cell size, a
+    // value of 0.012 m makes each particle ~80% of a cell wide, which reads
+    // as a visually continuous fluid when the cells are well-populated.
+    float particlePointSize  = 0.012f;
+    // Velocity (m/s) that maps to the top of the colour ramp (red).  Tune
+    // up if the fluid is fast enough to clip; tune down to enhance contrast.
+    float particleSpeedMax   = 4.0f;
+    bool  particleColorByVel = true;
+
     // Volume renderer backend: 0=Auto, 1=CPU, 2=GPU.
     // The viewer recreates the renderer when this changes.
     int   backendChoice = 0;
@@ -257,6 +274,234 @@ struct SpawnMarkerDraw {
     }
 };
 static SpawnMarkerDraw g_spawnMarker;
+
+// ============================================================================
+// ParticleDraw — direct point-sprite rendering of FLIP particles.
+//
+// The volume overlay's SDF metaball reconstruction is an excellent surface
+// renderer for densely-seeded MAC water (the simulator's primary use case),
+// but it degenerates on sparse particle clouds — e.g. the column-and-pool
+// state extracted from a Deformable 3D-GS oil-pour reconstruction, where the
+// captured Gaussians yield far fewer particles per cell than a typical
+// emit-from-source scene.  When the kernel size doesn't match particle
+// density, the SDF either dissolves (everything > 0, no surface) or fills
+// the bounding box (everything < 0, opaque blob).
+//
+// This struct gives the viewer a second, much more robust visualization
+// path: render every particle directly as a coloured screen-aligned disc.
+// The result is a "point-cloud preview" that's always visible regardless of
+// how the SDF reconstruction is behaving — useful both as a debugging tool
+// and as a primary rendering style for sparse captured fluids.
+//
+// Self-contained:
+//   - Owns its own GL program, VAO, and VBO.
+//   - Lazy-initialised on first draw.
+//   - Per-frame uploads packed (x, y, z, speed) attributes; `speed` is the
+//     |velocity| precomputed CPU-side.
+//   - Vertex shader projects with the main camera's proj*view, computes a
+//     world-stable point size from the camera's vertical FOV, and selects
+//     a colour from a velocity ramp.
+//   - Fragment shader discards corners outside the inscribed circle so the
+//     points read as round droplets, with a soft pseudo-specular highlight.
+//
+// Depth-tests against the pipe mesh (so points are correctly hidden behind
+// pipe walls in pipe scenes) and is drawn *after* the volume overlay so
+// particles read on top of the SDF surface when both are enabled — this is
+// useful for sanity-checking that the SDF is actually tracking the particle
+// cloud.
+// ============================================================================
+struct ParticleDraw {
+    GLuint  vao = 0, vbo = 0, prog = 0;
+    GLint   locVP        = -1;
+    GLint   locPointSize = -1;
+    GLint   locFbHeight  = -1;
+    GLint   locFovYTan   = -1;
+    GLint   locSpeedMax  = -1;
+    GLint   locColorMode = -1;
+    GLsizei vertexCount  = 0;
+    GLsizei vboCapacity  = 0;        // in floats, not bytes
+    bool    ready = false;
+
+    void initOnce() {
+        if (ready) return;
+
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        // VBO storage is (re)allocated lazily in upload(); just wire up the
+        // vertex attribute pointer so the VAO captures it.
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE,
+                              4 * sizeof(float), (void*)0);
+        glBindVertexArray(0);
+
+        const char* vsSrc =
+            "#version 150\n"
+            "in vec4 aPosSpeed;\n"           // xyz = world pos, w = |velocity|
+            "uniform mat4  uViewProj;\n"
+            "uniform float uPointSize;\n"     // world-radius in metres
+            "uniform float uFbHeight;\n"
+            "uniform float uFovYTan;\n"       // tan(fov_y / 2)
+            "uniform float uSpeedMax;\n"
+            "uniform int   uColorMode;\n"     // 0 = constant, 1 = velocity ramp
+            "out vec3 vColor;\n"
+            "void main() {\n"
+            "  vec4 wp = vec4(aPosSpeed.xyz, 1.0);\n"
+            "  gl_Position = uViewProj * wp;\n"
+            "  // After the OpenGL projection, gl_Position.w == -view.z, i.e.\n"
+            "  // the (positive) view-space distance from the camera.  A sphere\n"
+            "  // of world-radius r at view distance d projects to ~\n"
+            "  //   pixelSize = (r / d) * (fbHeight / (2 * tan(fov_y/2)))\n"
+            "  float d = max(gl_Position.w, 1e-3);\n"
+            "  float px = uPointSize * uFbHeight / (2.0 * d * uFovYTan);\n"
+            "  gl_PointSize = clamp(px, 1.0, 64.0);\n"
+            "  if (uColorMode == 1) {\n"
+            "    float t = clamp(aPosSpeed.w / max(uSpeedMax, 1e-4), 0.0, 1.0);\n"
+            "    // 4-stop ramp: deep blue (slow) -> cyan -> yellow -> red.\n"
+            "    vec3 c0 = vec3(0.10, 0.20, 0.95);\n"
+            "    vec3 c1 = vec3(0.10, 0.85, 0.95);\n"
+            "    vec3 c2 = vec3(0.95, 0.85, 0.20);\n"
+            "    vec3 c3 = vec3(0.95, 0.15, 0.15);\n"
+            "    if      (t < 0.3333) vColor = mix(c0, c1, t / 0.3333);\n"
+            "    else if (t < 0.6666) vColor = mix(c1, c2, (t - 0.3333) / 0.3333);\n"
+            "    else                 vColor = mix(c2, c3, (t - 0.6666) / 0.3334);\n"
+            "  } else {\n"
+            "    vColor = vec3(0.55, 0.85, 1.00);\n"
+            "  }\n"
+            "}\n";
+        const char* fsSrc =
+            "#version 150\n"
+            "in  vec3 vColor;\n"
+            "out vec4 fragColor;\n"
+            "void main() {\n"
+            "  vec2 d = gl_PointCoord - vec2(0.5);\n"
+            "  float r2 = dot(d, d);\n"
+            "  if (r2 > 0.25) discard;\n"
+            "  // Soft edge to anti-alias the disc, plus a faint highlight\n"
+            "  // shifted up-left so the discs read as little spheres rather\n"
+            "  // than flat coins.\n"
+            "  float a = smoothstep(0.25, 0.18, r2);\n"
+            "  vec2  hd = gl_PointCoord - vec2(0.35, 0.35);\n"
+            "  float hl = clamp(1.0 - dot(hd, hd) * 6.0, 0.0, 1.0);\n"
+            "  vec3  col = vColor * (0.85 + 0.35 * hl);\n"
+            "  fragColor = vec4(col, a);\n"
+            "}\n";
+
+        GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vs, 1, &vsSrc, nullptr);
+        glCompileShader(vs);
+        GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fs, 1, &fsSrc, nullptr);
+        glCompileShader(fs);
+        prog = glCreateProgram();
+        glAttachShader(prog, vs);
+        glAttachShader(prog, fs);
+        glBindAttribLocation(prog, 0, "aPosSpeed");
+        glLinkProgram(prog);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+
+        locVP        = glGetUniformLocation(prog, "uViewProj");
+        locPointSize = glGetUniformLocation(prog, "uPointSize");
+        locFbHeight  = glGetUniformLocation(prog, "uFbHeight");
+        locFovYTan   = glGetUniformLocation(prog, "uFovYTan");
+        locSpeedMax  = glGetUniformLocation(prog, "uSpeedMax");
+        locColorMode = glGetUniformLocation(prog, "uColorMode");
+        ready = true;
+    }
+
+    // Repack the simulator's particle list as tight (x, y, z, speed) attribs
+    // and stream into the VBO.  ParticleT is duck-typed as anything with
+    // .x .y .z .u .v .w float fields (matches MACWater3D::Particle).
+    template<typename ParticleT>
+    void upload(const std::vector<ParticleT>& particles) {
+        initOnce();
+        const std::size_t N = particles.size();
+        if (N == 0) { vertexCount = 0; return; }
+
+        std::vector<float> packed(N * 4);
+        for (std::size_t i = 0; i < N; ++i) {
+            const auto& p = particles[i];
+            const float u = p.u, v = p.v, w = p.w;
+            packed[4*i + 0] = p.x;
+            packed[4*i + 1] = p.y;
+            packed[4*i + 2] = p.z;
+            packed[4*i + 3] = std::sqrt(u * u + v * v + w * w);
+        }
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        const GLsizeiptr bytes =
+            static_cast<GLsizeiptr>(packed.size() * sizeof(float));
+        if (vboCapacity < (GLsizei)packed.size()) {
+            // Grow with some slack so we don't reallocate every frame when
+            // the particle count drifts up by a handful.
+            const GLsizei newCap = (GLsizei)(packed.size() * 5 / 4 + 1024);
+            glBufferData(GL_ARRAY_BUFFER,
+                         (GLsizeiptr)newCap * (GLsizeiptr)sizeof(float),
+                         nullptr, GL_DYNAMIC_DRAW);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, packed.data());
+            vboCapacity = newCap;
+        } else {
+            glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, packed.data());
+        }
+        vertexCount = (GLsizei)N;
+        glBindVertexArray(0);
+    }
+
+    // Column-major 4x4 multiply: out = a * b (OpenGL convention).
+    static void mul4(const float* a, const float* b, float* out) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) {
+                float s = 0.0f;
+                for (int k = 0; k < 4; ++k) s += a[k * 4 + r] * b[c * 4 + k];
+                out[c * 4 + r] = s;
+            }
+    }
+
+    void draw(const float* view, const float* proj,
+              float pointWorldRadius, float speedMax,
+              bool colorByVelocity, int fbHeight) {
+        if (!ready || vertexCount == 0) return;
+
+        float vp[16];
+        mul4(proj, view, vp);
+
+        // Recover tan(fov_y / 2) from a standard perspective matrix.
+        // For glm::perspective / equivalent: proj[5] (== M[1][1]) = 1 / tan(fov_y/2).
+        const float fovYTan = (proj[5] != 0.0f) ? (1.0f / proj[5]) : 0.5f;
+
+        // Save state we modify, restore after.
+        const GLboolean blendWasOn = glIsEnabled(GL_BLEND);
+        GLint blendSrc, blendDst;
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendSrc);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &blendDst);
+
+        glEnable(GL_PROGRAM_POINT_SIZE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);
+
+        glUseProgram(prog);
+        glUniformMatrix4fv(locVP, 1, GL_FALSE, vp);
+        glUniform1f(locPointSize, pointWorldRadius);
+        glUniform1f(locFbHeight,  (float)fbHeight);
+        glUniform1f(locFovYTan,   fovYTan);
+        glUniform1f(locSpeedMax,  speedMax);
+        glUniform1i(locColorMode, colorByVelocity ? 1 : 0);
+
+        glBindVertexArray(vao);
+        glDrawArrays(GL_POINTS, 0, vertexCount);
+        glBindVertexArray(0);
+        glUseProgram(0);
+
+        if (!blendWasOn) glDisable(GL_BLEND);
+        glBlendFunc((GLenum)blendSrc, (GLenum)blendDst);
+    }
+};
+static ParticleDraw g_particleDraw;
 
 // ============================================================================
 // GLFW callbacks
@@ -633,6 +878,10 @@ static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
         std::string err;
         if (scene.loadFluidStateSeries(g_ui.fluidSeriesPath, &err)) {
             g_renderer->uploadMesh(scene.pipeMesh());
+            // Captured-fluid replays are sparse FLIP clouds — auto-enable
+            // the particle-direct renderer so the user actually sees the
+            // captured shape regardless of how the SDF metaball is behaving.
+            g_ui.drawParticles = true;
             g_ui.setStatus(
                 std::string("Loaded fluid state series (") +
                 std::to_string(scene.replayTotalFrames()) +
@@ -708,6 +957,19 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
     // a continuous liquid surface regardless of pipe voxel resolution; off
     // falls back to the older density-integration path.
     ImGui::Checkbox("water: SDF surface", &g_ui.waterUseSdf);
+
+    // Particle-direct point rendering — independent of the SDF/voxel overlay.
+    // The right answer for sparse captured fluids where the metaball SDF
+    // either dissolves or balloons.  Auto-enables on series load (see the
+    // "Load fluid state series" button and the --fluid-series CLI handler).
+    ImGui::Checkbox("particles: render as points", &g_ui.drawParticles);
+    if (g_ui.drawParticles) {
+        ImGui::SliderFloat("particle radius (m)", &g_ui.particlePointSize,
+                           0.001f, 0.05f, "%.4f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("speed max (m/s)",     &g_ui.particleSpeedMax,
+                           0.1f, 20.0f, "%.2f");
+        ImGui::Checkbox("color by velocity",      &g_ui.particleColorByVel);
+    }
 
     // Backend selector — lets the user flip between CPU and GPU at runtime.
     // "Auto" picks based on the GL vendor string (see pickAutoBackend()).
@@ -928,6 +1190,9 @@ int main(int argc, char* argv[]) {
             std::cout << "[PipeFluidEngine] Loaded fluid state series ("
                       << scene.replayTotalFrames() << " frames) from "
                       << fluidSeriesPath << "\n";
+            // Sparse captured fluids — see the matching auto-enable in the
+            // "Load fluid state series" UI button handler.
+            g_ui.drawParticles = true;
             loadedSomething = true;
         }
     }
@@ -1132,6 +1397,32 @@ int main(int argc, char* argv[]) {
                 wsv.alphaScale *= 0.6f;
                 wsv.useSdf    = g_ui.waterUseSdf;
                 volRenderer->render(vv, wsv);
+            }
+        }
+
+        // --- Particle-direct point rendering -------------------------------
+        // Independent of the volume overlay.  The volume renderer reconstructs
+        // a metaball SDF from the FLIP particles and sphere-traces it, which
+        // looks beautiful when particles are densely seeded (typical pipe
+        // emit-from-source scenes) but degenerates on sparse clouds (captured-
+        // fluid replays).  This pass draws every particle directly so the
+        // user has a stable visualisation regardless of SDF kernel behaviour.
+        // Drawn after the volume overlay so particles read on top of the SDF
+        // surface, with depth-test against the pipe mesh so they're correctly
+        // hidden behind walls.
+        if (g_ui.drawParticles && scene.water()) {
+            const auto& particles = scene.water()->particles;
+            if (!particles.empty()) {
+                const float aspect = (float)fbW / std::max(1.f, (float)fbH);
+                float proj[16], view[16];
+                renderer.camera.buildProjMatrix(proj, aspect);
+                renderer.camera.buildViewMatrix(view);
+                g_particleDraw.upload(particles);
+                g_particleDraw.draw(view, proj,
+                                    g_ui.particlePointSize,
+                                    g_ui.particleSpeedMax,
+                                    g_ui.particleColorByVel,
+                                    fbH);
             }
         }
 
