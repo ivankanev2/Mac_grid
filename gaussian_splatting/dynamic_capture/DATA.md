@@ -3,7 +3,7 @@
 Large files for this project live outside the repo. To bootstrap:
 
 1. **Trained Deformable 3D-GS model** → `gaussian_splatting/checkpoints/oil_pour/`
-   Source: <Google Drive / Dropbox link goes here>
+   Source: <Google Drive (https://drive.google.com/drive/folders/1gukh4B0GIc17jNGO9AfZGUUmwjM8NHLM?usp=sharing)>
    Approx 300 MB. Required to run `extract_fluid_state_v2.py`.
 
 2. **Captured fluid states v2** → `gaussian_splatting/dynamic_capture/captured_states_v2/`
