@@ -111,32 +111,57 @@ def _load_manifest(folder: Path) -> dict:
 # -----------------------------------------------------------------------------
 def _column_stats_for_frame(pos: np.ndarray, vel: np.ndarray,
                              column_z_floor: float,
-                             min_active: int):
-    """Return dict {active, pos, vel, radius} for a single captured frame."""
+                             min_active: int,
+                             velocity_mode: str = "gravity",
+                             gravity: float = 9.8,
+                             min_fall_height: float = 0.005):
+    """Return dict {active, pos, vel, radius, top_z, fall_height} for a
+    single captured frame.
+
+    velocity_mode controls how out_vel is derived:
+      "captured": mean MLP-output velocity of column particles (unreliable
+                  in monocular static-camera setting; for ablation only).
+      "gravity":  out_vel.z = -sqrt(2 * g * fall_height), where
+                  fall_height = top_z - column_z_floor (clamped to
+                  min_fall_height so the velocity is never exactly zero).
+                  xy components are zero — column falls straight down.
+    """
     column_mask = pos[:, 2] > column_z_floor
     n_col = int(column_mask.sum())
 
     if n_col < min_active:
+        # Inactive frame — write a sane default velocity for the binary
+        # but mark active=False so the simulator skips the emission.
         return {
             "active": False,
-            "pos":    np.array([0.0, 0.0, column_z_floor], dtype=np.float32),
-            "vel":    np.array([0.0, 0.0, -1.0], dtype=np.float32),
-            "radius": 0.012,
+            "pos":     np.array([0.0, 0.0, column_z_floor], dtype=np.float32),
+            "vel":     np.array([0.0, 0.0, -1.0], dtype=np.float32),
+            "radius":  0.012,
             "n_column": n_col,
+            "top_z":     float("nan"),
+            "fall_height": float("nan"),
         }
 
     col_pos = pos[column_mask]
     col_vel = vel[column_mask]
 
-    # Centre xy = mean of column points; z = floor + half-cell so the source
-    # sphere sits just above the bottle's mouth (avoids spawning inside walls).
+    # Centre xy = mean of column points; z = column_z_floor so the source
+    # sphere sits at the bottle mouth (avoids spawning inside walls).
     mean_xy = col_pos[:, :2].mean(axis=0)
     out_pos = np.array([mean_xy[0], mean_xy[1], column_z_floor],
                        dtype=np.float32)
 
-    # Velocity = mean column velocity.  Almost always dominated by the
-    # downward component since the column is falling under gravity.
-    out_vel = col_vel.mean(axis=0).astype(np.float32)
+    # The top of the captured column — used for the gravity velocity.
+    top_z = float(col_pos[:, 2].max())
+    fall_height = max(top_z - column_z_floor, float(min_fall_height))
+
+    if velocity_mode == "gravity":
+        # Free-fall from top_z to emitter z.  Equivalent to: a particle
+        # released at rest at top_z reaches emitter z with this speed.
+        v_z = -float(np.sqrt(2.0 * float(gravity) * fall_height))
+        out_vel = np.array([0.0, 0.0, v_z], dtype=np.float32)
+    else:  # "captured" — keep the legacy MLP-mean path for ablations.
+        out_vel = col_vel.mean(axis=0).astype(np.float32)
 
     # Radius = robust spread of xy around the mean.  95th-percentile distance
     # gives a stable estimate that ignores rare outliers.
@@ -151,6 +176,8 @@ def _column_stats_for_frame(pos: np.ndarray, vel: np.ndarray,
         "vel":    out_vel,
         "radius": radius,
         "n_column": n_col,
+        "top_z": top_z,
+        "fall_height": fall_height,
     }
 
 
@@ -177,6 +204,29 @@ def _parse_args(argv=None) -> argparse.Namespace:
                         "up the pool's top surface as 'column' (m).")
     p.add_argument("--min-active-particles", type=int, default=5,
                    help="Minimum column particles for a frame to be ACTIVE.")
+    # v2: velocity computation mode.  The deformation MLP's velocity output
+    # is unreliable in the static-camera monocular setting (the MLP fits the
+    # visual pattern of a continuous stream rather than tracking Lagrangian
+    # particle motion).  We default to a gravity-derived velocity computed
+    # from the captured column's top z and the emitter z, which uses the
+    # video's spatial structure but bypasses the broken velocity output.
+    p.add_argument("--velocity-mode",
+                   choices=["captured", "gravity"], default="gravity",
+                   help="How the per-frame column velocity is computed. "
+                        "'captured' = mean of MLP-output velocities "
+                        "(unreliable, kept for ablation). "
+                        "'gravity' (default) = sqrt(2*g*fall) from the "
+                        "captured column's top-z minus the emitter z; "
+                        "uses the video's spatial structure but bypasses "
+                        "the MLP velocity output.")
+    p.add_argument("--gravity", type=float, default=9.8,
+                   help="Gravity magnitude (m/s^2) used by --velocity-mode "
+                        "gravity.  Standard 9.8 unless you're simulating "
+                        "elsewhere on the solar system.")
+    p.add_argument("--min-fall-height", type=float, default=0.005,
+                   help="Floor for fall_height in --velocity-mode gravity "
+                        "(m).  Avoids zero velocities when the column's "
+                        "top is right at the emitter z.")
     return p.parse_args(argv)
 
 
@@ -211,6 +261,10 @@ def main(argv=None) -> int:
     print(f"  bottle top z:     {args.column_z_floor:.4f}  (margin {args.column_z_margin})")
     print(f"  column z floor:   {column_z_floor:.4f}")
     print(f"  min active count: {args.min_active_particles}")
+    print(f"  velocity mode:    {args.velocity_mode}")
+    if args.velocity_mode == "gravity":
+        print(f"  gravity:          {args.gravity} m/s^2")
+        print(f"  min fall height:  {args.min_fall_height} m")
     print(f"  N frames:         {n_frames}")
     print("-" * 72)
 
@@ -221,6 +275,9 @@ def main(argv=None) -> int:
             st["pos"], st["vel"],
             column_z_floor=column_z_floor,
             min_active=args.min_active_particles,
+            velocity_mode=args.velocity_mode,
+            gravity=args.gravity,
+            min_fall_height=args.min_fall_height,
         )
         frames.append(s)
 
@@ -234,12 +291,21 @@ def main(argv=None) -> int:
         avg_vel = np.mean([f["vel"] for f in active], axis=0)
         avg_rad = float(np.mean([f["radius"] for f in active]))
         avg_n   = float(np.mean([f["n_column"] for f in active]))
+        avg_top_z       = float(np.mean([f["top_z"]       for f in active]))
+        avg_fall_height = float(np.mean([f["fall_height"] for f in active]))
         print(f"  avg active pos    = "
               f"[{avg_pos[0]:+.4f}, {avg_pos[1]:+.4f}, {avg_pos[2]:+.4f}]  m")
         print(f"  avg active vel    = "
               f"[{avg_vel[0]:+.4f}, {avg_vel[1]:+.4f}, {avg_vel[2]:+.4f}]  m/s")
         print(f"  avg active radius = {avg_rad:.4f}  m")
         print(f"  avg column count  = {avg_n:.1f} particles")
+        print(f"  avg top z         = {avg_top_z:.4f}  m  (max z of column)")
+        print(f"  avg fall height   = {avg_fall_height:.4f}  m  "
+              f"(top z - emitter z)")
+        if args.velocity_mode == "gravity":
+            v_implied = -float(np.sqrt(2.0 * args.gravity * max(
+                avg_fall_height, args.min_fall_height)))
+            print(f"  -> implied gravity vz at avg fall = {v_implied:+.3f} m/s")
     else:
         print("WARNING: no active frames — column-z-floor may be too high "
               "or the captured states may not have a column above the bottle.")

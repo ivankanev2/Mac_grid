@@ -138,6 +138,18 @@ struct ViewerState {
     float particleSpeedMax   = 4.0f;
     bool  particleColorByVel = true;
 
+    // Bottle / solid-mask point render — turn on to actually SEE where the
+    // walls are, since the volume overlay treats solids as invisible.
+    // Defaults on for any captured-fluid scene; off for normal pipe sims
+    // (the pipe mesh already shows the walls there).
+    bool  drawSolids          = false;
+    float solidPointSize      = 0.014f;
+    // Light grey by default — keeps the bottle visually subordinate to the
+    // fluid, easy to distinguish from blue particles.
+    float solidColorR         = 0.78f;
+    float solidColorG         = 0.78f;
+    float solidColorB         = 0.84f;
+
     // Volume renderer backend: 0=Auto, 1=CPU, 2=GPU.
     // The viewer recreates the renderer when this changes.
     int   backendChoice = 0;
@@ -526,6 +538,170 @@ struct ParticleDraw {
     }
 };
 static ParticleDraw g_particleDraw;
+
+// ============================================================================
+// SolidCellDraw — visualises the simulator's solid mask (bottle walls + the
+// solver's auto-added domain border) as small grey screen-aligned points.
+//
+// The volume overlay treats solids as "where to terminate rays" — they are
+// invisible.  That's correct for fluid rendering but makes it impossible to
+// tell whether the bottle is in the right place or whether the fluid is
+// being constrained correctly.  This struct exposes the solid mask
+// directly so the user can sanity-check geometry alongside the fluid.
+//
+// Same point-sprite shader as ParticleDraw, just a different vertex stream
+// and a flat colour.  Per-frame upload because the mask can change when the
+// user loads a different scene (rare) — but cheap enough to be safe.
+// ============================================================================
+struct SolidCellDraw {
+    GLuint  vao = 0, vbo = 0, prog = 0;
+    GLint   locVP = -1, locPointSize = -1, locFbHeight = -1;
+    GLint   locFovYTan = -1, locColor = -1;
+    GLsizei vertexCount = 0;
+    GLsizei vboCapacity = 0;
+    bool    ready = false;
+
+    void initOnce() {
+        if (ready) return;
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+                              3 * sizeof(float), (void*)0);
+        glBindVertexArray(0);
+
+        const char* vs =
+            "#version 150\n"
+            "in vec3 aPos;\n"
+            "uniform mat4  uViewProj;\n"
+            "uniform float uPointSize;\n"
+            "uniform float uFbHeight;\n"
+            "uniform float uFovYTan;\n"
+            "void main() {\n"
+            "  gl_Position = uViewProj * vec4(aPos, 1.0);\n"
+            "  float d = max(gl_Position.w, 1e-3);\n"
+            "  float px = uPointSize * uFbHeight / (2.0 * d * uFovYTan);\n"
+            "  gl_PointSize = clamp(px, 1.0, 64.0);\n"
+            "}\n";
+        const char* fs =
+            "#version 150\n"
+            "uniform vec3 uColor;\n"
+            "out vec4 fragColor;\n"
+            "void main() {\n"
+            "  vec2 d = gl_PointCoord - vec2(0.5);\n"
+            "  float r2 = dot(d, d);\n"
+            "  if (r2 > 0.25) discard;\n"
+            "  float a = smoothstep(0.25, 0.20, r2);\n"
+            "  fragColor = vec4(uColor, a * 0.55);\n"
+            "}\n";
+        GLuint vsId = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vsId, 1, &vs, nullptr);
+        glCompileShader(vsId);
+        GLuint fsId = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fsId, 1, &fs, nullptr);
+        glCompileShader(fsId);
+        prog = glCreateProgram();
+        glAttachShader(prog, vsId);
+        glAttachShader(prog, fsId);
+        glBindAttribLocation(prog, 0, "aPos");
+        glLinkProgram(prog);
+        glDeleteShader(vsId);
+        glDeleteShader(fsId);
+        locVP        = glGetUniformLocation(prog, "uViewProj");
+        locPointSize = glGetUniformLocation(prog, "uPointSize");
+        locFbHeight  = glGetUniformLocation(prog, "uFbHeight");
+        locFovYTan   = glGetUniformLocation(prog, "uFovYTan");
+        locColor     = glGetUniformLocation(prog, "uColor");
+        ready = true;
+    }
+
+    // Builds the cell-centre position list from a uint8 mask of size nx*ny*nz
+    // (simulator order i + nx*(j + ny*k)) and uploads it to the VBO.
+    void upload(const std::vector<std::uint8_t>& mask,
+                int nx, int ny, int nz, float dx,
+                float ox, float oy, float oz) {
+        initOnce();
+        const std::size_t total = static_cast<std::size_t>(nx) * ny * nz;
+        if (mask.size() != total) { vertexCount = 0; return; }
+
+        std::vector<float> verts;
+        verts.reserve(total / 16 * 3);  // crude estimate, ~6% solid fraction
+        for (int k = 0; k < nz; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const std::size_t idx =
+                        static_cast<std::size_t>(i) +
+                        static_cast<std::size_t>(nx) *
+                          (static_cast<std::size_t>(j) +
+                           static_cast<std::size_t>(ny) *
+                             static_cast<std::size_t>(k));
+                    if (mask[idx] == 0) continue;
+                    verts.push_back(ox + (i + 0.5f) * dx);
+                    verts.push_back(oy + (j + 0.5f) * dx);
+                    verts.push_back(oz + (k + 0.5f) * dx);
+                }
+            }
+        }
+
+        const GLsizei N = static_cast<GLsizei>(verts.size() / 3);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        const GLsizeiptr bytes =
+            static_cast<GLsizeiptr>(verts.size() * sizeof(float));
+        if (vboCapacity < (GLsizei)verts.size()) {
+            const GLsizei cap = (GLsizei)(verts.size() * 5 / 4 + 1024);
+            glBufferData(GL_ARRAY_BUFFER,
+                         (GLsizeiptr)cap * (GLsizeiptr)sizeof(float),
+                         nullptr, GL_DYNAMIC_DRAW);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, verts.data());
+            vboCapacity = cap;
+        } else {
+            glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, verts.data());
+        }
+        vertexCount = N;
+        glBindVertexArray(0);
+    }
+
+    static void mul4(const float* a, const float* b, float* out) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) {
+                float s = 0.0f;
+                for (int k = 0; k < 4; ++k) s += a[k * 4 + r] * b[c * 4 + k];
+                out[c * 4 + r] = s;
+            }
+    }
+
+    void draw(const float* view, const float* proj,
+              float pointWorldRadius, float r, float g, float b,
+              int fbHeight) {
+        if (!ready || vertexCount == 0) return;
+        float vp[16];
+        mul4(proj, view, vp);
+        const float fovYTan = (proj[5] != 0.0f) ? (1.0f / proj[5]) : 0.5f;
+
+        glEnable(GL_PROGRAM_POINT_SIZE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);   // don't occlude the fluid behind the wall
+
+        glUseProgram(prog);
+        glUniformMatrix4fv(locVP, 1, GL_FALSE, vp);
+        glUniform1f(locPointSize, pointWorldRadius);
+        glUniform1f(locFbHeight,  (float)fbHeight);
+        glUniform1f(locFovYTan,   fovYTan);
+        glUniform3f(locColor,     r, g, b);
+
+        glBindVertexArray(vao);
+        glDrawArrays(GL_POINTS, 0, vertexCount);
+        glBindVertexArray(0);
+        glUseProgram(0);
+        glDepthMask(GL_TRUE);
+    }
+};
+static SolidCellDraw g_bottleDraw;
 
 // ============================================================================
 // GLFW callbacks
@@ -963,6 +1139,7 @@ static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
             g_ui.emitWater = true;
             g_ui.emitSmoke = false;
             g_ui.drawParticles = true;
+            g_ui.drawSolids = true;
             // Refresh the renderer's pipe mesh — pour demo has none, but
             // we still want to clear any previous mesh.
             g_renderer->uploadMesh(scene.pipeMesh());
@@ -1044,6 +1221,15 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
         ImGui::SliderFloat("speed max (m/s)",     &g_ui.particleSpeedMax,
                            0.1f, 20.0f, "%.2f");
         ImGui::Checkbox("color by velocity",      &g_ui.particleColorByVel);
+    }
+
+    // Solid mask render — show the bottle walls as grey points so the user
+    // can see where the geometry is.
+    ImGui::Checkbox("bottle / solids: render as points", &g_ui.drawSolids);
+    if (g_ui.drawSolids) {
+        ImGui::SliderFloat("solid radius (m)", &g_ui.solidPointSize,
+                           0.001f, 0.05f, "%.4f", ImGuiSliderFlags_Logarithmic);
+        ImGui::ColorEdit3("solid color", &g_ui.solidColorR);
     }
 
     // Backend selector — lets the user flip between CPU and GPU at runtime.
@@ -1349,10 +1535,12 @@ int main(int argc, char* argv[]) {
         g_ui.sourceVelZ = -1.0f;          // 1 m/s downward — moderate pour
         g_ui.emitWater = true;             // continuous emission ON
         g_ui.emitSmoke = false;
-        g_ui.drawParticles = true;         // particle-direct render so the
-                                           // user can see the column even
-                                           // before it builds enough density
-                                           // for the SDF surface.
+        // Particle-direct render so the user can see the column even
+        // before it builds enough density for the SDF surface; bottle
+        // render so the walls are visible (volume overlay treats solids
+        // as invisible).
+        g_ui.drawParticles = true;
+        g_ui.drawSolids = true;
     };
 
     bool loadedSomething = false;
@@ -1662,6 +1850,32 @@ int main(int argc, char* argv[]) {
                 wsv.alphaScale *= 0.6f;
                 wsv.useSdf    = g_ui.waterUseSdf;
                 volRenderer->render(vv, wsv);
+            }
+        }
+
+        // --- Solid-mask (bottle) point rendering ---------------------------
+        // The volume overlay treats solids as invisible.  This pass draws
+        // each solid cell as a translucent grey screen-aligned point so
+        // the user can sanity-check that the bottle geometry is in the
+        // right place and that the fluid is actually being constrained.
+        if (g_ui.drawSolids && scene.water()) {
+            // Read the simulator's combined solid mask (bottle + auto
+            // domain border).  Re-upload every frame; the mask only
+            // changes on scene loads (rare, cheap regardless).
+            const auto& wm = scene.water()->solid;
+            if (!wm.empty()) {
+                const auto& vg = scene.voxels();
+                g_bottleDraw.upload(wm, vg.nx, vg.ny, vg.nz, vg.dx,
+                                    vg.origin.x, vg.origin.y, vg.origin.z);
+                const float aspect = (float)fbW / std::max(1.f, (float)fbH);
+                float proj[16], view[16];
+                renderer.camera.buildProjMatrix(proj, aspect);
+                renderer.camera.buildViewMatrix(view);
+                g_bottleDraw.draw(view, proj, g_ui.solidPointSize,
+                                  g_ui.solidColorR,
+                                  g_ui.solidColorG,
+                                  g_ui.solidColorB,
+                                  fbH);
             }
         }
 
