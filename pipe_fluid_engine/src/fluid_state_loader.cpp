@@ -358,4 +358,96 @@ LoadFluidStateResult loadBottleSolidFile(const std::string& path,
     return res;
 }
 
+// ---- Column emitter trajectory loader (Tier B) -----------------------------
+
+namespace {
+constexpr std::uint32_t kColumnEmitterMagic   = 0x43454D31u;  // 'CEM1'
+constexpr std::uint32_t kColumnEmitterVersion = 1u;
+} // namespace
+
+LoadFluidStateResult loadColumnEmitterFile(const std::string& path,
+                                           CapturedColumnEmitter& out) {
+    LoadFluidStateResult res;
+    out = CapturedColumnEmitter{};
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        res.error = "Cannot open column emitter file: " + path;
+        return res;
+    }
+
+    std::uint32_t magic = 0, version = 0, nFrames = 0;
+    float capturedFps = 0.0f;
+
+    if (!readScalar(in, magic) || magic != kColumnEmitterMagic) {
+        std::ostringstream s;
+        s << "Bad column emitter magic 0x" << std::hex << magic
+          << " (expected 0x" << kColumnEmitterMagic << ") in " << path;
+        res.error = s.str();
+        return res;
+    }
+    if (!readScalar(in, version) || version != kColumnEmitterVersion) {
+        std::ostringstream s;
+        s << "Unsupported column_emitter version " << version
+          << " (this build understands only v" << kColumnEmitterVersion << ")";
+        res.error = s.str();
+        return res;
+    }
+    if (!readScalar(in, nFrames)) {
+        res.error = "Truncated header (n_frames) in " + path;
+        return res;
+    }
+    if (!readScalar(in, capturedFps) || !(capturedFps > 0.0f)) {
+        res.error = "Invalid captured_fps in " + path;
+        return res;
+    }
+
+    out.capturedFps = capturedFps;
+    out.frames.resize(nFrames);
+
+    // Per-frame body: 1 byte active + 3 bytes pad + 8 floats = 36 bytes.
+    constexpr std::streamsize kPerFrame = 1 + 3 + 8 * 4;
+    for (std::uint32_t i = 0; i < nFrames; ++i) {
+        std::uint8_t active = 0;
+        char pad[3];
+        float vals[8] = {};
+
+        if (!readScalar(in, active)) {
+            std::ostringstream s;
+            s << "Truncated frame " << i << " (active byte) in " << path;
+            res.error = s.str();
+            return res;
+        }
+        in.read(pad, 3);
+        if (!in || in.gcount() != 3) {
+            std::ostringstream s;
+            s << "Truncated frame " << i << " (padding) in " << path;
+            res.error = s.str();
+            return res;
+        }
+        in.read(reinterpret_cast<char*>(vals), sizeof(vals));
+        if (!in || in.gcount() != static_cast<std::streamsize>(sizeof(vals))) {
+            std::ostringstream s;
+            s << "Truncated frame " << i << " (body, expected "
+              << kPerFrame - 4 << " bytes after active+pad) in " << path;
+            res.error = s.str();
+            return res;
+        }
+
+        auto& f = out.frames[i];
+        f.active = (active != 0);
+        f.posX = vals[0]; f.posY = vals[1]; f.posZ = vals[2];
+        f.velX = vals[3]; f.velY = vals[4]; f.velZ = vals[5];
+        f.radius = vals[6];
+        f.amount = vals[7];
+    }
+
+    if (!out.valid()) {
+        res.error = "Internal post-load validation failed for " + path;
+        return res;
+    }
+    res.ok = true;
+    return res;
+}
+
 } // namespace pipe_fluid

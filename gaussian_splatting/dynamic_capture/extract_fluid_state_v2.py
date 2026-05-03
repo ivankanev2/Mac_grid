@@ -151,6 +151,22 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="6-connectivity dilation passes applied to the bottle "
                         "solid mask to seal small wall gaps.  1 → +1 cell of "
                         "thickness in each direction.")
+    # v2.2: post-hoc alignment of captured oil to the bottle.  The deformation
+    # MLP often places the captured oil column at a 3D position that renders
+    # correctly from the (single) training viewpoint but is laterally offset
+    # from where the actual bottle is in our extraction.  Without correction,
+    # the oil falls past the bottle and pancakes on the grid floor.  This
+    # shift moves the oil's xy center to the bottle's xy center and the oil's
+    # z-min to the bottle's z-floor, preserving the oil's INTERNAL shape but
+    # anchoring it to the bottle.
+    p.add_argument("--no-align-oil-to-bottle", dest="align_oil_to_bottle",
+                   action="store_false", default=True,
+                   help="Disable v2.2 alignment that shifts captured oil's xy "
+                        "center onto the bottle's xy center and oil's z-min "
+                        "onto the bottle's z-floor.  Default (enabled) "
+                        "compensates for deformation-MLP overfitting that "
+                        "places oil at the wrong position relative to the "
+                        "bottle.  Disable for ablation / diagnostics.")
     # Fluid mask reconstruction
     p.add_argument("--fluid-dilate-iters", type=int, default=1,
                    help="6-connectivity dilation passes applied to the fluid "
@@ -639,6 +655,37 @@ def main(argv=None) -> int:
           f"-> "
           f"[{oil_max_world[0]:+.3f}, {oil_max_world[1]:+.3f}, {oil_max_world[2]:+.3f}]")
 
+    # ---- 4ee) v2.2: align captured oil to the bottle ---------------------
+    # Compute a per-axis shift so that:
+    #   - oil's xy center coincides with bottle's xy center
+    #   - oil's z-min coincides with bottle's z-floor (so the pool sits on
+    #     the bottle base instead of below or above it)
+    # The shift is applied PER FRAME inside the main loop (so velocities
+    # are unaffected — this is a pure translation in world space).  Here
+    # we just compute it and update the oil bbox so grid sizing accounts
+    # for the shifted oil extent.
+    if args.align_oil_to_bottle:
+        oil_center_xy = 0.5 * (oil_min_world[:2] + oil_max_world[:2])
+        bottle_center_xy = 0.5 * (bottle_min_world[:2] + bottle_max_world[:2])
+        oil_align_offset = np.array([
+            float(bottle_center_xy[0] - oil_center_xy[0]),
+            float(bottle_center_xy[1] - oil_center_xy[1]),
+            float(bottle_min_world[2] - oil_min_world[2]),
+        ], dtype=np.float64)
+        oil_min_world += oil_align_offset
+        oil_max_world += oil_align_offset
+        print(f"      align-oil-to-bottle offset: "
+              f"[{oil_align_offset[0]:+.4f}, "
+              f"{oil_align_offset[1]:+.4f}, "
+              f"{oil_align_offset[2]:+.4f}] m")
+        print(f"      oil bbox AFTER alignment: "
+              f"[{oil_min_world[0]:+.3f}, {oil_min_world[1]:+.3f}, {oil_min_world[2]:+.3f}] "
+              f"-> "
+              f"[{oil_max_world[0]:+.3f}, {oil_max_world[1]:+.3f}, {oil_max_world[2]:+.3f}]")
+    else:
+        oil_align_offset = np.zeros(3, dtype=np.float64)
+        print("      align-oil-to-bottle: disabled (--no-align-oil-to-bottle)")
+
     # ---- 4f) Build the global grid ---------------------------------------
     grid_min = np.minimum(bottle_min_world, oil_min_world).astype(np.float32)
     grid_max = np.maximum(bottle_max_world, oil_max_world).astype(np.float32)
@@ -709,6 +756,9 @@ def main(argv=None) -> int:
 
         # Apply rotation + scale + translation.
         pos_world = (pos_t @ R.T) * scale + translation
+        # v2.2: post-hoc alignment of oil to bottle (xy center + z floor).
+        # Pure translation — does NOT affect velocities.
+        pos_world = pos_world + oil_align_offset.astype(np.float32)
         vel_world = (vel_t @ R.T) * scale  # velocity scales with positions
 
         # Build oil occupancy on the GLOBAL grid (NOT a per-frame grid).
@@ -771,6 +821,12 @@ def main(argv=None) -> int:
             "bottle_iters": int(args.bottle_dilate_iters),
             "fluid_iters":  int(args.fluid_dilate_iters),
         },
+        "align_oil_to_bottle": bool(args.align_oil_to_bottle),
+        "oil_align_offset": [
+            float(oil_align_offset[0]),
+            float(oil_align_offset[1]),
+            float(oil_align_offset[2]),
+        ],
     }
     (args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 

@@ -166,6 +166,21 @@ public:
     bool loadBottleSolid(const std::string& path,
                          std::string* errorOut = nullptr);
 
+    // ---- Bottle pour demo (Tier A continuous-emitter path) ---------------
+    // Loads ONLY the bottle_solid.bin and sets up an empty-water scene at
+    // the bottle's grid dimensions.  No captured fluid states, no replay.
+    // The viewer is expected to drive the simulation via the existing
+    // continuous-emit-water path (g_ui.emitWater + addWaterSourceSphere)
+    // so oil falls into the bottle from a configurable spawn point and
+    // physics handles the actual flow.  This produces the visual "fluid
+    // pouring into a bottle" we want, sidestepping the snapshot-replay
+    // architecture's inability to show smooth filling motion.
+    //
+    // Returns true on success.  On failure, errorOut (if non-null) holds
+    // a human-readable message and the scene is left unchanged.
+    bool loadBottlePourDemo(const std::string& bottle_solid_path,
+                            std::string* errorOut = nullptr);
+
     // Replay status — UI uses these to show "frame N/M" and to disable
     // replay-related controls when no series is active.
     [[nodiscard]] bool replayActive() const noexcept;

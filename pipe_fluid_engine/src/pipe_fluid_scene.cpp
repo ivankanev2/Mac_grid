@@ -817,6 +817,147 @@ bool PipeFluidScene::loadBottleSolid(const std::string& path,
     return true;
 }
 
+// ---- Bottle pour demo (Tier A) ---------------------------------------------
+//
+// The replay architecture (loadFluidStateSeries) treats each captured frame
+// as a snapshot to teleport particles to.  Between snapshots, physics is
+// suppressed.  Net result: a static blob that wiggles instead of flowing.
+//
+// The bottle pour demo sidesteps that.  It loads only the bottle_solid.bin
+// — geometry, no fluid — into an empty-water scene at the bottle's grid
+// dimensions.  The simulator starts with zero particles.  The viewer then
+// drives a continuous water emitter (g_ui.emitWater + addWaterSourceSphere)
+// from a point above the bottle mouth.  Physics produces the falling /
+// splashing / pooling / filling motion organically; the bottle solid
+// constrains the pool's shape.  This is what you visually want for the
+// "video → fluid simulation" demo: a recognisable oil pour into a bottle.
+bool PipeFluidScene::loadBottlePourDemo(const std::string& bottle_solid_path,
+                                        std::string* errorOut) {
+    using pipe_fluid::CapturedBottleSolid;
+    using pipe_fluid::loadBottleSolidFile;
+
+    CapturedBottleSolid bs;
+    auto r = loadBottleSolidFile(bottle_solid_path, bs);
+    if (!r.ok || !bs.valid()) {
+        if (errorOut) *errorOut = r.error.empty()
+            ? std::string("Invalid bottle solid file")
+            : r.error;
+        return false;
+    }
+
+    const int NX = bs.nx;
+    const int NY = bs.ny;
+    const int NZ = bs.nz;
+    const float DX = bs.dx;
+    const float DT = (p_->cfg.sim.dt > 0.f) ? p_->cfg.sim.dt : 1.0f / 60.0f;
+    const std::size_t N  = static_cast<std::size_t>(NX) * NY * NZ;
+    const std::size_t NU = static_cast<std::size_t>(NX + 1) * NY * NZ;
+    const std::size_t NV = static_cast<std::size_t>(NX) * (NY + 1) * NZ;
+    const std::size_t NW = static_cast<std::size_t>(NX) * NY * (NZ + 1);
+
+    // Wipe pipe-network state — pour demo has no pipe.
+    p_->network = PipeNetwork{};
+    p_->mesh = TriMesh{};
+
+    // Configure for water-only, no smoke, no replay.
+    p_->cfg.sim.enableWater = true;
+    p_->cfg.sim.enableSmoke = false;
+
+    // Voxel grid from the bottle file's parameters.
+    p_->voxels = VoxelGrid(NX, NY, NZ, DX,
+                           Vec3{bs.originX, bs.originY, bs.originZ});
+
+    // Empty-box boundary field — same shape as captured-fluid scenes.
+    PipeBoundaryField bf;
+    bf.nx = NX; bf.ny = NY; bf.nz = NZ; bf.dx = DX;
+    bf.origin = Vec3{bs.originX, bs.originY, bs.originZ};
+    bf.cells.assign(N, PipeBoundaryCell::Interior);
+    const float farPositive = 1.0e6f;
+    bf.wallSdf.assign(N, farPositive);
+    bf.interiorSdf.assign(N, farPositive);
+    bf.wallMask.assign(N, uint8_t(0));
+    bf.uOpen.assign(NU, 1.0f);
+    bf.vOpen.assign(NV, 1.0f);
+    bf.wOpen.assign(NW, 1.0f);
+    bf.terminals.clear();
+    p_->boundary = std::move(bf);
+
+    p_->solverBoundary = buildSolverBoundaryData(p_->boundary);
+    p_->smokeMask = p_->solverBoundary.solidMask;
+    p_->waterMask = p_->solverBoundary.waterSolidMask;
+
+    if (!p_->water) {
+        p_->water = std::make_unique<MACWater3D>(NX, NY, NZ, DX, DT);
+    } else {
+        p_->water->reset(NX, NY, NZ, DX, DT);
+    }
+    {
+        // Same FLIP/APIC params we use for blueprint pipes — keeps physics
+        // identical between modes.
+        auto wParams = p_->water->params;
+        wParams.particlesPerCell       = std::max(wParams.particlesPerCell, 8);
+        wParams.flipBlend              = 0.95f;
+        wParams.borderThickness        = 1;
+        wParams.openTop                = false;
+        wParams.useAPIC                = true;
+        wParams.pressureSolverMode     = (int)MACWater3D::PressureSolverMode::Multigrid;
+        wParams.pressureIters          = std::max(wParams.pressureIters, 200);
+        wParams.pressureMGVCycles      = std::max(wParams.pressureMGVCycles, 50);
+        wParams.pressureMGCoarseIters  = std::max(wParams.pressureMGCoarseIters, 40);
+        wParams.reseedRelaxIters       = std::max(wParams.reseedRelaxIters, 2);
+        wParams.reseedRelaxStrength    = 0.45f;
+        wParams.volumePreserveRhsMean  = true;
+        wParams.volumePreserveStrength = 0.05f;
+        p_->water->setParams(wParams);
+    }
+    applySolidsToWater(*p_->water, p_->waterMask);
+    applySolverBoundaryToWater(*p_->water, p_->solverBoundary);
+
+    // OR-merge the bottle solid into the water solid mask.  This is the
+    // wall geometry that will contain the falling / pooling oil.
+    if (p_->waterMask.size() != bs.mask.size()) {
+        p_->waterMask.assign(bs.mask.size(), uint8_t(0));
+    }
+    int n_added = 0;
+    for (std::size_t i = 0; i < bs.mask.size(); ++i) {
+        const uint8_t v = bs.mask[i];
+        if (v != 0 && p_->waterMask[i] == 0) ++n_added;
+        p_->waterMask[i] = (p_->waterMask[i] != 0 || v != 0)
+                            ? uint8_t(1) : uint8_t(0);
+    }
+    applySolidsToWater(*p_->water, p_->waterMask);
+
+    // No initial particles — the emitter will fill the bottle.
+    p_->water->particles.clear();
+    p_->water->derivedFieldsDirty = true;
+
+    p_->smoke.reset();
+
+    // Pre-size the water SDF so a render before the first step returns a
+    // fully-transparent water pass.
+    const float initBand = 3.0f * DX;
+    p_->waterSdf.assign(N, initBand);
+    p_->waterSdfBand = initBand;
+
+    p_->geometryDirty = false;
+
+    // No replay state — pour demo is a clean physics-only scene driven by
+    // the emitter.
+    p_->replaySeries = pipe_fluid::CapturedFluidStateSeries{};
+    p_->replayActive = false;
+    p_->replayTime = 0.0f;
+    p_->replayCurrentFrame = -1;
+
+    std::printf("[PipeFluidScene] Loaded bottle pour demo: bottle solid +%d "
+                "cells from %s (grid %dx%dx%d, dx=%.4f m, origin "
+                "[%.4f, %.4f, %.4f])\n",
+                n_added, bottle_solid_path.c_str(), NX, NY, NZ, DX,
+                bs.originX, bs.originY, bs.originZ);
+
+    if (errorOut) *errorOut = std::string{};
+    return true;
+}
+
 // ---- Replay status accessors ------------------------------------------------
 
 bool PipeFluidScene::replayActive() const noexcept {

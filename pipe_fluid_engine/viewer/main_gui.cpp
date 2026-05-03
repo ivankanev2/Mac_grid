@@ -46,6 +46,7 @@
 #include "pipe_fluid/pipe_fluid_scene.h"
 #include "pipe_fluid/volume_renderer.h"
 #include "pipe_fluid/pipe_solver_boundary_data.h"
+#include "pipe_fluid/fluid_state_loader.h"
 
 #include <algorithm>
 #include <cmath>
@@ -63,6 +64,16 @@ static MeshRenderer*                       g_renderer      = nullptr;
 static pipe_fluid::VolumeOverlayRenderer*  g_volRenderer   = nullptr;
 static pipe_fluid::PipeFluidScene*         g_scene         = nullptr;
 static GLFWwindow*                         g_win            = nullptr;
+
+// Tier B — column emitter trajectory loaded from disk.  When valid, the
+// main loop drives addWaterSourceSphere from this per-frame data instead
+// of (or in addition to) the user's manual emit-water sliders.
+static pipe_fluid::CapturedColumnEmitter   g_columnEmitter;
+static bool                                g_columnEmitterActive = false;
+// Internal "playback time" for the emitter trajectory.  Advances by dt of
+// each simulator substep (only when playing).  Reset to zero on load and
+// on the "Reset emitter time" button.
+static double                              g_columnEmitterTime   = 0.0;
 
 // Viewer state
 struct ViewerState {
@@ -148,6 +159,14 @@ struct ViewerState {
     // extract_fluid_state_v2.py.  Auto-loaded when found next to the series.
     char bottleSolidPath[512] =
         "../../gaussian_splatting/dynamic_capture/captured_states_v2/bottle_solid.bin";
+
+    // Column emitter trajectory (Tier B) — file produced by
+    // extract_column_emitter.py.  When loaded, the simulator drives its
+    // water source from this per-frame trajectory data instead of the
+    // user's manual emitter sliders, so the simulated pour matches the
+    // source video's timing.
+    char columnEmitterPath[512] =
+        "../../gaussian_splatting/dynamic_capture/captured_states_v2/column_emitter.bin";
 
     void setStatus(const std::string& s) {
         status = s;
@@ -918,6 +937,41 @@ static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
             g_ui.setStatus(std::string("Bottle solid load failed: ") + err);
         }
     }
+    ImGui::SameLine();
+    // Tier A: bottle-only scene + continuous emitter.  Skips snapshot
+    // replay entirely.  Press Play after this loads — emitter is pre-
+    // configured and ON.
+    if (ImGui::Button("Load bottle pour demo")) {
+        std::string err;
+        if (scene.loadBottlePourDemo(g_ui.bottleSolidPath, &err)) {
+            // Same emitter pre-config as the CLI path uses.  Read the grid
+            // back from the freshly-loaded scene so we don't have to plumb
+            // the bottle's bbox through.
+            const auto& vg = scene.voxels();
+            const float gridMaxZ = vg.origin.z + vg.nz * vg.dx;
+            const float cx = vg.origin.x + 0.5f * vg.nx * vg.dx;
+            const float cy = vg.origin.y + 0.5f * vg.ny * vg.dx;
+            const float ez = vg.origin.z + 0.85f * (gridMaxZ - vg.origin.z);
+            g_ui.sourceX = cx;
+            g_ui.sourceY = cy;
+            g_ui.sourceZ = ez;
+            g_ui.sourceR = std::max(0.012f, 0.8f * vg.dx);
+            g_ui.sourceAmount = 1.0f;
+            g_ui.sourceVelX = 0.f;
+            g_ui.sourceVelY = 0.f;
+            g_ui.sourceVelZ = -1.0f;
+            g_ui.emitWater = true;
+            g_ui.emitSmoke = false;
+            g_ui.drawParticles = true;
+            // Refresh the renderer's pipe mesh — pour demo has none, but
+            // we still want to clear any previous mesh.
+            g_renderer->uploadMesh(scene.pipeMesh());
+            g_ui.setStatus(
+                "Bottle pour demo loaded — emitter ON, press Play.");
+        } else {
+            g_ui.setStatus(std::string("Bottle pour demo load failed: ") + err);
+        }
+    }
 
     ImGui::SeparatorText("Programmatic builder");
     ImGui::InputFloat3("start",     &g_ui.builderStartX);
@@ -999,6 +1053,58 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
     ImGui::SliderInt("render scale", &g_ui.fluidRenderScale, 1, 3);
     if (g_volRenderer) {
         ImGui::TextDisabled("active: %s", g_volRenderer->backendName());
+    }
+
+    // Tier B — column emitter trajectory.  When loaded, drives the water
+    // source from the captured per-frame data, so the simulated pour
+    // matches the source video's pour timing.
+    ImGui::SeparatorText("Column emitter (Tier B — from video)");
+    ImGui::InputText("emitter path", g_ui.columnEmitterPath,
+                     sizeof(g_ui.columnEmitterPath));
+    if (ImGui::Button("Load column emitter")) {
+        std::string err;
+        pipe_fluid::CapturedColumnEmitter loaded;
+        auto r = pipe_fluid::loadColumnEmitterFile(
+            g_ui.columnEmitterPath, loaded);
+        if (r.ok && loaded.valid()) {
+            g_columnEmitter = std::move(loaded);
+            g_columnEmitterActive = true;
+            g_columnEmitterTime = 0.0;
+            g_ui.emitWater = false;
+            g_ui.setStatus(
+                std::string("Column emitter ON (") +
+                std::to_string(g_columnEmitter.nFrames()) + " frames)");
+        } else {
+            g_ui.setStatus(std::string("Column emitter load failed: ") +
+                           (r.error.empty() ? "invalid file" : r.error));
+        }
+    }
+    if (g_columnEmitterActive) {
+        ImGui::SameLine();
+        if (ImGui::Button("Reset emitter time")) {
+            g_columnEmitterTime = 0.0;
+            g_ui.setStatus("Column emitter time reset to 0");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Disable")) {
+            g_columnEmitterActive = false;
+            g_ui.setStatus("Column emitter OFF (manual emitter restored)");
+        }
+        const float total = g_columnEmitter.totalDuration();
+        const float t = (float)g_columnEmitterTime;
+        const int frame = std::min(g_columnEmitter.nFrames() - 1,
+                                   std::max(0, (int)std::floor(
+                                       g_columnEmitterTime *
+                                       g_columnEmitter.capturedFps)));
+        const auto& fr = g_columnEmitter.frames[frame];
+        ImGui::Text("t = %.2f / %.2f s   frame %d / %d   %s",
+                    t, total, frame + 1, g_columnEmitter.nFrames(),
+                    fr.active ? "EMITTING" : "(idle)");
+        if (fr.active) {
+            ImGui::Text("  pos=(%.3f, %.3f, %.3f)   vel=(%.2f, %.2f, %.2f)   r=%.3f",
+                        fr.posX, fr.posY, fr.posZ,
+                        fr.velX, fr.velY, fr.velZ, fr.radius);
+        }
     }
 
     ImGui::SeparatorText("Fluid source (world coords)");
@@ -1111,6 +1217,8 @@ int main(int argc, char* argv[]) {
     std::string fluidStatePath;
     std::string fluidSeriesPath;
     std::string bottleSolidPath;
+    std::string bottlePourDemoPath;
+    std::string columnEmitterPath;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--fluid-state" && i + 1 < argc) {
@@ -1125,6 +1233,16 @@ int main(int argc, char* argv[]) {
             bottleSolidPath = argv[++i];
         } else if (arg.rfind("--bottle-solid=", 0) == 0) {
             bottleSolidPath = arg.substr(std::string("--bottle-solid=").size());
+        } else if (arg == "--bottle-pour-demo" && i + 1 < argc) {
+            bottlePourDemoPath = argv[++i];
+        } else if (arg.rfind("--bottle-pour-demo=", 0) == 0) {
+            bottlePourDemoPath = arg.substr(
+                std::string("--bottle-pour-demo=").size());
+        } else if (arg == "--column-emitter" && i + 1 < argc) {
+            columnEmitterPath = argv[++i];
+        } else if (arg.rfind("--column-emitter=", 0) == 0) {
+            columnEmitterPath = arg.substr(
+                std::string("--column-emitter=").size());
         } else if (!arg.empty() && arg[0] != '-' && blueprintPath.empty()) {
             blueprintPath = arg;
         }
@@ -1204,8 +1322,62 @@ int main(int argc, char* argv[]) {
     pipe_fluid::PipeFluidScene scene(cfg);
     g_scene = &scene;
 
+    // Helper used by both the CLI handler and the UI button below.  After a
+    // successful loadBottlePourDemo, this pre-configures the spawn-point
+    // and emitter sliders so the user just presses Play and sees fluid
+    // entering the bottle from above.  Conservative defaults — they can
+    // be tweaked in the Fluid panel without re-loading.
+    auto configurePourDefaults = [&]() {
+        const auto& vg = scene.voxels();
+        const float gridMaxX = vg.origin.x + vg.nx * vg.dx;
+        const float gridMaxY = vg.origin.y + vg.ny * vg.dx;
+        const float gridMaxZ = vg.origin.z + vg.nz * vg.dx;
+        const float cx = 0.5f * (vg.origin.x + gridMaxX);
+        const float cy = 0.5f * (vg.origin.y + gridMaxY);
+        // Emitter at ~85% of the grid's height — that's the headroom above
+        // the bottle's mouth where the captured column lived.
+        const float ez = vg.origin.z + 0.85f * (gridMaxZ - vg.origin.z);
+        g_ui.sourceX = cx;
+        g_ui.sourceY = cy;
+        g_ui.sourceZ = ez;
+        // ~1.2 cm spawn radius, but at least one cell wide so the source
+        // intersects the grid sample stencil cleanly.
+        g_ui.sourceR = std::max(0.012f, 0.8f * vg.dx);
+        g_ui.sourceAmount = 1.0f;
+        g_ui.sourceVelX = 0.f;
+        g_ui.sourceVelY = 0.f;
+        g_ui.sourceVelZ = -1.0f;          // 1 m/s downward — moderate pour
+        g_ui.emitWater = true;             // continuous emission ON
+        g_ui.emitSmoke = false;
+        g_ui.drawParticles = true;         // particle-direct render so the
+                                           // user can see the column even
+                                           // before it builds enough density
+                                           // for the SDF surface.
+    };
+
     bool loadedSomething = false;
-    if (!fluidSeriesPath.empty()) {
+
+    // Tier A — bottle pour demo.  Highest priority CLI option: empty-water
+    // scene with bottle solid + continuous emitter.  Designed to actually
+    // produce visible fluid flow into the bottle, unlike the snapshot replay.
+    if (!bottlePourDemoPath.empty()) {
+        std::string err;
+        if (!scene.loadBottlePourDemo(bottlePourDemoPath, &err)) {
+            std::cerr << "Bottle pour demo load failed: " << err << "\n";
+        } else {
+            configurePourDefaults();
+            std::cout << "[PipeFluidEngine] Loaded bottle pour demo from "
+                      << bottlePourDemoPath << "\n";
+            std::cout << "[PipeFluidEngine] Emitter preset: pos=("
+                      << g_ui.sourceX << "," << g_ui.sourceY << ","
+                      << g_ui.sourceZ << ") vel=(0,0," << g_ui.sourceVelZ
+                      << ") r=" << g_ui.sourceR
+                      << " — emit-water ON; press Play.\n";
+            loadedSomething = true;
+        }
+    }
+
+    if (!loadedSomething && !fluidSeriesPath.empty()) {
         std::string err;
         if (!scene.loadFluidStateSeries(fluidSeriesPath, &err)) {
             std::cerr << "Fluid state series load failed: " << err << "\n";
@@ -1249,6 +1421,35 @@ int main(int argc, char* argv[]) {
             g_ui.bottleSolidPath[sizeof(g_ui.bottleSolidPath) - 1] = '\0';
             std::cout << "[PipeFluidEngine] Loaded bottle solid from "
                       << bottleSolidPath << "\n";
+        }
+    }
+
+    // Tier B — column emitter trajectory.  Loaded *after* the scene is set
+    // up (via bottle-pour-demo or fluid-series).  Once active, the main
+    // loop drives addWaterSourceSphere from this per-frame data instead of
+    // (or alongside) the user's manual emitter sliders.
+    if (!columnEmitterPath.empty()) {
+        std::string err;
+        pipe_fluid::CapturedColumnEmitter loaded;
+        auto r = pipe_fluid::loadColumnEmitterFile(columnEmitterPath, loaded);
+        if (!r.ok || !loaded.valid()) {
+            std::cerr << "Column emitter load failed: "
+                      << (r.error.empty() ? "invalid file" : r.error) << "\n";
+        } else {
+            g_columnEmitter = std::move(loaded);
+            g_columnEmitterActive = true;
+            g_columnEmitterTime = 0.0;
+            // Switch off the user's manual emitter so the column emitter is
+            // the sole source — otherwise we'd double-emit.
+            g_ui.emitWater = false;
+            std::strncpy(g_ui.columnEmitterPath, columnEmitterPath.c_str(),
+                         sizeof(g_ui.columnEmitterPath) - 1);
+            g_ui.columnEmitterPath[sizeof(g_ui.columnEmitterPath) - 1] = '\0';
+            std::cout << "[PipeFluidEngine] Loaded column emitter ("
+                      << g_columnEmitter.nFrames() << " frames @ "
+                      << g_columnEmitter.capturedFps << " fps, "
+                      << g_columnEmitter.totalDuration() << " s) from "
+                      << columnEmitterPath << "\n";
         }
     }
     if (!loadedSomething) {
@@ -1341,11 +1542,32 @@ int main(int argc, char* argv[]) {
                         {g_ui.sourceX, g_ui.sourceY, g_ui.sourceZ},
                         g_ui.sourceR, g_ui.sourceAmount,
                         {g_ui.sourceVelX, g_ui.sourceVelY, g_ui.sourceVelZ});
-                if (g_ui.emitWater)
+
+                // Tier B — drive the water source from the captured column
+                // trajectory, if loaded.  Falls back to the user's manual
+                // emitter only when no trajectory is active.
+                if (g_columnEmitterActive && g_columnEmitter.valid()) {
+                    const float fps = g_columnEmitter.capturedFps;
+                    const int N = g_columnEmitter.nFrames();
+                    int frame = (int)std::floor(g_columnEmitterTime * fps);
+                    if (frame < 0) frame = 0;
+                    if (frame < N) {
+                        const auto& f = g_columnEmitter.frames[frame];
+                        if (f.active) {
+                            scene.addWaterSourceSphere(
+                                {f.posX, f.posY, f.posZ},
+                                f.radius,
+                                {f.velX, f.velY, f.velZ});
+                        }
+                    }
+                    // Advance time only by the substep dt — pauses freeze it.
+                    g_columnEmitterTime += (double)dt;
+                } else if (g_ui.emitWater) {
                     scene.addWaterSourceSphere(
                         {g_ui.sourceX, g_ui.sourceY, g_ui.sourceZ},
                         g_ui.sourceR,
                         {g_ui.sourceVelX, g_ui.sourceVelY, g_ui.sourceVelZ});
+                }
 
                 scene.step(dt);
 

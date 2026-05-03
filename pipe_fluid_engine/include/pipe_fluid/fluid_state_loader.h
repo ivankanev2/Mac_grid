@@ -160,4 +160,55 @@ struct CapturedBottleSolid {
 LoadFluidStateResult loadBottleSolidFile(const std::string& path,
                                          CapturedBottleSolid& out);
 
+// ---- Column emitter trajectory (Tier B) -------------------------------------
+//
+// Per-frame parameters of a continuous-emission water source.  Produced by
+// gaussian_splatting/dynamic_capture/extract_column_emitter.py.  The
+// simulator advances internal time at capturedFps and looks up the matching
+// frame to drive its emitter, so the simulated pour matches the source
+// video's pour timing.
+//
+// Binary format:
+//   uint32  magic        = 0x43454D31  // 'CEM1' little-endian
+//   uint32  version      = 1
+//   uint32  n_frames
+//   float32 captured_fps
+//   [n_frames *]:
+//       uint8   active       (0 = no emission, 1 = emit)
+//       uint8   _pad[3]
+//       float32 pos_x, pos_y, pos_z   (world metres)
+//       float32 vel_x, vel_y, vel_z   (m/s)
+//       float32 radius                (m)
+//       float32 amount                (multiplier, default 1.0)
+//
+// All values little-endian.
+struct CapturedColumnEmitterFrame {
+    bool  active = false;
+    float posX = 0.f, posY = 0.f, posZ = 0.f;
+    float velX = 0.f, velY = 0.f, velZ = 0.f;
+    float radius = 0.f;
+    float amount = 1.f;
+};
+
+struct CapturedColumnEmitter {
+    std::vector<CapturedColumnEmitterFrame> frames;
+    float capturedFps = 25.0f;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return !frames.empty() && capturedFps > 0.0f;
+    }
+    [[nodiscard]] int   nFrames() const noexcept {
+        return static_cast<int>(frames.size());
+    }
+    [[nodiscard]] float capturedDt() const noexcept {
+        return capturedFps > 0.f ? 1.f / capturedFps : 0.04f;
+    }
+    [[nodiscard]] float totalDuration() const noexcept {
+        return capturedDt() * static_cast<float>(nFrames());
+    }
+};
+
+LoadFluidStateResult loadColumnEmitterFile(const std::string& path,
+                                           CapturedColumnEmitter& out);
+
 } // namespace pipe_fluid
