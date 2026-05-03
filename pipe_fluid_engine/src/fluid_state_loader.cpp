@@ -261,4 +261,101 @@ LoadFluidStateResult loadFluidStateSeriesFolder(
     return res;
 }
 
+// ---- Bottle solid loader (Phase C v2) ---------------------------------------
+
+namespace {
+constexpr std::uint32_t kBottleSolidMagic   = 0x42534C31u;  // 'BSL1'
+constexpr std::uint32_t kBottleSolidVersion = 1u;
+} // namespace
+
+LoadFluidStateResult loadBottleSolidFile(const std::string& path,
+                                         CapturedBottleSolid& out) {
+    LoadFluidStateResult res;
+    out = CapturedBottleSolid{};
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        res.error = "Cannot open bottle solid file: " + path;
+        return res;
+    }
+
+    std::uint32_t magic = 0, version = 0;
+    std::uint32_t nx_u = 0, ny_u = 0, nz_u = 0;
+    float dx = 0.0f, ox = 0.0f, oy = 0.0f, oz = 0.0f;
+    std::uint32_t nSolid_u = 0;
+
+    if (!readScalar(in, magic) || magic != kBottleSolidMagic) {
+        std::ostringstream s;
+        s << "Bad bottle solid magic 0x" << std::hex << magic
+          << " (expected 0x" << kBottleSolidMagic << ") in " << path;
+        res.error = s.str();
+        return res;
+    }
+    if (!readScalar(in, version) || version != kBottleSolidVersion) {
+        std::ostringstream s;
+        s << "Unsupported bottle_solid version " << version
+          << " (this build understands only v" << kBottleSolidVersion << ")";
+        res.error = s.str();
+        return res;
+    }
+    if (!readScalar(in, nx_u) || !readScalar(in, ny_u) || !readScalar(in, nz_u)) {
+        res.error = "Truncated bottle header (grid dims) in " + path;
+        return res;
+    }
+    if (!readScalar(in, dx)) {
+        res.error = "Truncated bottle header (dx) in " + path;
+        return res;
+    }
+    if (!readScalar(in, ox) || !readScalar(in, oy) || !readScalar(in, oz)) {
+        res.error = "Truncated bottle header (origin) in " + path;
+        return res;
+    }
+    if (!readScalar(in, nSolid_u)) {
+        res.error = "Truncated bottle header (n_solid) in " + path;
+        return res;
+    }
+
+    if (nx_u == 0 || ny_u == 0 || nz_u == 0) {
+        res.error = "Invalid bottle grid dimensions (zero side) in " + path;
+        return res;
+    }
+    if (!(dx > 0.0f)) {
+        res.error = "Invalid bottle voxel size dx in " + path;
+        return res;
+    }
+
+    out.nx = static_cast<int>(nx_u);
+    out.ny = static_cast<int>(ny_u);
+    out.nz = static_cast<int>(nz_u);
+    out.dx = dx;
+    out.originX = ox;
+    out.originY = oy;
+    out.originZ = oz;
+    out.nSolidCells = static_cast<int>(nSolid_u);
+
+    const std::size_t total = static_cast<std::size_t>(nx_u) *
+                              static_cast<std::size_t>(ny_u) *
+                              static_cast<std::size_t>(nz_u);
+    out.mask.resize(total);
+    if (total > 0) {
+        const std::streamsize bytes = static_cast<std::streamsize>(total);
+        in.read(reinterpret_cast<char*>(out.mask.data()), bytes);
+        if (!in || in.gcount() != bytes) {
+            std::ostringstream s;
+            s << "Truncated bottle mask body: expected " << bytes
+              << " bytes for " << nx_u << "x" << ny_u << "x" << nz_u
+              << " grid, got " << in.gcount();
+            res.error = s.str();
+            return res;
+        }
+    }
+
+    if (!out.valid()) {
+        res.error = "Internal post-load validation failed for " + path;
+        return res;
+    }
+    res.ok = true;
+    return res;
+}
+
 } // namespace pipe_fluid

@@ -151,6 +151,21 @@ public:
     bool loadFluidStateSeries(const std::string& folder_path,
                               std::string* errorOut = nullptr);
 
+    // ---- Static bottle solid mask (Phase C v2) ----------------------------
+    // Reads a bottle_solid.bin written by extract_fluid_state_v2.py and
+    // applies its mask as a static solid boundary on the water solver.
+    // The file's (nx, ny, nz, dx, origin) MUST match the currently loaded
+    // captured-fluid grid; otherwise loading fails with an error message.
+    //
+    // Apply order: bottle solid is OR-merged into the existing water solid
+    // mask, so any pre-existing solver-side boundary (e.g. domain border)
+    // is preserved.
+    //
+    // Returns true on success.  On failure, errorOut (if non-null) holds
+    // a human-readable message and the scene is left unchanged.
+    bool loadBottleSolid(const std::string& path,
+                         std::string* errorOut = nullptr);
+
     // Replay status — UI uses these to show "frame N/M" and to disable
     // replay-related controls when no series is active.
     [[nodiscard]] bool replayActive() const noexcept;

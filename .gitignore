@@ -152,3 +152,21 @@ secrets/
 *.pem
 *.key
 gaussian_splatting/extraction/input/*.ply
+
+# === Phase C v2 binary artifacts (too big for git) =========================
+# Trained 4DGS model — re-train or fetch from shared drive.
+gaussian_splatting/checkpoints/
+
+# Pre-processed training data (PNGs + transforms json) — derivable from raw video.
+gaussian_splatting/data/oil_pour/
+
+# Captured fluid states (per-frame .bin + bottle_solid.bin) — re-extract via
+# extract_fluid_state_v2.py if you have the model.
+gaussian_splatting/dynamic_capture/captured_states_v2/
+gaussian_splatting/dynamic_capture/captured_states/
+
+# Diagnostic PLYs from diagnose_motion_classes.py — re-generate via that script.
+gaussian_splatting/dynamic_capture/diag_motion/
+
+# Build outputs.
+pipe_fluid_engine/build_gui/

@@ -17,7 +17,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <random>
+#include <sstream>
 
 namespace pipe_fluid {
 
@@ -697,6 +700,118 @@ bool PipeFluidScene::loadFluidStateSeries(const std::string& folder_path,
     p_->replayActive = true;
     p_->replayTime = 0.0f;
     p_->replayCurrentFrame = 0;  // we just seeded frame 0 manually
+
+    // Phase C v2: auto-load bottle_solid.bin if it sits next to the series.
+    // Failure here is non-fatal — the series is already loaded; we just print
+    // a diagnostic and continue without the bottle.  The user can still load
+    // it manually via loadBottleSolid().
+    {
+        namespace fs = std::filesystem;
+        const fs::path bottlePath = fs::path(folder_path) / "bottle_solid.bin";
+        if (fs::exists(bottlePath) && fs::is_regular_file(bottlePath)) {
+            std::string subErr;
+            if (!loadBottleSolid(bottlePath.string(), &subErr)) {
+                std::fprintf(stderr,
+                    "[PipeFluidScene] Auto-load of bottle_solid.bin "
+                    "failed: %s\n", subErr.c_str());
+            }
+        }
+    }
+
+    if (errorOut) *errorOut = std::string{};
+    return true;
+}
+
+// ---- Bottle solid mask loader (Phase C v2) ---------------------------------
+//
+// Reads a bottle_solid.bin produced by extract_fluid_state_v2.py and OR-merges
+// its mask into the water solver's solid boundary.  The bottle's grid must
+// match the current scene grid exactly — extract_fluid_state_v2 writes the
+// bottle on the same global grid it uses for the per-frame fluid states, so
+// in normal flow this validation always passes.
+bool PipeFluidScene::loadBottleSolid(const std::string& path,
+                                     std::string* errorOut) {
+    using pipe_fluid::CapturedBottleSolid;
+    using pipe_fluid::loadBottleSolidFile;
+
+    if (!p_->water) {
+        if (errorOut) *errorOut =
+            "Cannot load bottle solid: no captured fluid is loaded yet "
+            "(load a fluid state or fluid state series first).";
+        return false;
+    }
+
+    CapturedBottleSolid bs;
+    auto r = loadBottleSolidFile(path, bs);
+    if (!r.ok || !bs.valid()) {
+        if (errorOut) *errorOut = r.error.empty()
+            ? std::string("Invalid bottle solid file")
+            : r.error;
+        return false;
+    }
+
+    // Grid must match the currently-loaded captured-fluid grid exactly so
+    // we can merge masks element-wise.
+    const float dxTol = 1.0e-5f;
+    if (bs.nx != p_->water->nx ||
+        bs.ny != p_->water->ny ||
+        bs.nz != p_->water->nz ||
+        std::fabs(bs.dx - p_->water->dx) > dxTol) {
+        std::ostringstream s;
+        s << "Bottle solid grid ("
+          << bs.nx << "x" << bs.ny << "x" << bs.nz
+          << " dx=" << bs.dx
+          << ") does not match scene grid ("
+          << p_->water->nx << "x" << p_->water->ny << "x" << p_->water->nz
+          << " dx=" << p_->water->dx << ").";
+        if (errorOut) *errorOut = s.str();
+        return false;
+    }
+    // Origin should also match — but tolerate a small drift since the
+    // simulator stores origin in VoxelGrid, not on the water solver itself.
+    {
+        const float ox = p_->voxels.origin.x;
+        const float oy = p_->voxels.origin.y;
+        const float oz = p_->voxels.origin.z;
+        const float originTol = 0.5f * p_->water->dx;
+        if (std::fabs(bs.originX - ox) > originTol ||
+            std::fabs(bs.originY - oy) > originTol ||
+            std::fabs(bs.originZ - oz) > originTol) {
+            std::ostringstream s;
+            s << "Bottle solid origin ("
+              << bs.originX << "," << bs.originY << "," << bs.originZ
+              << ") differs from scene origin ("
+              << ox << "," << oy << "," << oz << ") by more than half a cell.";
+            if (errorOut) *errorOut = s.str();
+            return false;
+        }
+    }
+
+    // OR-merge the bottle mask into the existing water solid mask.  We keep
+    // whatever was there (typically the solver-internal domain border) so
+    // we don't accidentally open the box's outer walls.
+    const std::size_t total = bs.mask.size();
+    if (p_->waterMask.size() != total) {
+        // Resize if the scene was bare; fill with zeros for the new cells.
+        p_->waterMask.assign(total, uint8_t(0));
+    }
+    int n_added = 0;
+    for (std::size_t i = 0; i < total; ++i) {
+        const uint8_t v = bs.mask[i];
+        if (v != 0 && p_->waterMask[i] == 0) {
+            ++n_added;
+        }
+        p_->waterMask[i] = (p_->waterMask[i] != 0 || v != 0) ? uint8_t(1) : uint8_t(0);
+    }
+
+    // Push the merged mask to the solver.  Particles overlapping new solid
+    // cells get pushed out by the next step()'s removeParticlesInSolids /
+    // enforceParticleBounds passes.
+    applySolidsToWater(*p_->water, p_->waterMask);
+
+    std::printf("[PipeFluidScene] Loaded bottle solid: +%d new solid cells "
+                "(total mask=%zu, bottle reports %d) from %s\n",
+                n_added, p_->waterMask.size(), bs.nSolidCells, path.c_str());
 
     if (errorOut) *errorOut = std::string{};
     return true;

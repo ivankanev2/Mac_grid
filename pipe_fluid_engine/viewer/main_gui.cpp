@@ -144,6 +144,11 @@ struct ViewerState {
     char fluidSeriesPath[512] =
         "../../gaussian_splatting/dynamic_capture/captured_states";
 
+    // Static bottle solid mask (Phase C v2) — file produced by
+    // extract_fluid_state_v2.py.  Auto-loaded when found next to the series.
+    char bottleSolidPath[512] =
+        "../../gaussian_splatting/dynamic_capture/captured_states_v2/bottle_solid.bin";
+
     void setStatus(const std::string& s) {
         status = s;
         statusExpires = ImGui::GetTime() + 3.0;
@@ -898,6 +903,22 @@ static void drawScenePanel(pipe_fluid::PipeFluidScene& scene) {
                     scene.replayActive() ? "(playing)" : "(physics-only)");
     }
 
+    // Bottle solid mask loader (Phase C v2).  loadFluidStateSeries already
+    // auto-loads bottle_solid.bin from the series folder if present, so this
+    // explicit button is mainly for re-loading or pointing at a different file.
+    ImGui::SeparatorText("Bottle solid (v2)");
+    ImGui::InputText("bottle path", g_ui.bottleSolidPath,
+                     sizeof(g_ui.bottleSolidPath));
+    if (ImGui::Button("Load bottle solid")) {
+        std::string err;
+        if (scene.loadBottleSolid(g_ui.bottleSolidPath, &err)) {
+            g_ui.setStatus(std::string("Loaded bottle solid ") +
+                           g_ui.bottleSolidPath);
+        } else {
+            g_ui.setStatus(std::string("Bottle solid load failed: ") + err);
+        }
+    }
+
     ImGui::SeparatorText("Programmatic builder");
     ImGui::InputFloat3("start",     &g_ui.builderStartX);
     ImGui::InputFloat3("direction", &g_ui.builderDirX);
@@ -1089,6 +1110,7 @@ int main(int argc, char* argv[]) {
     std::string blueprintPath;
     std::string fluidStatePath;
     std::string fluidSeriesPath;
+    std::string bottleSolidPath;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--fluid-state" && i + 1 < argc) {
@@ -1099,6 +1121,10 @@ int main(int argc, char* argv[]) {
             fluidSeriesPath = argv[++i];
         } else if (arg.rfind("--fluid-series=", 0) == 0) {
             fluidSeriesPath = arg.substr(std::string("--fluid-series=").size());
+        } else if (arg == "--bottle-solid" && i + 1 < argc) {
+            bottleSolidPath = argv[++i];
+        } else if (arg.rfind("--bottle-solid=", 0) == 0) {
+            bottleSolidPath = arg.substr(std::string("--bottle-solid=").size());
         } else if (!arg.empty() && arg[0] != '-' && blueprintPath.empty()) {
             blueprintPath = arg;
         }
@@ -1206,6 +1232,23 @@ int main(int argc, char* argv[]) {
                          sizeof(g_ui.fluidStatePath) - 1);
             g_ui.fluidStatePath[sizeof(g_ui.fluidStatePath) - 1] = '\0';
             loadedSomething = true;
+        }
+    }
+
+    // Phase C v2: explicit --bottle-solid path applies after a fluid state
+    // (single or series) has been loaded.  loadFluidStateSeries already
+    // auto-loads bottle_solid.bin from the series folder if present, so this
+    // is mainly for non-default paths (e.g. swapping bottles for testing).
+    if (!bottleSolidPath.empty()) {
+        std::string err;
+        if (!scene.loadBottleSolid(bottleSolidPath, &err)) {
+            std::cerr << "Bottle solid load failed: " << err << "\n";
+        } else {
+            std::strncpy(g_ui.bottleSolidPath, bottleSolidPath.c_str(),
+                         sizeof(g_ui.bottleSolidPath) - 1);
+            g_ui.bottleSolidPath[sizeof(g_ui.bottleSolidPath) - 1] = '\0';
+            std::cout << "[PipeFluidEngine] Loaded bottle solid from "
+                      << bottleSolidPath << "\n";
         }
     }
     if (!loadedSomething) {

@@ -107,4 +107,57 @@ LoadFluidStateResult loadFluidStateSeriesFolder(
     const std::string& folder_path,
     CapturedFluidStateSeries& out);
 
+// ---- Bottle solid mask (Phase C v2) -----------------------------------------
+//
+// A static occupancy mask describing the captured bottle / container, written
+// by gaussian_splatting/dynamic_capture/extract_fluid_state_v2.py.  The
+// simulator passes this mask straight to MACWater3D::setVoxelSolids so the
+// captured fluid has walls to settle into.
+//
+// Binary format:
+//
+//   [uint32  magic       = 0x42534C31  // 'BSL1' little-endian]
+//   [uint32  version     = 1]
+//   [uint32  nx]
+//   [uint32  ny]
+//   [uint32  nz]
+//   [float32 dx]
+//   [float32 origin_x]
+//   [float32 origin_y]
+//   [float32 origin_z]
+//   [uint32  n_solid_cells]   // informational; mask still has nx*ny*nz bytes
+//   [uint8   mask[nx*ny*nz]]  // 0 = air, 1 = solid; index = i + nx*(j + ny*k)
+//
+// All values little-endian.  The (nx, ny, nz, dx, origin) of the bottle file
+// is required to match the per-frame fluid state grid for the simulator to
+// use it without resampling.
+struct CapturedBottleSolid {
+    int   nx = 0;
+    int   ny = 0;
+    int   nz = 0;
+    float dx = 0.0f;
+    float originX = 0.0f;
+    float originY = 0.0f;
+    float originZ = 0.0f;
+    int   nSolidCells = 0;
+
+    // Occupancy mask, size nx*ny*nz, simulator-order (i + nx*(j + ny*k)).
+    // 0 = air, non-zero = solid.
+    std::vector<uint8_t> mask;
+
+    [[nodiscard]] bool valid() const noexcept {
+        if (nx <= 0 || ny <= 0 || nz <= 0 || dx <= 0.0f) return false;
+        const std::size_t expected =
+            static_cast<std::size_t>(nx) *
+            static_cast<std::size_t>(ny) *
+            static_cast<std::size_t>(nz);
+        return mask.size() == expected;
+    }
+};
+
+// Load a single bottle_solid.bin into ``out``.  On failure, returns ok=false
+// with a human-readable error string.
+LoadFluidStateResult loadBottleSolidFile(const std::string& path,
+                                         CapturedBottleSolid& out);
+
 } // namespace pipe_fluid
