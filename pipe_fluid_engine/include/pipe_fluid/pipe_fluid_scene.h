@@ -208,6 +208,14 @@ public:
     void addWaterSourceSphere(const Vec3& centre, float radius,
                               const Vec3& velocity);
 
+    // Particle-direct injection: push a vector of particles into the water
+    // simulator at exact (sub-cell) positions with per-particle velocities.
+    // Used by the column emitter when running in particle-direct mode --
+    // avoids the sphere-emit's grid-discretisation artefacts.  No-op if no
+    // water solver is loaded.
+    void addWaterParticlesDirect(const std::vector<Vec3>& positions,
+                                 const std::vector<Vec3>& velocities);
+
     // ---- Accessors ---------------------------------------------------------
     const PipeNetwork& network() const;
     PipeNetwork&       network();

@@ -1486,6 +1486,43 @@ void PipeFluidScene::addWaterSourceSphere(const Vec3& centre, float radius,
     confineWaterParticlesToPipe(*p_->water, p_->boundary);
 }
 
+// ---- Particle-direct injection ---------------------------------------------
+//
+// Pushes a list of particles directly into the water solver at exact
+// (sub-cell) positions, with per-particle velocities.  Used by the column
+// emitter (Tier B) when running in particle-direct mode -- avoids the
+// sphere-emit's grid-discretisation artefacts.  No-op if no water solver is
+// loaded.
+//
+// We intentionally do NOT apply the pipe-network particle confinement here:
+// the bottle-pour-demo path doesn't use a pipe network, and the captured
+// column emitter is positioned by the data, not by pipe geometry.
+void PipeFluidScene::addWaterParticlesDirect(
+    const std::vector<Vec3>& positions,
+    const std::vector<Vec3>& velocities) {
+    if (!p_->water) return;
+    if (positions.empty()) return;
+    if (positions.size() != velocities.size()) return;
+
+    // Translate world positions into simulator-local coordinates by
+    // subtracting the voxel grid origin -- same convention as
+    // addWaterSourceSphere (line 1355).  The simulator's MAC grid runs from
+    // [0, nx*dx) etc., independent of the scene's world origin.  Velocities
+    // need no translation (they're directional, not positional).
+    const Vec3 origin = p_->voxels.origin;
+    std::vector<MACWater3D::Vec3> simPos;
+    std::vector<MACWater3D::Vec3> simVel;
+    simPos.reserve(positions.size());
+    simVel.reserve(velocities.size());
+    for (size_t i = 0; i < positions.size(); ++i) {
+        const Vec3 simP = positions[i] - origin;
+        simPos.push_back(toSimVec3<MACWater3D::Vec3>(simP));
+        simVel.push_back(toSimVec3<MACWater3D::Vec3>(velocities[i]));
+    }
+
+    p_->water->addParticlesDirect(simPos, simVel);
+}
+
 // ---- Accessors --------------------------------------------------------------
 
 const PipeNetwork& PipeFluidScene::network() const { return p_->network; }

@@ -190,6 +190,19 @@ struct MACWater3D {
     void step();
 
     void addWaterSourceSphere(const Vec3& center, float radius, const Vec3& velocity);
+
+    // Particle-direct injection: push N particles at exact (sub-cell) positions
+    // with the given velocity, marking the containing cells as liquid.  This
+    // avoids the sphere-emit's grid-discretisation artefacts (radius clamp at
+    // ~1 cell, fat-sphere bursts) and lets the captured column drive a thin,
+    // continuous stream.  Used by the column emitter when running in
+    // particle-direct mode (see viewer's main_gui.cpp).
+    //
+    // positions and velocities must have the same length and be in world
+    // coordinates (m and m/s respectively).  Particles outside the grid or in
+    // solid cells are silently skipped.
+    void addParticlesDirect(const std::vector<Vec3>& positions,
+                            const std::vector<Vec3>& velocities);
     void setVoxelSolids(const std::vector<uint8_t>& mask);
     void setFaceOpenFractions(const std::vector<float>& uOpen,
                               const std::vector<float>& vOpen,

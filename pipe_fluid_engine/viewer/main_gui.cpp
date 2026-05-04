@@ -83,6 +83,21 @@ static std::string                         g_lastLoadedBottlePath;
 // each simulator substep (only when playing).  Reset to zero on load and
 // on the "Reset emitter time" button.
 static double                              g_columnEmitterTime   = 0.0;
+// Data-derived flow throttle.  Each substep we add (amount * dt) to this
+// accumulator.  When it crosses 1.0 we fire one addWaterSourceSphere call
+// and decrement.  amount is in units of "emits per second" as written by
+// extract_column_emitter.py from Q_real / V_sim_per_emit -- so the volume
+// flow rate matches the captured oil column even though the geometric
+// emit-sphere is fatter than the real column (the sphere has to be at
+// least one cell wide to hit cell centres reliably).
+static double                              g_columnEmitterAccum  = 0.0;
+// Particle-direct emit accumulator (used when g_columnEmitterDirectMode = true).
+// In direct mode the unit of `amount` is reinterpreted as particles/sec rather
+// than emits/sec, and we push individual particles instead of fat spheres of
+// fluid.  This produces a continuous thin stream that visually matches the
+// captured oil column instead of a discretised sphere-burst pattern.
+static bool                                g_columnEmitterDirectMode = true;
+static double                              g_columnEmitterDirectAccum = 0.0;
 
 // Viewer state
 struct ViewerState {
@@ -1274,6 +1289,7 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
             g_columnEmitter = std::move(loaded);
             g_columnEmitterActive = true;
             g_columnEmitterTime = 0.0;
+            g_columnEmitterAccum = 0.0;
             g_ui.emitWater = false;
             g_ui.setStatus(
                 std::string("Column emitter ON (") +
@@ -1287,6 +1303,8 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
         ImGui::SameLine();
         if (ImGui::Button("Reset emitter time")) {
             g_columnEmitterTime = 0.0;
+            g_columnEmitterAccum = 0.0;
+            g_columnEmitterDirectAccum = 0.0;
             g_ui.setStatus("Column emitter time reset to 0");
         }
         ImGui::SameLine();
@@ -1294,6 +1312,11 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
             g_columnEmitterActive = false;
             g_ui.setStatus("Column emitter OFF (manual emitter restored)");
         }
+        // Toggle: particle-direct (continuous thin stream) vs sphere mode
+        // (fat-sphere bursts -- kept for ablation comparison).  Particle
+        // direct is on by default because it's the data-faithful mode.
+        ImGui::Checkbox("particle-direct emit (vs sphere ablation)",
+                        &g_columnEmitterDirectMode);
         const float total = g_columnEmitter.totalDuration();
         const float t = (float)g_columnEmitterTime;
         const int frame = std::min(g_columnEmitter.nFrames() - 1,
@@ -1652,6 +1675,7 @@ int main(int argc, char* argv[]) {
             g_columnEmitter = std::move(loaded);
             g_columnEmitterActive = true;
             g_columnEmitterTime = 0.0;
+            g_columnEmitterAccum = 0.0;
             // Switch off the user's manual emitter so the column emitter is
             // the sole source — otherwise we'd double-emit.
             g_ui.emitWater = false;
@@ -1759,6 +1783,14 @@ int main(int argc, char* argv[]) {
                 // Tier B — drive the water source from the captured column
                 // trajectory, if loaded.  Falls back to the user's manual
                 // emitter only when no trajectory is active.
+                //
+                // Flow rate is throttled by the data-derived `amount` field
+                // (units: emits per second).  We accumulate amount * dt each
+                // substep, and only fire addWaterSourceSphere when the
+                // accumulator crosses 1.0 (decrementing by 1 per emit).  This
+                // decouples the emit-sphere geometry (which has to be at
+                // least one cell wide for the discretized cell-centre test
+                // to hit anything) from the physical flow rate Q_real.
                 if (g_columnEmitterActive && g_columnEmitter.valid()) {
                     const float fps = g_columnEmitter.capturedFps;
                     const int N = g_columnEmitter.nFrames();
@@ -1767,10 +1799,108 @@ int main(int argc, char* argv[]) {
                     if (frame < N) {
                         const auto& f = g_columnEmitter.frames[frame];
                         if (f.active) {
-                            scene.addWaterSourceSphere(
-                                {f.posX, f.posY, f.posZ},
-                                f.radius,
-                                {f.velX, f.velY, f.velZ});
+                            if (g_columnEmitterDirectMode && scene.water()) {
+                                // PARTICLE-DIRECT MODE.
+                                //
+                                // Convert the data-derived "emits per second"
+                                // (which assumes fat-sphere geometry) into a
+                                // physically-equivalent particles-per-second:
+                                //   particles_per_sec = amount * V_sphere / V_per_particle
+                                // where V_per_particle = dx^3 / particles_per_cell.
+                                //
+                                // The accumulator below tracks fractional
+                                // particles; each whole crossing fires one
+                                // particle injection at the captured xz centre
+                                // with sub-cell jitter (so successive particles
+                                // don't pile into the same point).
+                                const float dxCell = scene.voxels().dx;
+                                const auto& wParams = scene.water()->params;
+                                const float ppc = (float)std::max(1, wParams.particlesPerCell);
+                                const float V_per_particle =
+                                    (dxCell * dxCell * dxCell) / ppc;
+                                const float V_sphere =
+                                    (4.0f / 3.0f) * 3.14159265f *
+                                    f.radius * f.radius * f.radius;
+                                const float particles_per_sec =
+                                    (V_per_particle > 1e-12f)
+                                        ? f.amount * V_sphere / V_per_particle
+                                        : 0.0f;
+
+                                g_columnEmitterDirectAccum +=
+                                    (double)particles_per_sec * (double)dt;
+
+                                // Cap injections per substep so a pathological
+                                // value can't stall the loop.  At 60 Hz this
+                                // permits up to ~3000 particles/sec which is
+                                // well above any realistic flow.
+                                int injectThisStep =
+                                    (int)std::floor(g_columnEmitterDirectAccum);
+                                if (injectThisStep > 50) injectThisStep = 50;
+
+                                if (injectThisStep > 0) {
+                                    // Build position + velocity arrays with
+                                    // sub-cell jitter in xz around the
+                                    // captured emit centre.  Spread = half
+                                    // the captured (clamped) radius -- gives
+                                    // a stream slightly thinner than the
+                                    // sphere diameter, since the sphere is
+                                    // ALREADY clamped up from reality.
+                                    const float jitter_xz = 0.5f * f.radius;
+                                    const float jitter_y = 0.25f * dxCell;
+                                    std::vector<Vec3> pos;
+                                    std::vector<Vec3> vel;
+                                    pos.reserve((size_t)injectThisStep);
+                                    vel.reserve((size_t)injectThisStep);
+                                    for (int p_i = 0; p_i < injectThisStep; ++p_i) {
+                                        // Cheap deterministic-ish jitter;
+                                        // collisions later are randomised by
+                                        // the solver.
+                                        uint32_t s = (uint32_t)(p_i * 73856093u
+                                            + (uint32_t)(g_columnEmitterTime * 1e6) * 19349663u);
+                                        auto rnd = [&](uint32_t& x) {
+                                            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+                                            return ((x & 0xffffff) / (float)0x1000000) - 0.5f;
+                                        };
+                                        const float jx = rnd(s) * 2.0f * jitter_xz;
+                                        const float jy = rnd(s) * 2.0f * jitter_y;
+                                        const float jz = rnd(s) * 2.0f * jitter_xz;
+                                        pos.push_back(Vec3{
+                                            f.posX + jx,
+                                            f.posY + jy,
+                                            f.posZ + jz});
+                                        vel.push_back(Vec3{
+                                            f.velX, f.velY, f.velZ});
+                                    }
+                                    scene.addWaterParticlesDirect(pos, vel);
+                                    g_columnEmitterDirectAccum -=
+                                        (double)injectThisStep;
+                                }
+                                // Drain any extreme accumulator overflow.
+                                if (g_columnEmitterDirectAccum > 50.0) {
+                                    g_columnEmitterDirectAccum = 50.0;
+                                }
+                            } else {
+                                // SPHERE MODE (ablation).  Same logic as before.
+                                g_columnEmitterAccum += (double)f.amount * (double)dt;
+                                int firesThisStep = 0;
+                                while (g_columnEmitterAccum >= 1.0 &&
+                                       firesThisStep < 4) {
+                                    scene.addWaterSourceSphere(
+                                        {f.posX, f.posY, f.posZ},
+                                        f.radius,
+                                        {f.velX, f.velY, f.velZ});
+                                    g_columnEmitterAccum -= 1.0;
+                                    ++firesThisStep;
+                                }
+                                if (g_columnEmitterAccum > 4.0) {
+                                    g_columnEmitterAccum = 4.0;
+                                }
+                            }
+                        } else {
+                            // Inactive frame -- bleed off any leftover so we
+                            // don't dump a backlog the moment we go active.
+                            g_columnEmitterAccum *= 0.5;
+                            g_columnEmitterDirectAccum *= 0.5;
                         }
                     }
                     // Advance time only by the substep dt — pauses freeze it.

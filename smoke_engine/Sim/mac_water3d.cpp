@@ -687,6 +687,77 @@ void MACWater3D::addWaterSourceSphereCpu(const Vec3& center, float radius, const
     clearTransientStats(*this, 0.0f);
 }
 
+// -----------------------------------------------------------------------------
+// Particle-direct injection
+//
+// Used by the column emitter (Tier B) when running in particle-direct mode --
+// see viewer/main_gui.cpp.  Each input position becomes one particle in
+// particles[], with the given velocity.  Cells containing injected particles
+// get marked as liquid so the pressure solver advects them properly.
+//
+// Particles whose containing cell is solid, or which fall outside the grid,
+// are silently skipped (matches addWaterSourceSphereCpu's behaviour).  No CFL
+// or maxParticles handling is done here -- that's the caller's responsibility.
+// We only enforce the maxParticles ceiling so we never run unbounded.
+// -----------------------------------------------------------------------------
+void MACWater3D::addParticlesDirect(const std::vector<Vec3>& positions,
+                                    const std::vector<Vec3>& velocities) {
+    rebuildBorderSolids();
+    if (positions.size() != velocities.size()) return;
+    if (positions.empty()) return;
+
+    const float invDx = (dx > 0.0f) ? (1.0f / dx) : 0.0f;
+    const int N = static_cast<int>(positions.size());
+    int n_added = 0;
+    int n_skipped_solid = 0;
+    int n_skipped_oob = 0;
+
+    for (int p_idx = 0; p_idx < N; ++p_idx) {
+        const int canSpawn = (params.maxParticles > 0)
+            ? std::max(0, params.maxParticles - (int)particles.size())
+            : 1;
+        if (canSpawn <= 0) break;
+
+        const Vec3& pos = positions[p_idx];
+        const Vec3& vel = velocities[p_idx];
+
+        // Compute containing cell.
+        int i = static_cast<int>(std::floor(pos.x * invDx));
+        int j = static_cast<int>(std::floor(pos.y * invDx));
+        int k = static_cast<int>(std::floor(pos.z * invDx));
+        if (i < 0 || i >= nx || j < 0 || j >= ny || k < 0 || k >= nz) {
+            ++n_skipped_oob;
+            continue;
+        }
+        const int id = idxCell(i, j, k);
+        if (solid[(std::size_t)id]) {
+            ++n_skipped_solid;
+            continue;
+        }
+
+        liquid[(std::size_t)id] = 1;
+
+        Particle p;
+        p.x = pos.x; p.y = pos.y; p.z = pos.z;
+        p.u = vel.x; p.v = vel.y; p.w = vel.z;
+        p.c00 = p.c01 = p.c02 = 0.0f;
+        p.c10 = p.c11 = p.c12 = 0.0f;
+        p.c20 = p.c21 = p.c22 = 0.0f;
+        particles.push_back(p);
+
+        if (desiredMass >= 0.0f) {
+            desiredMass += 1.0f;
+        }
+        ++n_added;
+    }
+
+    if (n_added > 0) {
+        markCudaHostStateDirtyAll();
+    }
+    (void)n_skipped_solid;  // silence-unused if logging removed
+    (void)n_skipped_oob;
+}
+
 void MACWater3D::setVoxelSolids(const std::vector<uint8_t>& mask) {
     if (MACWater3DBackend* backend = activeBackend()) {
         backend->setVoxelSolids(*this, mask);

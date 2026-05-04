@@ -94,6 +94,44 @@ def _load_sim_state_bin(path: Path):
 
 
 # -----------------------------------------------------------------------------
+# Per-frame bottle-fill volume (used by the data-derived flow throttle).
+#
+# The deformation MLP has been observed to smear the falling oil column
+# laterally, producing a spurious 95th-percentile xy spread that's the
+# diameter of the bottle itself.  Computing Q from r_real^2 * |v| then over-
+# estimates the flow rate by 1000x.
+#
+# A robust alternative is to derive Q directly from how fast oil ENDS UP
+# inside the bottle.  Count the cells (within the captured oil's voxelisation)
+# that lie below the bottle's mouth z, multiply by dx^3 to get a volume
+# V_below(t), and take its time derivative dV/dt = Q_real(t).
+#
+# This is invariant to MLP smearing of the column's geometry — the column's
+# horizontal spread doesn't affect "how much oil is now inside the bottle",
+# which is what the simulator needs to match.
+# -----------------------------------------------------------------------------
+def _volume_below_floor(pos: np.ndarray, dx: float, origin: np.ndarray,
+                         z_floor: float) -> float:
+    """Return the volume (m^3) of unique cells occupied by particles whose
+    z position is strictly below z_floor.  Uses cell-occupancy (binary):
+    one or many particles in a cell counts the same."""
+    if pos.size == 0:
+        return 0.0
+    below = pos[pos[:, 2] < z_floor]
+    if below.size == 0:
+        return 0.0
+    ix = np.floor((below[:, 0] - origin[0]) / dx).astype(np.int64)
+    iy = np.floor((below[:, 1] - origin[1]) / dx).astype(np.int64)
+    iz = np.floor((below[:, 2] - origin[2]) / dx).astype(np.int64)
+    # Pack (ix, iy, iz) into a single int64 for unique-counting.  Add a large
+    # offset so negatives (positions below grid origin) don't collide.
+    OFFSET = 1 << 18
+    keys = ((ix + OFFSET) << 40) | ((iy + OFFSET) << 20) | (iz + OFFSET)
+    n_cells = int(np.unique(keys).size)
+    return float(n_cells) * (float(dx) ** 3)
+
+
+# -----------------------------------------------------------------------------
 # Manifest helper — pulls bottle_height_target so we know the column z floor
 # -----------------------------------------------------------------------------
 def _load_manifest(folder: Path) -> dict:
@@ -138,6 +176,7 @@ def _column_stats_for_frame(pos: np.ndarray, vel: np.ndarray,
             "pos":     np.array([0.0, 0.0, column_z_floor], dtype=np.float32),
             "vel":     np.array([0.0, 0.0, -1.0], dtype=np.float32),
             "radius":  0.012,
+            "radius_real": 0.0,         # used for flow-rate calc; 0 = no flow
             "n_column": n_col,
             "top_z":     float("nan"),
             "fall_height": float("nan"),
@@ -165,20 +204,34 @@ def _column_stats_for_frame(pos: np.ndarray, vel: np.ndarray,
         out_vel = col_vel.mean(axis=0).astype(np.float32)
 
     # Radius = robust spread of xy around the mean.  95th-percentile distance
-    # gives a stable estimate that ignores rare outliers.  The result is
-    # then clamped to a cell-resolution-aware ceiling — the MLP smears thin
-    # features laterally, so the captured spread is unreliable as a true
-    # cross-section measure.
+    # gives a stable estimate that ignores rare outliers.
+    #
+    # We track TWO radii here:
+    #   radius_real -- the captured value (loosely, the column's true cross-
+    #     section as the deformation MLP saw it).  Used downstream to compute
+    #     the physical flow rate Q = pi * r_real^2 * |v|.
+    #   radius      -- the value used as the simulator's emit-sphere geometry.
+    #     This is clamped UP to a minimum of one cell (otherwise the sphere
+    #     misses cell centres entirely and emission is stochastic), and DOWN
+    #     to a cell-resolution-aware ceiling (otherwise the MLP's lateral
+    #     smearing produces a column wider than physically real).
+    #
+    # The throttle factor "amount" (computed in the main loop) decouples flow
+    # rate from emit-sphere geometry: amount = Q_real / V_sim_per_emit, in
+    # units of emits-per-second.  The viewer accumulates amount*dt each
+    # substep and only fires addWaterSourceSphere when it crosses 1.
     xy_dist = np.linalg.norm(col_pos[:, :2] - mean_xy[None, :], axis=1)
-    radius = float(np.percentile(xy_dist, 95)) if n_col > 5 else 0.012
-    radius = max(radius, 0.005)
-    radius = min(radius, float(radius_clamp_max))
+    radius_raw = float(np.percentile(xy_dist, 95)) if n_col > 5 else 0.012
+    radius_real = max(radius_raw, 1e-4)         # keep nearly-true value
+    # Sphere geometry for the simulator: clamp to [dx, radius_clamp_max].
+    radius = min(max(radius_raw, 0.005), float(radius_clamp_max))
 
     return {
         "active": True,
         "pos":    out_pos,
         "vel":    out_vel,
         "radius": radius,
+        "radius_real": radius_real,
         "n_column": n_col,
         "top_z": top_z,
         "fall_height": fall_height,
@@ -291,7 +344,9 @@ def main(argv=None) -> int:
     print(f"  N frames:         {n_frames}")
     print("-" * 72)
 
+    # First pass: per-frame column stats AND below-floor occupied volume.
     frames = []
+    v_below = np.zeros(n_frames, dtype=np.float64)   # m^3 oil-occupied below mouth
     for f_idx, p in enumerate(sim_files):
         st = _load_sim_state_bin(p)
         s = _column_stats_for_frame(
@@ -304,6 +359,72 @@ def main(argv=None) -> int:
             radius_clamp_max=radius_clamp_max,
         )
         frames.append(s)
+        v_below[f_idx] = _volume_below_floor(
+            st["pos"], st["dx"], st["origin"], column_z_floor,
+        )
+
+    # ------------------------------------------------------------------
+    # Per-frame data-derived flow rate ("amount") — bottle-fill version.
+    #
+    # Earlier this used Q = pi * r_real^2 * |v|, but the deformation MLP
+    # smears the falling oil column laterally so r_real (95th percentile xy
+    # spread of "column" particles) reads as ~11cm — basically the bottle's
+    # radius.  That gives a Q that's 1000x physical reality.
+    #
+    # Replacement: compute Q from the rate at which oil ENDS UP inside the
+    # bottle.  V_below(t) = volume of cells occupied by oil below the bottle
+    # mouth at frame t (computed above as v_below).  Q_real(t) = dV/dt via
+    # centred finite difference, then smoothed with a short boxcar to
+    # suppress per-frame voxelisation noise.
+    #
+    # This estimator is invariant to MLP smearing of the column's geometry
+    # because we don't trust any column geometry — we just measure the
+    # in-bottle volume directly.
+    #
+    # Sphere geometry V_sim(f) = (4/3) * pi * r(f)^3 stays the same (the
+    # simulator's emit sphere needs to be at least one cell wide for cell-
+    # centre tests to hit anything).
+    #
+    # amount(f) = Q_real(f) / V_sim(f)         [emits per second]
+    # ------------------------------------------------------------------
+    pi = float(np.pi)
+    dt_capture = 1.0 / float(args.captured_fps)
+
+    # Centred finite difference: Q[i] = (V[i+1] - V[i-1]) / (2 dt).
+    Q_inst = np.zeros(n_frames, dtype=np.float64)
+    if n_frames >= 3:
+        Q_inst[1:-1] = (v_below[2:] - v_below[:-2]) / (2.0 * dt_capture)
+        Q_inst[0]  = (v_below[1] - v_below[0]) / dt_capture
+        Q_inst[-1] = (v_below[-1] - v_below[-2]) / dt_capture
+    elif n_frames == 2:
+        d = (v_below[1] - v_below[0]) / dt_capture
+        Q_inst[:] = d
+
+    # Clamp to non-negative — bottles only fill, they don't drain.
+    Q_inst = np.maximum(Q_inst, 0.0)
+
+    # Smooth with a short boxcar to absorb single-frame voxelisation jitter.
+    # Window 7 frames at 25 fps = 0.28 s — short enough to track real flow
+    # variations, long enough to filter cell-quantisation noise.
+    smooth_window = 7
+    if n_frames >= smooth_window:
+        kernel = np.ones(smooth_window, dtype=np.float64) / float(smooth_window)
+        Q_smooth = np.convolve(Q_inst, kernel, mode="same")
+    else:
+        Q_smooth = Q_inst.copy()
+
+    for fr_idx, fr in enumerate(frames):
+        if not fr["active"]:
+            fr["amount"] = 0.0
+            continue
+        V_sim = (4.0 / 3.0) * pi * (float(fr["radius"]) ** 3)
+        if V_sim > 1e-12:
+            fr["amount"] = float(Q_smooth[fr_idx] / V_sim)
+        else:
+            fr["amount"] = 0.0
+        # Stash for diagnostics
+        fr["Q_real"]  = float(Q_smooth[fr_idx])
+        fr["v_below"] = float(v_below[fr_idx])
 
     # Summary
     n_active = sum(1 for f in frames if f["active"])
@@ -314,22 +435,41 @@ def main(argv=None) -> int:
         avg_pos = np.mean([f["pos"] for f in active], axis=0)
         avg_vel = np.mean([f["vel"] for f in active], axis=0)
         avg_rad = float(np.mean([f["radius"] for f in active]))
+        avg_rad_real = float(np.mean([f["radius_real"] for f in active]))
         avg_n   = float(np.mean([f["n_column"] for f in active]))
         avg_top_z       = float(np.mean([f["top_z"]       for f in active]))
         avg_fall_height = float(np.mean([f["fall_height"] for f in active]))
-        print(f"  avg active pos    = "
+        avg_amount = float(np.mean([f["amount"] for f in active]))
+        avg_Q_real = float(np.mean([f["Q_real"] for f in active]))
+        active_duration = n_active / float(args.captured_fps)
+        total_volume = float(np.sum(Q_smooth)) * dt_capture
+        # Bottle-fill diagnostics
+        v_below_max = float(v_below.max())
+        v_below_final = float(v_below[-1])
+        print(f"  avg active pos        = "
               f"[{avg_pos[0]:+.4f}, {avg_pos[1]:+.4f}, {avg_pos[2]:+.4f}]  m")
-        print(f"  avg active vel    = "
+        print(f"  avg active vel        = "
               f"[{avg_vel[0]:+.4f}, {avg_vel[1]:+.4f}, {avg_vel[2]:+.4f}]  m/s")
-        print(f"  avg active radius = {avg_rad:.4f}  m")
-        print(f"  avg column count  = {avg_n:.1f} particles")
-        print(f"  avg top z         = {avg_top_z:.4f}  m  (max z of column)")
-        print(f"  avg fall height   = {avg_fall_height:.4f}  m  "
+        print(f"  avg sim-sphere radius = {avg_rad:.4f}  m  (clamped, used for emit geometry)")
+        print(f"  avg real radius       = {avg_rad_real:.4f}  m  (captured, NOT used for Q anymore)")
+        print(f"  avg column count      = {avg_n:.1f} particles")
+        print(f"  avg top z             = {avg_top_z:.4f}  m  (max z of column)")
+        print(f"  avg fall height       = {avg_fall_height:.4f}  m  "
               f"(top z - emitter z)")
         if args.velocity_mode == "gravity":
             v_implied = -float(np.sqrt(2.0 * args.gravity * max(
                 avg_fall_height, args.min_fall_height)))
             print(f"  -> implied gravity vz at avg fall = {v_implied:+.3f} m/s")
+        print(f"  --- bottle-fill flow rate (data-derived) ---")
+        print(f"  V_below_floor max     = {v_below_max * 1e6:.1f}  mL  "
+              f"(peak occupied volume below bottle mouth)")
+        print(f"  V_below_floor final   = {v_below_final * 1e6:.1f}  mL  "
+              f"(at last frame)")
+        print(f"  avg Q_real            = {avg_Q_real * 1e6:.2f}  mL/s  "
+              f"(smoothed dV/dt)")
+        print(f"  avg emit rate         = {avg_amount:.3f}  emits/s")
+        print(f"  estimated total pour  = {total_volume * 1e6:.1f}  mL "
+              f"over {active_duration:.2f} s")
     else:
         print("WARNING: no active frames — column-z-floor may be too high "
               "or the captured states may not have a column above the bottle.")
@@ -352,7 +492,9 @@ def main(argv=None) -> int:
                                 float(fr["vel"][1]),
                                 float(fr["vel"][2])))
             f.write(struct.pack("<f", float(fr["radius"])))
-            f.write(struct.pack("<f", 1.0))   # amount
+            # amount = data-derived emit rate in emits-per-second; the viewer
+            # accumulates amount*dt per substep and emits when it crosses 1.
+            f.write(struct.pack("<f", float(fr["amount"])))
 
     print("-" * 72)
     print(f"Wrote {output} ({output.stat().st_size} bytes)")
