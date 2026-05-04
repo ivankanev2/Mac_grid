@@ -151,6 +151,75 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="6-connectivity dilation passes applied to the bottle "
                         "solid mask to seal small wall gaps.  1 → +1 cell of "
                         "thickness in each direction.")
+    # Bottle base seal — topological closure prior.  4DGS reconstructions of
+    # refractive containers under-represent the base because the base is
+    # mostly visible only through refraction of the contained fluid.  Without
+    # this seal, the bottle is a hollow tube, fluid leaks out the bottom,
+    # and pancakes on the simulation's grid floor.
+    p.add_argument("--no-seal-bottle-base", dest="seal_bottle_base",
+                   action="store_false", default=True,
+                   help="Disable the closed-bottom topological prior.  By "
+                        "default we infer the bottle's full xy footprint by "
+                        "filling holes in the captured wall outline, then "
+                        "stamp a layer of solid cells at the lowest captured "
+                        "wall z to close the base.  Without this, fluid "
+                        "leaks through the missing base.")
+    p.add_argument("--seal-base-thickness", type=int, default=1,
+                   help="Number of solid cell layers added at the bottle's "
+                        "z-floor when --seal-bottle-base is enabled.  1 = a "
+                        "single voxel-thick disk; 2 = thicker base.  Higher "
+                        "is more conservative (no leaks) at the cost of a "
+                        "shorter usable interior.")
+    # Wall-only filter — interior-noise removal.  Grey-class HSV Gaussians
+    # don't only live on the bottle's outer walls; 4DGS often captures
+    # refraction artifacts and view-dependent visual features as grey
+    # Gaussians INSIDE the bottle's volume.  When voxelised, those
+    # become spurious solid cells throughout the interior, turning the
+    # bottle into a "maze" the fluid has to thread through.  Per z layer,
+    # we keep only solid cells with at least one non-solid neighbour in
+    # xy; cells fully surrounded by other solid cells in the same layer
+    # are dropped.  Walls are preserved because they always border the
+    # bottle's interior or exterior.
+    p.add_argument("--no-wall-only-filter", dest="wall_only_filter",
+                   action="store_false", default=True,
+                   help="Disable the per-layer wall-only filter.  Default "
+                        "(enabled) removes interior-noise cells from the "
+                        "bottle solid mask, keeping only cells on the xy "
+                        "boundary of the solid region.")
+    # 3D connected-components filter — drops disconnected interior blobs.
+    # Sparse refraction-noise voxels inside the bottle's volume can have
+    # air neighbours (so they survive the wall-only filter) but are still
+    # not part of the bottle's wall shell.  This filter keeps only the
+    # largest 26-connected 3D component, dropping all disconnected blobs.
+    # Justified by the topological prior: a container is one connected
+    # geometric shape.
+    p.add_argument("--no-connected-components", dest="connected_components",
+                   action="store_false", default=True,
+                   help="Disable the 3D connected-components filter.  "
+                        "Default (enabled) keeps only the largest 26-connected "
+                        "3D component of the bottle solid mask, dropping "
+                        "disconnected interior-noise blobs.")
+    # Exterior-facing wall filter — strongest of the noise filters.  Per
+    # z layer, flood-fill exterior from the grid boundary; keep only
+    # solid cells with at least one exterior 8-neighbour.  Drops
+    # interior noise even when it's diagonally connected to walls.
+    p.add_argument("--no-exterior-facing-filter", dest="exterior_facing_filter",
+                   action="store_false", default=True,
+                   help="Disable the exterior-facing wall filter.  Default "
+                        "(enabled) keeps only cells that border the bottle's "
+                        "exterior region; drops interior-noise cells even "
+                        "when they're 26-connected to walls via diagonals.")
+    p.add_argument("--no-exterior-facing-pre-dilate",
+                   dest="exterior_facing_pre_dilate",
+                   action="store_false", default=True,
+                   help="Disable the 1-cell xy pre-dilation that temporarily "
+                        "seals small wall gaps before the exterior-facing "
+                        "flood-fill.  Default (enabled) prevents the "
+                        "flood-fill from leaking through 1-cell-wide gaps "
+                        "and misclassifying the bottle's interior as exterior. "
+                        "The filter's output still respects the ORIGINAL mask "
+                        "thickness — pre-dilation only affects flood-fill "
+                        "topology.")
     # v2.2: post-hoc alignment of captured oil to the bottle.  The deformation
     # MLP often places the captured oil column at a 3D position that renders
     # correctly from the (single) training viewpoint but is laterally offset
@@ -339,6 +408,233 @@ def _rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return (np.eye(3) + K + K @ K * ((1.0 - dot) / (s * s))).astype(np.float32)
 
 
+def _fill_holes_2d(mask_2d: np.ndarray) -> np.ndarray:
+    """Fill enclosed holes in a 2D boolean mask via flood-fill from the
+    boundary inward.  No scipy dependency.  Used to close the bottle's
+    xy cross-section when only the cylinder walls were voxelised.
+
+    The captured grey-class Gaussians give us a ring (or thicker outline)
+    of cells; the cylinder's interior is hollow.  After this fill, the
+    interior cells are also True, giving us the bottle's full footprint
+    so we can stamp a closed base across it.
+    """
+    if not mask_2d.any():
+        return mask_2d.copy()
+
+    nx, ny = mask_2d.shape
+    # Mark non-mask cells touching the boundary as "outside" — flood-fill
+    # from there through other non-mask cells.  Whatever isn't reached is
+    # an enclosed hole.
+    outside = np.zeros_like(mask_2d)
+    outside[0, :]  = ~mask_2d[0, :]
+    outside[-1, :] = ~mask_2d[-1, :]
+    outside[:, 0]  = ~mask_2d[:, 0]
+    outside[:, -1] = ~mask_2d[:, -1]
+
+    # Iteratively grow.  Convergence is bounded by the grid diameter.
+    while True:
+        prev = outside.copy()
+        outside[1:, :]  |= prev[:-1, :] & ~mask_2d[1:, :]
+        outside[:-1, :] |= prev[1:,  :] & ~mask_2d[:-1, :]
+        outside[:, 1:]  |= prev[:, :-1] & ~mask_2d[:, 1:]
+        outside[:, :-1] |= prev[:, 1:]  & ~mask_2d[:, :-1]
+        if (outside == prev).all():
+            break
+
+    # Filled = original mask OR cells that are non-mask but unreachable
+    # from outside (i.e. interior holes).
+    return mask_2d | ~outside
+
+
+def _keep_largest_3d_component(mask: np.ndarray) -> np.ndarray:
+    """Keep only the largest 26-connected 3D component of solid cells.
+    Used to drop interior-noise blobs that aren't part of the bottle's
+    wall shell.
+
+    Justification: the bottle is one connected geometric shape.  The
+    outer wall + base form a single connected 3D component spanning all
+    z layers.  Refraction-noise voxels inside the bottle's volume form
+    separate 3D components — even if individually they have air
+    neighbours (and so survive the wall-only filter), they are
+    disconnected from the wall shell.  Dropping all but the largest
+    component is the principled way to remove them: a container is, by
+    definition, one connected shape.
+
+    Uses scipy.ndimage.label with a 3x3x3 structuring element (26-conn).
+    Falls back to a NumPy-only flood-fill labelling if scipy is missing.
+    """
+    if not mask.any():
+        return mask.copy()
+    try:
+        from scipy.ndimage import label as ndi_label
+        structure = np.ones((3, 3, 3), dtype=bool)
+        labelled, n_components = ndi_label(mask, structure=structure)
+        if n_components <= 1:
+            return mask.copy()
+        # Count cells per label, ignoring background (label 0).
+        sizes = np.bincount(labelled.ravel())
+        sizes[0] = 0
+        largest_label = int(np.argmax(sizes))
+        return labelled == largest_label
+    except ImportError:
+        # NumPy-only fallback — slower but no scipy needed.  BFS flood-fill
+        # to label components, then return the largest.
+        nx, ny, nz = mask.shape
+        labels = np.zeros(mask.shape, dtype=np.int32)
+        cur_label = 0
+        sizes_list = [0]  # background size at index 0
+        for i0 in range(nx):
+            for j0 in range(ny):
+                for k0 in range(nz):
+                    if not mask[i0, j0, k0] or labels[i0, j0, k0] != 0:
+                        continue
+                    cur_label += 1
+                    stack = [(i0, j0, k0)]
+                    count = 0
+                    while stack:
+                        i, j, k = stack.pop()
+                        if (i < 0 or i >= nx or j < 0 or j >= ny or
+                                k < 0 or k >= nz):
+                            continue
+                        if labels[i, j, k] != 0 or not mask[i, j, k]:
+                            continue
+                        labels[i, j, k] = cur_label
+                        count += 1
+                        for di in (-1, 0, 1):
+                            for dj in (-1, 0, 1):
+                                for dk in (-1, 0, 1):
+                                    if di == 0 and dj == 0 and dk == 0:
+                                        continue
+                                    stack.append((i + di, j + dj, k + dk))
+                    sizes_list.append(count)
+        sizes = np.array(sizes_list, dtype=np.int64)
+        largest_label = int(np.argmax(sizes))
+        return labels == largest_label
+
+
+def _keep_exterior_facing_cells(mask: np.ndarray,
+                                pre_dilate: bool = True) -> np.ndarray:
+    """Keep only solid cells that face the bottle's EXTERIOR.
+
+    Per z layer, flood-fill from the grid boundary through non-solid
+    cells; whatever gets marked is the exterior (the world outside the
+    bottle, reachable from outside the grid without going through walls).
+    The bottle's hollow interior is NOT marked because the walls block
+    the flood-fill.  We then keep solid cells with at least one exterior
+    8-neighbour and drop the rest.
+
+    Net effect:
+      - Wall cells border the exterior on their outside face → kept.
+      - Interior-noise cells border only the bottle's interior or other
+        noise → dropped, even if 26-connected to wall cells via diagonal
+        contacts.
+
+    Stronger than the wall-only filter: that one asked "any non-solid
+    neighbour"; this one asks "any *exterior* non-solid neighbour".
+
+    Known failure mode: if the wall has gaps, the flood-fill leaks
+    through, marks the bottle's interior as exterior, and interior noise
+    survives.  ``pre_dilate=True`` (default) temporarily dilates the
+    mask by 1 cell in xy for the flood-fill ONLY (the output respects
+    the original mask thickness — only originally-solid cells can be
+    kept) so small gaps don't break the topology.
+
+    Out-of-grid in xy is treated as exterior, so cells on the grid edge
+    are kept by their out-of-grid 8-neighbour.
+    """
+    nx, ny, nz = mask.shape
+
+    if pre_dilate:
+        sealed = mask.copy()
+        sealed[1:, :, :]  |= mask[:-1, :, :]
+        sealed[:-1, :, :] |= mask[1:, :, :]
+        sealed[:, 1:, :]  |= mask[:, :-1, :]
+        sealed[:, :-1, :] |= mask[:, 1:, :]
+    else:
+        sealed = mask
+
+    out = np.zeros_like(mask)
+    for k in range(nz):
+        original_layer = mask[:, :, k]
+        if not original_layer.any():
+            continue
+        sealed_layer = sealed[:, :, k]
+
+        # Flood-fill exterior from the grid boundary through non-solid
+        # cells of the sealed layer.
+        exterior = np.zeros_like(sealed_layer)
+        exterior[0,  :] = ~sealed_layer[0,  :]
+        exterior[-1, :] = ~sealed_layer[-1, :]
+        exterior[:,  0] = ~sealed_layer[:,  0]
+        exterior[:, -1] = ~sealed_layer[:, -1]
+        while True:
+            prev = exterior.copy()
+            exterior[1:,  :] |= prev[:-1, :] & ~sealed_layer[1:,  :]
+            exterior[:-1, :] |= prev[1:,  :] & ~sealed_layer[:-1, :]
+            exterior[:,  1:] |= prev[:, :-1] & ~sealed_layer[:,  1:]
+            exterior[:, :-1] |= prev[:, 1:]  & ~sealed_layer[:, :-1]
+            if (exterior == prev).all():
+                break
+
+        # 8-neighbour check, with out-of-grid treated as exterior.
+        padded = np.ones((nx + 2, ny + 2), dtype=bool)  # ring is True
+        padded[1:-1, 1:-1] = exterior
+        any_ext = (
+            padded[:-2,  :-2] | padded[:-2,  1:-1] | padded[:-2,  2:] |
+            padded[1:-1, :-2] |                      padded[1:-1, 2:] |
+            padded[2:,   :-2] | padded[2:,   1:-1] | padded[2:,   2:]
+        )
+        out[:, :, k] = original_layer & any_ext
+    return out
+
+
+def _keep_xy_boundary_cells(mask: np.ndarray) -> np.ndarray:
+    """Per z layer, keep solid cells that have at least one non-solid
+    neighbour in xy (8-connected, including diagonals).  Drops cells
+    fully surrounded by other solid cells in the same layer.
+
+    Used to remove refraction-noise voxels from the bottle solid mask
+    while preserving walls.  A wall always borders the bottle's interior
+    or exterior in xy, so it has at least one non-solid 8-neighbour and
+    is kept.  Refraction-noise voxels deep inside the bottle's volume,
+    surrounded by other noise voxels, are dropped.
+
+    8-connected adjacency (rather than 4-connected) is used because the
+    4-connected version produces speckled walls — cells whose 4 cardinal
+    neighbours are solid but whose diagonal neighbours are not get
+    dropped, creating wall gaps that the fluid can leak through.  The
+    8-connected version preserves clean wall outlines.
+
+    Out-of-grid is treated as non-solid, so cells on the grid edge are
+    always kept.
+
+    Returns a new mask; the input is unchanged.
+    """
+    nx, ny, nz = mask.shape
+    out = np.zeros_like(mask)
+    for k in range(nz):
+        layer = mask[:, :, k]
+        if not layer.any():
+            continue
+        # Pad with False (out-of-grid = non-solid).
+        padded = np.zeros((nx + 2, ny + 2), dtype=bool)
+        padded[1:-1, 1:-1] = layer
+        non_solid = ~padded
+        # 8-connected non-solid neighbour presence.
+        has_l  = non_solid[:-2,  1:-1]
+        has_r  = non_solid[2:,   1:-1]
+        has_d  = non_solid[1:-1, :-2]
+        has_u  = non_solid[1:-1, 2:]
+        has_dl = non_solid[:-2,  :-2]
+        has_dr = non_solid[2:,   :-2]
+        has_ul = non_solid[:-2,  2:]
+        has_ur = non_solid[2:,   2:]
+        any_nonsolid_neighbour = (has_l | has_r | has_d | has_u |
+                                  has_dl | has_dr | has_ul | has_ur)
+        out[:, :, k] = layer & any_nonsolid_neighbour
+    return out
+
+
 def _dilate_mask_6connect(mask: np.ndarray, iters: int) -> np.ndarray:
     if iters <= 0 or not mask.any():
         return mask
@@ -387,7 +683,14 @@ def _seed_flip_particles(fluid_mask: np.ndarray,
                          particles_per_cell: int,
                          rng) -> Tuple[np.ndarray, np.ndarray]:
     """Seed FLIP particles inside the fluid cells; nearest-neighbour velocity
-    from the captured Gaussians."""
+    from the captured Gaussians.
+
+    The NN-velocity step is O(P*G) brute-force in v1 (chunked numpy).  At
+    P=40k particles, G=15k Gaussians, 501 frames, that's ~300 billion
+    distance comparisons — ~2 hours on CPU.  This implementation prefers
+    scipy.spatial.cKDTree (O(P log G), ~150 ms per frame, ~1 minute total)
+    and falls back to the brute-force path if scipy is unavailable.
+    """
     fluid_idx = np.argwhere(fluid_mask)
     M = fluid_idx.shape[0]
     if M == 0 or points_world.shape[0] == 0:
@@ -397,14 +700,22 @@ def _seed_flip_particles(fluid_mask: np.ndarray,
     cell_idx = np.repeat(fluid_idx, particles_per_cell, axis=0).astype(np.float32)
     pos = (origin[None, :] + (cell_idx + cell_offsets) * dx).astype(np.float32)
 
-    # Nearest-neighbour velocity, chunked to cap memory.
-    vel = np.empty((P, 3), dtype=np.float32)
-    chunk = 2048
-    for i0 in range(0, P, chunk):
-        i1 = min(i0 + chunk, P)
-        d2 = np.sum((pos[i0:i1, None, :] - points_world[None, :, :]) ** 2, axis=2)
-        nn = np.argmin(d2, axis=1)
-        vel[i0:i1] = vels_world[nn]
+    # Fast path — kd-tree.
+    try:
+        from scipy.spatial import cKDTree
+        tree = cKDTree(points_world)
+        _, nn_idx = tree.query(pos, k=1)
+        vel = vels_world[nn_idx].astype(np.float32, copy=False)
+    except ImportError:
+        # Slow fallback — brute-force chunked NN if scipy is missing.
+        vel = np.empty((P, 3), dtype=np.float32)
+        chunk = 2048
+        for i0 in range(0, P, chunk):
+            i1 = min(i0 + chunk, P)
+            d2 = np.sum((pos[i0:i1, None, :] - points_world[None, :, :]) ** 2,
+                        axis=2)
+            nn = np.argmin(d2, axis=1)
+            vel[i0:i1] = vels_world[nn]
     return pos, vel
 
 
@@ -730,8 +1041,113 @@ def main(argv=None) -> int:
                                             nx, ny, nz)
     bottle_mask = _dilate_mask_6connect(bottle_surface_mask,
                                          args.bottle_dilate_iters)
+    n_voxelised = int(bottle_mask.sum())
+    print(f"      bottle voxelised cells (walls + interior noise): "
+          f"{n_voxelised} ({100.0 * n_voxelised / max(1, nx*ny*nz):.2f}% of grid)")
+
+    # Wall-only filter — applied BEFORE the base seal so the seal's
+    # centre cells (which are interior to a closed disk) are not dropped.
+    if args.wall_only_filter:
+        bottle_mask = _keep_xy_boundary_cells(bottle_mask)
+        n_after_filter = int(bottle_mask.sum())
+        n_dropped = n_voxelised - n_after_filter
+        print(f"      wall-only filter:   dropped {n_dropped} interior "
+              f"noise cells, kept {n_after_filter} wall cells "
+              f"({100.0 * n_after_filter / max(1, nx*ny*nz):.2f}% of grid)")
+
+    # 3D connected-components filter — keep only the largest connected
+    # component of solid cells.  Drops sparse interior-noise blobs that
+    # have air neighbours (and so survive the wall-only filter) but are
+    # not part of the bottle's wall shell.  Applied BEFORE the base seal
+    # so the seal cells (which would form a separate disk component if
+    # the wall doesn't reach z=0) are not lost.
+    if args.connected_components:
+        n_before_cc = int(bottle_mask.sum())
+        bottle_mask = _keep_largest_3d_component(bottle_mask)
+        n_after_cc = int(bottle_mask.sum())
+        n_dropped_cc = n_before_cc - n_after_cc
+        print(f"      connected-components: dropped {n_dropped_cc} cells "
+              f"in disconnected blobs, kept {n_after_cc} cells in the "
+              f"largest 3D component "
+              f"({100.0 * n_after_cc / max(1, nx*ny*nz):.2f}% of grid)")
+
+    # Exterior-facing wall filter — drops interior-noise cells that are
+    # diagonally connected to walls (which the connected-components
+    # filter doesn't catch).  Applied BEFORE the base seal because the
+    # seal's centre cells border only solid (the seal disk is filled),
+    # which would be classified as not-exterior-facing and dropped if
+    # the filter ran on the seal.
+    if args.exterior_facing_filter:
+        n_before_ext = int(bottle_mask.sum())
+        bottle_mask = _keep_exterior_facing_cells(
+            bottle_mask, pre_dilate=bool(args.exterior_facing_pre_dilate))
+        n_after_ext = int(bottle_mask.sum())
+        n_dropped_ext = n_before_ext - n_after_ext
+        print(f"      exterior-facing filter (pre_dilate="
+              f"{bool(args.exterior_facing_pre_dilate)}): dropped "
+              f"{n_dropped_ext} cells with no exterior 8-neighbour, "
+              f"kept {n_after_ext} cells "
+              f"({100.0 * n_after_ext / max(1, nx*ny*nz):.2f}% of grid)")
+
+    # ---- Seal the bottle base ------------------------------------------
+    # Refractive-container failure mode of monocular 4DGS: the bottle's
+    # base is mostly visible through refraction of the contained fluid,
+    # so the grey-class Gaussians under-represent it.  After voxelisation
+    # we have a hollow tube (cylinder walls but missing bottom).  Without
+    # closure, fluid leaks out the bottom and pancakes on the grid floor.
+    #
+    # The seal: stamp an elliptical layer of solid cells at the lowest
+    # captured wall z, with the ellipse matching the bottle's xy bbox.
+    # An ellipse matches the captured bottle's apparent xy aspect (the
+    # 4DGS reconstruction often recovers an asymmetric cross-section due
+    # to camera-angle bias) without assuming a specific shape.
+    #
+    # We avoid taking a "fill_holes" of the bottle_mask.any(axis=2)
+    # projection, because that's the *union* of all z-layers and the
+    # individual-layer holes get covered by walls at neighbouring z's,
+    # leaving no enclosed void to fill.  The bbox-ellipse approach is
+    # robust to that: it's defined directly from the bottle's xy
+    # extent in cells.  Single topological prior: the container has a
+    # closed base whose footprint matches its sides.
+    if args.seal_bottle_base and bottle_mask.any():
+        bottle_idx = np.argwhere(bottle_mask)
+        # Bottle's xy bbox in cell coordinates.
+        x_lo = int(bottle_idx[:, 0].min())
+        x_hi = int(bottle_idx[:, 0].max())
+        y_lo = int(bottle_idx[:, 1].min())
+        y_hi = int(bottle_idx[:, 1].max())
+        x_c  = 0.5 * (x_lo + x_hi)
+        y_c  = 0.5 * (y_lo + y_hi)
+        x_r  = max(1.0, 0.5 * (x_hi - x_lo))
+        y_r  = max(1.0, 0.5 * (y_hi - y_lo))
+
+        # Build an elliptical base footprint matching the bottle's bbox.
+        ii, jj = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+        base_footprint = (((ii - x_c) / x_r) ** 2
+                          + ((jj - y_c) / y_r) ** 2) <= 1.0
+
+        k_floor = int(bottle_idx[:, 2].min())
+        thickness = max(1, int(args.seal_base_thickness))
+        k_lo = max(0, k_floor - thickness + 1)
+        k_hi = k_floor
+
+        n_footprint_cells = int(base_footprint.sum())
+        n_added = 0
+        for k in range(k_lo, k_hi + 1):
+            new_cells = base_footprint & ~bottle_mask[:, :, k]
+            n_added += int(new_cells.sum())
+            bottle_mask[:, :, k] |= base_footprint
+
+        seal_world_z = grid_origin[2] + (k_lo + 0.5) * args.dx
+        print(f"      base seal: bottle xy bbox = "
+              f"x[{x_lo}..{x_hi}] y[{y_lo}..{y_hi}] cells, "
+              f"ellipse footprint = {n_footprint_cells} cells")
+        print(f"      base seal: stamped k={k_lo}..{k_hi} "
+              f"(world z ~{seal_world_z:.4f} m), "
+              f"+{n_added} new solid cells.")
+
     n_bottle_cells = int(bottle_mask.sum())
-    print(f"      bottle solid cells: {n_bottle_cells} "
+    print(f"      bottle solid cells (final): {n_bottle_cells} "
           f"({100.0 * n_bottle_cells / max(1, nx*ny*nz):.2f}% of grid)")
 
     bottle_path = args.output_dir / "bottle_solid.bin"
@@ -821,6 +1237,12 @@ def main(argv=None) -> int:
             "bottle_iters": int(args.bottle_dilate_iters),
             "fluid_iters":  int(args.fluid_dilate_iters),
         },
+        "seal_bottle_base":     bool(args.seal_bottle_base),
+        "seal_base_thickness":  int(args.seal_base_thickness),
+        "wall_only_filter":             bool(args.wall_only_filter),
+        "connected_components_filter":  bool(args.connected_components),
+        "exterior_facing_filter":       bool(args.exterior_facing_filter),
+        "exterior_facing_pre_dilate":   bool(args.exterior_facing_pre_dilate),
         "align_oil_to_bottle": bool(args.align_oil_to_bottle),
         "oil_align_offset": [
             float(oil_align_offset[0]),

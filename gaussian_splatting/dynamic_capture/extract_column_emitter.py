@@ -114,7 +114,8 @@ def _column_stats_for_frame(pos: np.ndarray, vel: np.ndarray,
                              min_active: int,
                              velocity_mode: str = "gravity",
                              gravity: float = 9.8,
-                             min_fall_height: float = 0.005):
+                             min_fall_height: float = 0.005,
+                             radius_clamp_max: float = 0.04):
     """Return dict {active, pos, vel, radius, top_z, fall_height} for a
     single captured frame.
 
@@ -164,11 +165,14 @@ def _column_stats_for_frame(pos: np.ndarray, vel: np.ndarray,
         out_vel = col_vel.mean(axis=0).astype(np.float32)
 
     # Radius = robust spread of xy around the mean.  95th-percentile distance
-    # gives a stable estimate that ignores rare outliers.
+    # gives a stable estimate that ignores rare outliers.  The result is
+    # then clamped to a cell-resolution-aware ceiling — the MLP smears thin
+    # features laterally, so the captured spread is unreliable as a true
+    # cross-section measure.
     xy_dist = np.linalg.norm(col_pos[:, :2] - mean_xy[None, :], axis=1)
     radius = float(np.percentile(xy_dist, 95)) if n_col > 5 else 0.012
     radius = max(radius, 0.005)
-    radius = min(radius, 0.04)   # cap at 4 cm so we don't spawn a wall-wide blob
+    radius = min(radius, float(radius_clamp_max))
 
     return {
         "active": True,
@@ -227,6 +231,18 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Floor for fall_height in --velocity-mode gravity "
                         "(m).  Avoids zero velocities when the column's "
                         "top is right at the emitter z.")
+    # Radius clamp: the deformation MLP smears the column laterally to fit
+    # visual continuity, producing an unrealistically wide cross-section.
+    # We cap the per-frame radius to a multiple of the simulator cell size
+    # so the captured column is at least cell-coherent (no fatter than the
+    # finest feature the grid can represent).
+    p.add_argument("--radius-clamp-cells", type=float, default=1.5,
+                   help="Maximum column radius in units of grid cells dx. "
+                        "1.5 means radius is capped at 1.5*dx.  The captured "
+                        "MLP-spread radius is unreliable because the "
+                        "deformation MLP smears thin features laterally; "
+                        "this clamp produces a thin column that's at least "
+                        "consistent with the grid resolution.")
     return p.parse_args(argv)
 
 
@@ -245,6 +261,10 @@ def main(argv=None) -> int:
         args.column_z_floor = float(bh)
 
     column_z_floor = float(args.column_z_floor) + float(args.column_z_margin)
+
+    # Cell size from manifest — drives the radius clamp.
+    dx = float(manifest.get("dx", 0.015))
+    radius_clamp_max = float(args.radius_clamp_cells) * dx
 
     sim_files = sorted(folder.glob("sim_state_*.bin"))
     if not sim_files:
@@ -265,6 +285,9 @@ def main(argv=None) -> int:
     if args.velocity_mode == "gravity":
         print(f"  gravity:          {args.gravity} m/s^2")
         print(f"  min fall height:  {args.min_fall_height} m")
+    print(f"  dx (from mf):     {dx} m")
+    print(f"  radius clamp:     {args.radius_clamp_cells} cells "
+          f"(= {radius_clamp_max:.4f} m max radius)")
     print(f"  N frames:         {n_frames}")
     print("-" * 72)
 
@@ -278,6 +301,7 @@ def main(argv=None) -> int:
             velocity_mode=args.velocity_mode,
             gravity=args.gravity,
             min_fall_height=args.min_fall_height,
+            radius_clamp_max=radius_clamp_max,
         )
         frames.append(s)
 

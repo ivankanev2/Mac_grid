@@ -70,6 +70,15 @@ static GLFWwindow*                         g_win            = nullptr;
 // of (or in addition to) the user's manual emit-water sliders.
 static pipe_fluid::CapturedColumnEmitter   g_columnEmitter;
 static bool                                g_columnEmitterActive = false;
+
+// Bottle-only render — separate copy of bottle_solid.bin used by the
+// solid-cell renderer so we can show just the captured bottle mask
+// without the simulator's auto-added domain border (the rectangular
+// "cage" that wraps the entire grid).  Loaded lazily from
+// g_ui.bottleSolidPath; reloaded when the path changes.
+static pipe_fluid::CapturedBottleSolid     g_loadedBottleSolid;
+static bool                                g_haveLoadedBottleSolid = false;
+static std::string                         g_lastLoadedBottlePath;
 // Internal "playback time" for the emitter trajectory.  Advances by dt of
 // each simulator substep (only when playing).  Reset to zero on load and
 // on the "Reset emitter time" button.
@@ -143,6 +152,13 @@ struct ViewerState {
     // Defaults on for any captured-fluid scene; off for normal pipe sims
     // (the pipe mesh already shows the walls there).
     bool  drawSolids          = false;
+    // When true, the renderer reads bottle_solid.bin directly and shows
+    // ONLY those cells, hiding the simulator's auto-added domain border
+    // (the 1-cell-thick rectangular wrapper around the grid).  When false,
+    // shows the simulator's full solid mask (bottle + domain border).
+    // Auto-on for bottle-pour-demo scenes so the user sees just the
+    // captured bottle, not the surrounding rectangular cage.
+    bool  solidsBottleOnly    = true;
     float solidPointSize      = 0.014f;
     // Light grey by default — keeps the bottle visually subordinate to the
     // fluid, easy to distinguish from blue particles.
@@ -1227,6 +1243,8 @@ static void drawFluidPanel(pipe_fluid::PipeFluidScene& scene) {
     // can see where the geometry is.
     ImGui::Checkbox("bottle / solids: render as points", &g_ui.drawSolids);
     if (g_ui.drawSolids) {
+        ImGui::Checkbox("bottle only (hide simulator domain border)",
+                        &g_ui.solidsBottleOnly);
         ImGui::SliderFloat("solid radius (m)", &g_ui.solidPointSize,
                            0.001f, 0.05f, "%.4f", ImGuiSliderFlags_Logarithmic);
         ImGui::ColorEdit3("solid color", &g_ui.solidColorR);
@@ -1554,6 +1572,13 @@ int main(int argc, char* argv[]) {
             std::cerr << "Bottle pour demo load failed: " << err << "\n";
         } else {
             configurePourDefaults();
+            // Sync the bottle-solid UI path so the bottle-only render path
+            // can load it for visualisation.  The pour demo loads the bottle
+            // internally to set up physics; the renderer needs the same file
+            // to render only-the-bottle (without the simulator's domain border).
+            std::strncpy(g_ui.bottleSolidPath, bottlePourDemoPath.c_str(),
+                         sizeof(g_ui.bottleSolidPath) - 1);
+            g_ui.bottleSolidPath[sizeof(g_ui.bottleSolidPath) - 1] = '\0';
             std::cout << "[PipeFluidEngine] Loaded bottle pour demo from "
                       << bottlePourDemoPath << "\n";
             std::cout << "[PipeFluidEngine] Emitter preset: pos=("
@@ -1858,24 +1883,72 @@ int main(int argc, char* argv[]) {
         // each solid cell as a translucent grey screen-aligned point so
         // the user can sanity-check that the bottle geometry is in the
         // right place and that the fluid is actually being constrained.
+        //
+        // Two render modes:
+        //   - bottle only: read bottle_solid.bin directly and render only
+        //     those cells.  Hides the simulator's auto-added domain border
+        //     (the rectangular wrapper around the grid).  Lets the user
+        //     see the captured bottle in isolation.
+        //   - full simulator mask: render scene.water()->solid which
+        //     includes both the bottle and the simulator's domain border.
         if (g_ui.drawSolids && scene.water()) {
-            // Read the simulator's combined solid mask (bottle + auto
-            // domain border).  Re-upload every frame; the mask only
-            // changes on scene loads (rare, cheap regardless).
-            const auto& wm = scene.water()->solid;
-            if (!wm.empty()) {
-                const auto& vg = scene.voxels();
-                g_bottleDraw.upload(wm, vg.nx, vg.ny, vg.nz, vg.dx,
+            const auto& vg = scene.voxels();
+            const float aspect = (float)fbW / std::max(1.f, (float)fbH);
+            float proj[16], view[16];
+            renderer.camera.buildProjMatrix(proj, aspect);
+            renderer.camera.buildViewMatrix(view);
+
+            // If the user wants bottle-only and the path has changed
+            // (or hasn't been loaded yet), reload bottle_solid.bin into
+            // our local cache.
+            if (g_ui.solidsBottleOnly &&
+                std::strlen(g_ui.bottleSolidPath) > 0 &&
+                std::string(g_ui.bottleSolidPath) != g_lastLoadedBottlePath) {
+                pipe_fluid::CapturedBottleSolid bs;
+                auto r = pipe_fluid::loadBottleSolidFile(
+                    g_ui.bottleSolidPath, bs);
+                if (r.ok && bs.valid()) {
+                    g_loadedBottleSolid = std::move(bs);
+                    g_haveLoadedBottleSolid = true;
+                    std::printf("[bottle-only render] loaded %d cells from %s\n",
+                                static_cast<int>(g_loadedBottleSolid.mask.size()),
+                                g_ui.bottleSolidPath);
+                } else {
+                    g_haveLoadedBottleSolid = false;
+                    std::fprintf(stderr,
+                        "[bottle-only render] failed to load %s: %s\n",
+                        g_ui.bottleSolidPath,
+                        r.error.empty() ? "invalid file" : r.error.c_str());
+                }
+                g_lastLoadedBottlePath = g_ui.bottleSolidPath;
+            }
+
+            // Choose which mask to render.
+            if (g_ui.solidsBottleOnly && g_haveLoadedBottleSolid &&
+                g_loadedBottleSolid.nx == vg.nx &&
+                g_loadedBottleSolid.ny == vg.ny &&
+                g_loadedBottleSolid.nz == vg.nz) {
+                g_bottleDraw.upload(g_loadedBottleSolid.mask,
+                                    vg.nx, vg.ny, vg.nz, vg.dx,
                                     vg.origin.x, vg.origin.y, vg.origin.z);
-                const float aspect = (float)fbW / std::max(1.f, (float)fbH);
-                float proj[16], view[16];
-                renderer.camera.buildProjMatrix(proj, aspect);
-                renderer.camera.buildViewMatrix(view);
                 g_bottleDraw.draw(view, proj, g_ui.solidPointSize,
                                   g_ui.solidColorR,
                                   g_ui.solidColorG,
                                   g_ui.solidColorB,
                                   fbH);
+            } else {
+                // Fall back to the simulator's combined mask (bottle +
+                // domain border).
+                const auto& wm = scene.water()->solid;
+                if (!wm.empty()) {
+                    g_bottleDraw.upload(wm, vg.nx, vg.ny, vg.nz, vg.dx,
+                                        vg.origin.x, vg.origin.y, vg.origin.z);
+                    g_bottleDraw.draw(view, proj, g_ui.solidPointSize,
+                                      g_ui.solidColorR,
+                                      g_ui.solidColorG,
+                                      g_ui.solidColorB,
+                                      fbH);
+                }
             }
         }
 
